@@ -2,13 +2,15 @@
 #
 # Trigger: push to a release branch. Two spellings are accepted so either Git
 # convention works:
-#     release-<version>    e.g. release-483-2
-#     release/<version>    e.g. release/483-2
-# In BOTH cases the release version is the branch suffix: 483-2. The version is
-# NOT parsed for semver — it is passed verbatim to Gradle's -Pversion and used to
-# name the plugin dir (trino-doris-<version>), the zip (trino-doris-<version>.zip)
-# and the git tag (v<version>). Keep the suffix free of characters illegal in a
-# path / tag (stick to the <trino>-<n> shape the repo already uses, e.g. 483-2).
+#     release-<version>    e.g. release-483-0.1.0
+#     release/<version>    e.g. release/483-0.1.0
+# In BOTH cases the release version is the branch suffix: 483-0.1.0 (<trino-major>-<semver>,
+# so the Trino ABI is legible). Passed verbatim to Gradle's -Pversion; the git tag is
+# v<version> (v483-0.1.0). Release assets are named with the v-prefixed tag and shipped as
+# BOTH archive formats, each with a sha256 sidecar (matching the trino-ducklake convention):
+#     trino-doris-v483-0.1.0.tar.gz   + .tar.gz.sha256
+#     trino-doris-v483-0.1.0.zip      + .zip.sha256
+# Keep the suffix free of characters illegal in a path / tag.
 #
 # This runs the SAME build+live-test gate as ci.yml FIRST; the assemble/zip/release
 # steps only run on success, so a red build produces no artifact and no release.
@@ -101,32 +103,42 @@ jobs:
           ./gradlew pluginAssemble verifyPluginAssembly --no-daemon
           -Pversion=${{ steps.version.outputs.version }}
 
-      # Zip the plugin dir. We zip the dir itself (so it unzips to
-      # trino-doris-<version>/) which is exactly what drops into $TRINO_HOME/plugin/.
-      - name: Package plugin zip
+      # Package BOTH .tar.gz and .zip, each with a .sha256 sidecar, named with the
+      # v-prefixed tag so the Trino ABI is legible in the artifact name and matches the
+      # trino-ducklake release convention: trino-doris-v<trino>-<semver>.{tar.gz,zip}(.sha256).
+      # Archives extract to trino-doris-v<trino>-<semver>/ (drop straight into $TRINO_HOME/plugin/).
+      - name: Package plugin archives
         id: package
         run: |
           set -euo pipefail
-          version="${{ steps.version.outputs.version }}"
-          plugin_dir="build/trino-plugin/trino-doris-${version}"
-          test -d "${plugin_dir}" || { echo "::error::missing ${plugin_dir}"; exit 1; }
-          zip_name="trino-doris-${version}.zip"
-          (cd build/trino-plugin && zip -r -q "${GITHUB_WORKSPACE}/${zip_name}" "trino-doris-${version}")
-          echo "zip=${zip_name}" >> "${GITHUB_OUTPUT}"
-          echo "Packaged ${zip_name}:"
-          unzip -l "${zip_name}" | tail -1
+          version="${{ steps.version.outputs.version }}"   # e.g. 483-0.1.0
+          tag="${{ steps.version.outputs.tag }}"           # e.g. v483-0.1.0
+          src="build/trino-plugin/trino-doris-${version}"
+          test -d "${src}" || { echo "::error::missing ${src}"; exit 1; }
+          base="trino-doris-${tag}"                        # trino-doris-v483-0.1.0
+          staging="build/release-staging"
+          rm -rf "${staging}" && mkdir -p "${staging}"
+          cp -r "${src}" "${staging}/${base}"
+          ( cd "${staging}" && zip -r -q "${GITHUB_WORKSPACE}/${base}.zip" "${base}" )
+          ( cd "${staging}" && tar -czf "${GITHUB_WORKSPACE}/${base}.tar.gz" "${base}" )
+          ( cd "${GITHUB_WORKSPACE}" \
+              && sha256sum "${base}.zip"    > "${base}.zip.sha256" \
+              && sha256sum "${base}.tar.gz" > "${base}.tar.gz.sha256" )
+          echo "base=${base}" >> "${GITHUB_OUTPUT}"
+          echo "Packaged:"; ls -la "${GITHUB_WORKSPACE}/${base}".*
 
-      # Create the GitHub release, tag v<version>, attach the zip, auto-generate notes
-      # from commits since the previous tag. gh is preinstalled + authenticated on the
-      # runner via GITHUB_TOKEN.
+      # Create the GitHub release, tag v<version>, attach both archives + their sha256
+      # sidecars, auto-generate notes. gh is preinstalled + authenticated via GITHUB_TOKEN.
       - name: Create GitHub release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: >-
           gh release create "${{ steps.version.outputs.tag }}"
-          "${{ steps.package.outputs.zip }}"
+          "${{ steps.package.outputs.base }}.tar.gz"
+          "${{ steps.package.outputs.base }}.tar.gz.sha256"
+          "${{ steps.package.outputs.base }}.zip"
+          "${{ steps.package.outputs.base }}.zip.sha256"
           --title "${{ steps.version.outputs.tag }}"
-          --generate-notes
           --target "${GITHUB_SHA}"
 
       - name: Collect Doris container logs

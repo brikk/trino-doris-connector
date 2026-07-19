@@ -176,12 +176,15 @@ Restart the coordinator and workers after copying.
 
 ### Releases (prebuilt plugin)
 
-As an alternative to building from source, download the prebuilt plugin zip from the
-[GitHub releases page](https://github.com/brikk/trino-doris-connector/releases) and unzip it
-into your Trino plugin directory:
+As an alternative to building from source, download a prebuilt plugin archive from the
+[GitHub releases page](https://github.com/brikk/trino-doris-connector/releases). Releases are
+named `trino-doris-v<trino>-<semver>` so the compatible Trino version is explicit (e.g.
+`trino-doris-v483-0.1.0` targets Trino 483). Both `.tar.gz` and `.zip` are published, each with
+a `.sha256` sidecar:
 
 ```bash
-unzip trino-doris-<version>.zip -d "$TRINO_HOME/plugin/"   # -> $TRINO_HOME/plugin/trino-doris-<version>/
+sha256sum -c trino-doris-v483-0.1.0.zip.sha256
+unzip trino-doris-v483-0.1.0.zip -d "$TRINO_HOME/plugin/"   # -> $TRINO_HOME/plugin/trino-doris-v483-0.1.0/
 ```
 
 Then restart the coordinator and workers. Each release is cut from a `release-<version>`
