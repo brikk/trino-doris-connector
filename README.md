@@ -30,6 +30,10 @@ Built and tested against **Apache Doris 4.1.3**, **Trino 483**, and MySQL Connec
   loudly at create time.
 - Doris session controls per catalog: `doris.query-timeout`, `doris.exec-mem-limit`,
   `doris.time-zone`, `doris.connect-timeout`, plus a per-query `query_timeout` session property.
+- Table statistics for the Trino optimizer (`doris.statistics.enabled`, default on; per-query
+  `statistics_enabled`): row counts and column NDV/nulls/size/ranges from Doris's statistics
+  store. The connector only reads statistics — Doris auto-analyze (on by default) or your own
+  `ANALYZE TABLE` keeps them fresh; missing statistics simply mean unknown estimates.
 
 ### Pushdown
 

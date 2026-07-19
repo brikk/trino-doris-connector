@@ -30,6 +30,7 @@ class DorisConfig {
     private var timeZone: String? = null
     private var connectTimeout: Duration = Duration(10.0, TimeUnit.SECONDS)
     private var stringPushdownMode: DorisStringPushdownMode = DorisStringPushdownMode.GUARDED
+    private var statisticsEnabled: Boolean = true
 
     fun getQueryTimeout(): Duration? = queryTimeout
 
@@ -67,6 +68,19 @@ class DorisConfig {
     )
     fun setStringPushdownMode(stringPushdownMode: DorisStringPushdownMode): DorisConfig {
         this.stringPushdownMode = stringPushdownMode
+        return this
+    }
+
+    fun isStatisticsEnabled(): Boolean = statisticsEnabled
+
+    @Config("doris.statistics.enabled")
+    @ConfigDescription(
+        "Expose Doris table/column statistics (tablet-report row counts + ANALYZE/auto-analyze column stats) " +
+            "to the Trino optimizer. Read-only; the connector never issues ANALYZE. " +
+            "Per-query override: statistics_enabled",
+    )
+    fun setStatisticsEnabled(statisticsEnabled: Boolean): DorisConfig {
+        this.statisticsEnabled = statisticsEnabled
         return this
     }
 

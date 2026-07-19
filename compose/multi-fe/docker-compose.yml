@@ -1,0 +1,152 @@
+name: trino-doris-mfe
+
+# OPTIONAL multi-FE FAILOVER OVERLAY for the trino-doris connector.
+#
+# This is a MANUAL / DEV-ONLY overlay used to produce the multi-FE failover
+# evidence in dev-docs/REPORT-multi-fe-failover.md. It is DELIBERATELY separate
+# from — and does NOT replace or disturb — the default single-FE probe cluster
+# in ../docker-compose.yml (project trino-doris-dev, subnet 172.30.81.0/24, host
+# 9130/8130). CI keeps using the single-FE cluster; nothing here is wired into
+# ./gradlew build. Bring it up by hand with ./multi-fe/up.sh only when you want
+# to re-run / extend the failover evidence, and tear it down with
+# ./multi-fe/down.sh when finished (it is memory-hungry: 3 FEs + 1 BE).
+#
+# Topology: THREE FEs (fe1 = initial master, fe2 + fe3 = FOLLOWERs that join the
+# BDBJE electable group via --helper) and ONE BE, on a dedicated 172.30.82.0/24
+# network so it never collides with the single-FE cluster (81.x) or the
+# doris-ducklake cluster (80.x). Followers proxy/forward writes to the master and
+# answer reads locally, so SELECT works through EVERY FE port.
+#
+#   Node   Static IP        Host MySQL port   Host HTTP port
+#   fe1    172.30.82.10     9131 -> 9030      8131 -> 8030   (initial master)
+#   fe2    172.30.82.11     9132 -> 9030      8132 -> 8030   (follower)
+#   fe3    172.30.82.12     9133 -> 9030      8133 -> 8030   (follower)
+#   be1    172.30.82.20     -                 -
+#
+# FE election wiring (init_fe.sh "ELECTION" mode): every FE gets the SAME
+# FE_SERVERS list (name:ip:EDIT_LOG_PORT for all three, edit_log_port=9010) and a
+# distinct FE_ID. FE_ID=1 => master (start_fe.sh --console); FE_ID>1 => follower
+# (start_fe.sh --helper master_ip:9010 + self ALTER SYSTEM ADD FOLLOWER against
+# the master). Static IPs are mandatory because BDBJE records each FE's identity
+# by host:port in the metadata group.
+
+x-fe-common: &fe-common
+  image: apache/doris:fe-4.1.3
+  platform: ${DORIS_FE_PLATFORM:-linux/amd64}
+  # Every FE in the electable group sees the full 3-node roster; only FE_ID differs.
+  # Ports are the EDIT_LOG_PORT (9010), which is what --helper and ADD FOLLOWER use.
+  healthcheck:
+    # SHOW FRONTENDS hits FE-local BDBJE state only — no BE required.
+    test: ["CMD-SHELL", "mysql -h127.0.0.1 -P9030 -uroot -e 'SHOW FRONTENDS' >/dev/null 2>&1"]
+    interval: 5s
+    timeout: 5s
+    retries: 60
+    start_period: 90s
+
+services:
+  doris-fe1:
+    <<: *fe-common
+    container_name: trino-doris-mfe-fe1
+    hostname: trino-doris-mfe-fe1
+    environment:
+      FE_SERVERS: fe1:172.30.82.10:9010,fe2:172.30.82.11:9010,fe3:172.30.82.12:9010
+      FE_ID: "1"
+    ports:
+      - "9131:9030"   # FE1 MySQL protocol (host 9131 -> container 9030)
+      - "8131:8030"   # FE1 HTTP
+    volumes:
+      # Per-node gitignored runtime copy of fe.conf (init_fe.sh appends
+      # priority_networks on first init); staged fresh by up.sh from the tracked
+      # multi-fe/fe.conf. Per-node (not shared) so parallel appends never race.
+      - ./.fe1.conf.runtime:/opt/apache-doris/fe/conf/fe.conf
+      - fe1-meta:/opt/apache-doris/fe/doris-meta
+      - fe1-log:/opt/apache-doris/fe/log
+    networks:
+      mfe-net:
+        ipv4_address: 172.30.82.10
+
+  doris-fe2:
+    <<: *fe-common
+    container_name: trino-doris-mfe-fe2
+    hostname: trino-doris-mfe-fe2
+    depends_on:
+      doris-fe1:
+        condition: service_healthy
+    environment:
+      FE_SERVERS: fe1:172.30.82.10:9010,fe2:172.30.82.11:9010,fe3:172.30.82.12:9010
+      FE_ID: "2"
+    ports:
+      - "9132:9030"
+      - "8132:8030"
+    volumes:
+      - ./.fe2.conf.runtime:/opt/apache-doris/fe/conf/fe.conf
+      - fe2-meta:/opt/apache-doris/fe/doris-meta
+      - fe2-log:/opt/apache-doris/fe/log
+    networks:
+      mfe-net:
+        ipv4_address: 172.30.82.11
+
+  doris-fe3:
+    <<: *fe-common
+    container_name: trino-doris-mfe-fe3
+    hostname: trino-doris-mfe-fe3
+    depends_on:
+      doris-fe1:
+        condition: service_healthy
+    environment:
+      FE_SERVERS: fe1:172.30.82.10:9010,fe2:172.30.82.11:9010,fe3:172.30.82.12:9010
+      FE_ID: "3"
+    ports:
+      - "9133:9030"
+      - "8133:8030"
+    volumes:
+      - ./.fe3.conf.runtime:/opt/apache-doris/fe/conf/fe.conf
+      - fe3-meta:/opt/apache-doris/fe/doris-meta
+      - fe3-log:/opt/apache-doris/fe/log
+    networks:
+      mfe-net:
+        ipv4_address: 172.30.82.12
+
+  doris-be:
+    image: apache/doris:be-4.1.3
+    container_name: trino-doris-mfe-be
+    hostname: trino-doris-mfe-be
+    platform: ${DORIS_BE_PLATFORM:-linux/amd64}
+    depends_on:
+      doris-fe1:
+        condition: service_healthy
+    environment:
+      # BE locates the master via FE_SERVERS (FE RPC port 9020). It heartbeats to
+      # whichever FE is master; on master failover the surviving master keeps the
+      # BE registered (BDBJE-replicated backend state), so no BE reconfig needed.
+      FE_SERVERS: fe1:172.30.82.10:9020
+      BE_ADDR: 172.30.82.20:9050
+    volumes:
+      - ./.be.conf.runtime:/opt/apache-doris/be/conf/be.conf
+      - be-storage:/opt/apache-doris/be/storage
+      - be-log:/opt/apache-doris/be/log
+    networks:
+      mfe-net:
+        ipv4_address: 172.30.82.20
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+
+networks:
+  mfe-net:
+    driver: bridge
+    ipam:
+      driver: default
+      config:
+        - subnet: 172.30.82.0/24
+
+volumes:
+  fe1-meta:
+  fe1-log:
+  fe2-meta:
+  fe2-log:
+  fe3-meta:
+  fe3-log:
+  be-storage:
+  be-log:

@@ -45,6 +45,12 @@ class DorisSessionProperties @Inject constructor(dorisConfig: DorisConfig) : Ses
             dorisConfig.getStringPushdownMode(),
             false,
         ),
+        PropertyMetadata.booleanProperty(
+            STATISTICS_ENABLED,
+            "Expose Doris table/column statistics to the optimizer — per-query override of doris.statistics.enabled",
+            dorisConfig.isStatisticsEnabled(),
+            false,
+        ),
     )
 
     override fun getSessionProperties(): List<PropertyMetadata<*>> = properties
@@ -52,11 +58,15 @@ class DorisSessionProperties @Inject constructor(dorisConfig: DorisConfig) : Ses
     companion object {
         const val QUERY_TIMEOUT = "query_timeout"
         const val STRING_PUSHDOWN_MODE = "string_pushdown_mode"
+        const val STATISTICS_ENABLED = "statistics_enabled"
 
         fun getQueryTimeout(session: ConnectorSession): Duration? =
             session.getProperty(QUERY_TIMEOUT, Duration::class.java)
 
         fun getStringPushdownMode(session: ConnectorSession): DorisStringPushdownMode =
             session.getProperty(STRING_PUSHDOWN_MODE, DorisStringPushdownMode::class.java)
+
+        fun isStatisticsEnabled(session: ConnectorSession): Boolean =
+            session.getProperty(STATISTICS_ENABLED, Boolean::class.javaObjectType)
     }
 }

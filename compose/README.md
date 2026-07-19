@@ -64,6 +64,46 @@ wire but near-zero on disk), `p2_*`, `p3_*`, `p4_*`, and `p5_batch`. **No manual
 step exists anymore** — `./up.sh` + `./gradlew build` from zero is the supported path (this
 is what CI does).
 
+## Multi-FE failover overlay (`multi-fe/`, OPTIONAL, manual/dev only)
+
+`multi-fe/` is a **separate, optional** overlay cluster used to produce the multi-FE
+failover evidence in `../dev-docs/REPORT-multi-fe-failover.md`. It is **NOT** part of
+CI and does **NOT** replace or disturb the default single-FE cluster above — CI keeps
+using the single-FE cluster (host 9130). Bring the overlay up by hand only when you
+want to re-run / extend the failover evidence, and **tear it down when finished** (it
+runs three FEs + a BE and is memory-hungry).
+
+- **Topology:** three FEs (`fe1` initial master + `fe2`/`fe3` followers that join the
+  BDBJE electable group via `--helper`) and one BE, project `trino-doris-mfe`, on a
+  dedicated `172.30.82.0/24` network (no collision with `81.x`/`80.x`).
+
+  | Node | Host MySQL port | Host HTTP port |
+  |------|-----------------|----------------|
+  | fe1 (master) | **9131** → 9030 | 8131 → 8030 |
+  | fe2 (follower) | **9132** → 9030 | 8132 → 8030 |
+  | fe3 (follower) | **9133** → 9030 | 8133 → 8030 |
+
+- **Usage:**
+
+  ```sh
+  ./multi-fe/up.sh      # up 3 FEs + BE, wait for HA convergence + BE alive
+  ./multi-fe/down.sh    # tear down (containers + volumes) — frees the memory
+  ```
+
+- **Multi-host failover URL:** `jdbc:mysql://127.0.0.1:9131,127.0.0.1:9132,127.0.0.1:9133/`
+  (plain comma-list). Verdicts, timings, and the production-URL recommendation (TCP
+  LB/VIP preferred) are in `../dev-docs/REPORT-multi-fe-failover.md`.
+
+- **Guarded test:** `TestDorisMultiFeFailover` is `@EnabledIf`-guarded on all three
+  overlay ports being reachable, so it runs when the overlay is up and **skips cleanly**
+  (build stays green) when it is not.
+
+- **Lessons reused from the single-FE cluster:** `priority_networks` pinned per node,
+  gitignored per-node runtime confs staged by `up.sh` (init scripts append
+  `priority_networks`), static IPs (BDBJE identity), `nofile` 65536, amd64 BE. The one
+  deliberate difference: **FE heap is 1g** (not 2g) because three FEs must co-tenant the
+  dev box alongside the single-FE and doris-ducklake clusters.
+
 ## Lessons baked in
 
 - **`priority_networks = 172.30.81.0/24`** is written into both `fe.conf` and

@@ -48,6 +48,7 @@ import io.trino.spi.connector.AggregateFunction
 import io.trino.spi.connector.ColumnHandle
 import io.trino.spi.connector.ConnectorSession
 import io.trino.spi.connector.SchemaTableName
+import io.trino.spi.statistics.TableStatistics
 import io.trino.spi.connector.SortOrder
 import io.trino.spi.connector.TableNotFoundException
 import io.trino.spi.expression.ConnectorExpression
@@ -199,6 +200,38 @@ class DorisClient @Inject constructor(
     override fun getTableTypes(): Optional<List<String>> = Optional.of(ImmutableList.of("TABLE", "VIEW"))
 
     override fun getTableRemoteSchemaName(resultSet: ResultSet): String = resultSet.getString("TABLE_CAT")
+
+    private val statisticsReader = DorisTableStatisticsReader(::quoted)
+
+    /**
+     * Remote statistics for the cost-based optimizer (PLAN P4 tail; probe verdicts in
+     * `dev-docs/NOTES-p5-statistics.md`). Config-gated (`doris.statistics.enabled` /
+     * `statistics_enabled`). FAIL-SOFT by contract: statistics are advisory, so any failure
+     * degrades to [TableStatistics.empty] (all-unknown) with a DEBUG log — never a query
+     * failure. The connector never issues ANALYZE (that writes to Doris's stats store);
+     * auto-analyze and manual ANALYZE are the user's domain.
+     */
+    @Suppress("TooGenericExceptionCaught") // fail-soft BY CONTRACT: stats are advisory, any failure degrades to unknown
+    override fun getTableStatistics(session: ConnectorSession, handle: JdbcTableHandle): TableStatistics {
+        if (!DorisSessionProperties.isStatisticsEnabled(session) || !handle.isNamedRelation) {
+            return TableStatistics.empty()
+        }
+        return try {
+            val remoteTableName = handle.requiredNamedRelation.remoteTableName
+            val remoteSchema = remoteTableName.catalogName
+                .or { remoteTableName.schemaName }
+                .orElseThrow { TrinoException(JDBC_ERROR, "Remote table has no schema/catalog: $remoteTableName") }
+            val columns = handle.columns.orElseGet {
+                getColumns(session, handle.requiredNamedRelation.schemaTableName, remoteTableName)
+            }
+            connectionFactory.openConnection(session).use { connection ->
+                statisticsReader.readStatistics(connection, remoteSchema, remoteTableName.tableName, columns)
+            }
+        } catch (e: Exception) {
+            log.debug(e, "statistics unavailable for %s — returning unknown estimates", handle)
+            TableStatistics.empty()
+        }
+    }
 
     override fun getColumns(
         session: ConnectorSession,

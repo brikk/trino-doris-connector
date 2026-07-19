@@ -1,0 +1,9 @@
+# Gitignored PER-NODE runtime copies of fe.conf / be.conf. Doris's init_fe.sh
+# APPENDS a priority_networks line to each mounted fe.conf on first init (and
+# init_be.sh does the same to be.conf); mounting throwaway copies (staged by
+# up.sh from the tracked pristine multi-fe/fe.conf + be.conf) keeps those
+# appends out of the repo. Per-node so the three FEs never race on one file.
+.fe1.conf.runtime
+.fe2.conf.runtime
+.fe3.conf.runtime
+.be.conf.runtime

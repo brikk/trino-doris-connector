@@ -11,6 +11,7 @@ this ledger and requires a re-probe.
 
 **Evidence sources (cited by short-name):**
 - **PROBE** = `REPORT-protocol-type-probe-doris-4.1.3.md`
+- **MFE**   = `REPORT-multi-fe-failover.md`
 - **ARRAY** = `REPORT-array-wire-decoder-spike.md`
 - **STOCK** = `REPORT-stock-trino-mysql-vs-doris-4.1.3.md`
 - **ASM**   = `REPORT-plugin-assembly-proof.md`
@@ -163,7 +164,7 @@ Each property with its evidence. These are the exact properties `DorisJdbcConfig
 | `useServerPrepStmts` | **`false` (client emulation) — v1 default** | Both client and server prep executed and matched **identically** for INT/BIGINT/DECIMAL/DATE/DATETIME/VARCHAR/BOOLEAN `?`-bound predicates; **no type-fidelity difference**. Server prep is functional on 4.1.3, but client emulation is the safer default until a broader parameter-type sweep is done (PROBE §5). |
 | `connectTimeout` / socket timeout | set explicitly (finite) | PLAN §4.3; SR K2 (`connectTimeout`). Exact values a P1 config decision. |
 | TLS | passed through explicitly | PLAN §4.3 (out of P0 probe scope). |
-| multi-host | **plain comma-list** `jdbc:mysql://h1:p,h2:p/db` | Comma-list **connects** (proven single-FE, `SELECT 1`=1). The **`sequential:(host=..,port=..)` form is REJECTED** by Connector/J 9.7.0 (`WrongArgumentException`). Use comma-list or a TCP load balancer. **Caveat: only single-FE failover-syntax proven; true multi-FE follower/observer failover NOT tested — see §F NOT-DONE** (PROBE §11; PLAN §4.3). |
+| multi-host | **plain comma-list** `jdbc:mysql://h1:p,h2:p,h3:p/` (or a TCP LB/VIP — preferred) | **PROVEN on a live 3-FE cluster (MFE):** comma-list **connects AND fails over** new connections to survivors; the `sequential:`/`loadbalance:`/`failover:` **scheme prefixes on a bare comma-list also work**. The ONLY rejected form is `sequential:` **mixed with** the address-equals `(host=..,port=..)` host form (`WrongArgumentException`) — a refinement of the earlier blanket "sequential rejected" (PROBE §11). In-flight query on FE death fails; reconnect-on-next-query works. Set a finite `connectTimeout` + have callers retry (first attempt to a just-killed host can hit an ~8 s transient). Prefer a TCP LB/VIP in front of the FE ports for real deployments. Full timings + master-election behavior: §F, MFE (`REPORT-multi-fe-failover.md`); PLAN §4.3. |
 | URL must not contain a database/catalog path | enforced (`isUrlWithoutDatabase` guard) | Catalog-as-schema (Doris db → Trino schema) requires connecting without a default DB (SR K3; PLAN G9/§4.4). |
 | session vars | applied at **session scope only, never global** | `query_timeout`, `exec_mem_limit`, `time_zone` all settable per-session via `SET` or URL `sessionVariables=` (PROBE §9; PLAN §4.3). |
 
@@ -274,7 +275,7 @@ single remote statement, confirming G2").
 | Run protocol/type probe (§9.1) | **DONE** | PROBE (11 sections + BITMAP/HLL/AGG_STATE + wire-format). |
 | Throwaway ARRAY text-decoder spike over every §5 ARRAY fixture | **DONE** | ARRAY (GO-WITH-RESTRICTIONS; 179 pass / 0 unexpected fail / 4 string-ambiguity findings; strict decoder checked in as evidence). |
 | Confirm single-statement snapshot, streaming, cancellation | **DONE** | §E (G2), §D (cancel/timeout), PROBE §7 (streaming). |
-| Confirm **FE failover** | **NOT-DONE (open P1+ obligation)** | Only the **multi-host URL *syntax*** is proven, on a **single-FE cluster** (comma-list connects; `sequential:(...)` rejected — PROBE §11). True **FE follower/observer routing and multi-FE failover** (PLAN §9.1 "FE follower/observer routing and multi-host failover") was **not tested** — no multi-FE cluster was stood up. **Record as an explicit open P1+ obligation:** stand up a ≥3-FE cluster and prove failover before relying on it. |
+| Confirm **FE failover** | **DONE 2026-07-19** | **MFE** = `REPORT-multi-fe-failover.md`. A live **3-FE (1 master + 2 followers) + BE** 4.1.3 overlay (`compose/multi-fe/`, project `trino-doris-mfe`, host 9131/9132/9133) was stood up and failover measured. **Verdicts:** plain **comma-list** `jdbc:mysql://h1:p,h2:p,h3:p/` connects + **fails over** new connections to survivors; the `sequential:`/`loadbalance:`/`failover:` **scheme prefixes on a bare comma-list also work** — refining PROBE §11: the ONLY rejected form is `sequential:` **mixed with** the address-equals `(host=…,port=…)` host form (`WrongArgumentException`). **In-flight query on FE death FAILS; reconnect-on-next-query works** (new conn ~107 ms). **Master death:** cluster re-elects (2-of-3 quorum) — **graceful stop ~2.4 s**, **hard `kill -9` ~63 s** (BDBJE heartbeat timeout) during which real queries are cluster-wide unavailable though survivors still answer `SELECT 1`. **Recommend a TCP LB/VIP** in front of the FE ports; comma-list acceptable with finite `connectTimeout` + caller retry. Guarded live test `TestDorisMultiFeFailover` (`@EnabledIf` on all-3-ports-reachable; skips cleanly when overlay down — CI unaffected). See MFE for full timings/procedure. |
 | Produce concrete type & read-only capability ledger | **DONE** | **this document.** |
 
 ---
@@ -342,10 +343,15 @@ PLAN edits made.
    `brikk-house` change** (additive `sourceName`/`targetName` + a non-SNAPSHOT
    release) — parked for approval (BRIKK (c)/(d)/(e)).
 
-10. **Multi-FE failover unproven (§9.1).** §9.1 lists "FE follower/observer routing
-    and multi-host failover" as a P0 probe item; only single-FE URL **syntax** was
-    proven. Record as an explicit open P1+ obligation rather than an assumed-DONE
-    P0 item (PROBE §11).
+10. **Multi-FE failover — NOW PROVEN (§9.1).** §9.1 lists "FE follower/observer
+    routing and multi-host failover" as a P0 probe item. Originally only single-FE URL
+    **syntax** was proven (PROBE §11). **RESOLVED 2026-07-19** on a live 3-FE cluster
+    (MFE / `REPORT-multi-fe-failover.md`): comma-list failover works; `sequential:`/
+    `loadbalance:`/`failover:` prefixes on a comma-list also work (only `sequential:`
+    +address-equals is rejected — a refinement of PROBE §11's blanket "sequential
+    rejected"); in-flight queries fail on FE death but reconnect-on-next-query works;
+    master re-election is ~2.4 s graceful / ~63 s hard-crash. Production guidance: TCP
+    LB/VIP preferred, comma-list acceptable with finite `connectTimeout` + retry.
 
 11. **BOOLEAN vs TINYINT discrimination must be is.COLUMN_TYPE-driven (§5).** §5
     says "Normalize Doris/Connector-J TINYINT/BIT reporting explicitly" — live proof
