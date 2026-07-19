@@ -46,16 +46,28 @@ class TestDorisRemoteSql : AbstractTestQueryFramework() {
     }
 
     @Test
-    fun testStringEqualityIsAbsentFromRemoteSql() {
-        // G5 negative proof at the wire: a string equality predicate must NOT appear in the
-        // remote statement (NULL-only string domains; the Trino filter retains it).
-        val execution = getDistributedQueryRunner()
-            .executeWithPlan(session, "SELECT id FROM doris.p0_probe.scalars WHERE c_string = 'a normal string'")
-        assertThat(execution.result().rowCount).isEqualTo(1)
-        val marker = DorisRemoteQueryModifier.marker(execution.queryId().toString())
-        val statements = DorisTestCluster.awaitAuditLogStatements(marker, AUDIT_LOG_TIMEOUT_MILLIS)
-        val scanStatement = statements.single { it.contains("`scalars`") }
-        assertThat(scanStatement).doesNotContain("a normal string")
+    fun testStringEqualityWireShapePerPushdownMode() {
+        // G5 at the wire, mode-resolved (REPORT-string-comparison-probe-4.1.3.md): under the
+        // GUARDED default the string equality DOES ship as a superset pre-filter (the exact
+        // Trino filter is retained locally); under NULL_ONLY it must NOT appear at all.
+        val sql = "SELECT id FROM doris.p0_probe.scalars WHERE c_string = 'a normal string'"
+
+        val guarded = getDistributedQueryRunner().executeWithPlan(session, sql)
+        assertThat(guarded.result().rowCount).isEqualTo(1)
+        val guardedRemote = DorisTestCluster
+            .awaitAuditLogStatements(DorisRemoteQueryModifier.marker(guarded.queryId().toString()), AUDIT_LOG_TIMEOUT_MILLIS)
+            .single { it.contains("`scalars`") }
+        assertThat(guardedRemote).contains("a normal string")
+
+        val nullOnlySession = io.trino.Session.builder(session)
+            .setCatalogSessionProperty(DorisQueryRunner.CATALOG, "string_pushdown_mode", "NULL_ONLY")
+            .build()
+        val nullOnly = getDistributedQueryRunner().executeWithPlan(nullOnlySession, sql)
+        assertThat(nullOnly.result().rowCount).isEqualTo(1)
+        val nullOnlyRemote = DorisTestCluster
+            .awaitAuditLogStatements(DorisRemoteQueryModifier.marker(nullOnly.queryId().toString()), AUDIT_LOG_TIMEOUT_MILLIS)
+            .single { it.contains("`scalars`") }
+        assertThat(nullOnlyRemote).doesNotContain("a normal string")
     }
 
     companion object {

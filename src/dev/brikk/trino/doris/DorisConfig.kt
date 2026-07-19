@@ -29,6 +29,7 @@ class DorisConfig {
     private var execMemLimit: DataSize? = null
     private var timeZone: String? = null
     private var connectTimeout: Duration = Duration(10.0, TimeUnit.SECONDS)
+    private var stringPushdownMode: DorisStringPushdownMode = DorisStringPushdownMode.GUARDED
 
     fun getQueryTimeout(): Duration? = queryTimeout
 
@@ -54,6 +55,18 @@ class DorisConfig {
     @ConfigDescription("Doris session variable time_zone (e.g. Etc/UTC), applied per connection session")
     fun setTimeZone(timeZone: String?): DorisConfig {
         this.timeZone = timeZone
+        return this
+    }
+
+    fun getStringPushdownMode(): DorisStringPushdownMode = stringPushdownMode
+
+    @Config("doris.string-pushdown.mode")
+    @ConfigDescription(
+        "String predicate pushdown mode: NULL_ONLY, GUARDED (superset pre-filter, Trino filter retained; default), " +
+            "BINARY (verified byte semantics), FULL (caller-asserted). Per-query override: string_pushdown_mode",
+    )
+    fun setStringPushdownMode(stringPushdownMode: DorisStringPushdownMode): DorisConfig {
+        this.stringPushdownMode = stringPushdownMode
         return this
     }
 

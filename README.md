@@ -42,16 +42,39 @@ Predicates and query shapes the connector pushes into Doris:
 | `array_position(a, x) <op> n` | `array_position(...)` comparisons | all six comparison operators, either orientation |
 | `NOT` / `AND` / `OR` | composed remote predicates | over value-identical operands (e.g. `array_position` comparisons) |
 | `LIMIT n` | `LIMIT n` | |
-| `ORDER BY ... LIMIT n` (TopN) | `ORDER BY ... NULLS FIRST/LAST LIMIT n` | non-text sort keys; all four NULL orderings render natively |
+| `ORDER BY ... LIMIT n` (TopN) | `ORDER BY ... NULLS FIRST/LAST LIMIT n` | non-text sort keys (plus VARCHAR keys in `BINARY`/`FULL` string modes); all four NULL orderings render natively |
+| String predicates and `LIKE` | mode-dependent | see [String pushdown modes](#string-pushdown-modes) |
 
 Deliberately **not** pushed (kept in Trino to guarantee correct results):
 
-- String comparisons, `LIKE`, and string TopN — Doris collation differs from Trino; only
-  `IS [NOT] NULL` is pushed for string columns.
 - `FLOAT`/`DOUBLE` equality — approximate types.
 - Anything whose Doris semantics differ from Trino's (e.g. `element_at`, `length`): unknown or
   unproven expressions always stay in Trino. Partially-pushable filters are split — the safe
   conjuncts go remote, the rest are evaluated in Trino.
+
+### String pushdown modes
+
+String comparison pushdown is configurable via the catalog property
+`doris.string-pushdown.mode` and the session property `string_pushdown_mode` (session
+overrides catalog in either direction):
+
+| mode | VARCHAR/STRING predicates | CHAR predicates | string TopN | `LIKE` |
+|---|---|---|---|---|
+| `NULL_ONLY` | `IS [NOT] NULL` only | same | off | off |
+| `GUARDED` (default) | pushed as a remote **pre-filter** with the exact Trino filter retained locally — results always identical to `NULL_ONLY`, but Doris prunes rows early | not pushed | off | off |
+| `BINARY` | full pushdown, no retained filter | full pushdown | VARCHAR keys pushed | pushed |
+| `FULL` | same as `BINARY` | same | same | same |
+
+Background: a live probe of Doris 4.1.3 (`dev-docs/REPORT-string-comparison-probe-4.1.3.md`)
+proved its string `=`/ranges/`IN`/`LIKE`/`ORDER BY` use pure byte (memcmp) semantics over
+UTF-8 (`utf8mb4_0900_bin`) — identical to Trino's VARCHAR semantics, so `BINARY`/`FULL`
+render identically on this version. The remaining hazards are handled per mode: CHAR
+trailing-space data (Doris compares stored bytes, Trino compares trimmed values) keeps CHAR
+out of `GUARDED` value pushdown and CHAR sort keys out of TopN in every mode; `LIKE`
+patterns have backslashes doubled (Doris's default escape is `\`, Trino's no-escape `LIKE`
+treats `\` literally), and explicit `ESCAPE` clauses pass through; `GUARDED` additionally
+keeps predicates whose values contain a 0x00 byte local as defense-in-depth. `BINARY` is
+the mode whose contract is probe-verified byte semantics; `FULL` is caller-asserted.
 
 ### Type mapping
 

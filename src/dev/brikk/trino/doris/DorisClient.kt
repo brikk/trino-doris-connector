@@ -123,6 +123,9 @@ class DorisClient @Inject constructor(
             .apply { valueSafeRules.forEach { add(it) } }
             .add(RewriteContains(support))
             .add(RewriteArraysOverlap(support))
+            // LIKE pushes only in BINARY/FULL string mode (rule.isEnabled gates per session);
+            // stays out of the value-safe tier (no composition) — probe report, LIKE section.
+            .add(RewriteStringLike(::quoted))
             .build()
     }
 
@@ -324,7 +327,20 @@ class DorisClient @Inject constructor(
      * ordered rows).
      */
     override fun supportsTopN(session: ConnectorSession, handle: JdbcTableHandle, sortOrder: List<JdbcSortItem>): Boolean =
-        sortOrder.all { isPushableSortKey(it.column().columnType) }
+        sortOrder.all { isPushableSortKey(session, it.column().columnType) }
+
+    /**
+     * VARCHAR sort keys become TopN-eligible in BINARY/FULL string-pushdown mode: Doris
+     * `ORDER BY` over strings is pure byte order (probe: the full adversarial set sorts in
+     * ascending UTF-8 byte order), which equals Trino's VARCHAR codepoint ordering. CHAR keys
+     * stay OFF in every mode — Trino orders trimmed/padded CHAR values while Doris orders
+     * stored bytes, divergent for trailing-space data and undetectable from the query
+     * (REPORT-string-comparison-probe-4.1.3.md "ORDER BY").
+     */
+    private fun isPushableSortKey(session: ConnectorSession, type: Type): Boolean = when (type) {
+        is io.trino.spi.type.VarcharType -> DorisSessionProperties.getStringPushdownMode(session).allowsFullStringPushdown
+        else -> isPushableSortKey(type)
+    }
 
     override fun topNFunction(): Optional<BaseJdbcClient.TopNFunction> {
         return Optional.of(

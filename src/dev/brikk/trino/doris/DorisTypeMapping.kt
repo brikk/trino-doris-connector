@@ -27,6 +27,7 @@ import io.trino.plugin.jdbc.PredicatePushdownController
 import io.trino.plugin.jdbc.PredicatePushdownController.DISABLE_PUSHDOWN
 import io.trino.plugin.jdbc.PredicatePushdownController.DomainPushdownResult
 import io.trino.plugin.jdbc.PredicatePushdownController.FULL_PUSHDOWN
+import io.trino.plugin.jdbc.JdbcMetadataSessionProperties.getDomainCompactionThreshold
 import io.trino.plugin.jdbc.StandardColumnMappings.bigintColumnMapping
 import io.trino.plugin.jdbc.StandardColumnMappings.booleanColumnMapping
 import io.trino.plugin.jdbc.StandardColumnMappings.charReadFunction
@@ -244,19 +245,19 @@ internal class DorisTypeMapping(typeManager: TypeManager) {
         val length = parsed.arguments.singleOrNull()
             ?: throw TrinoException(GENERIC_INTERNAL_ERROR, "Unexpected Doris char COLUMN_TYPE: '${parsed.raw}'")
         val charType = createCharType(length)
-        return ColumnMapping.sliceMapping(charType, charReadFunction(charType), charWriteFunction(), NULL_ONLY_PUSHDOWN)
+        return ColumnMapping.sliceMapping(charType, charReadFunction(charType), charWriteFunction(), CHAR_PUSHDOWN)
     }
 
     private fun varcharMapping(parsed: DorisColumnType): ColumnMapping {
         val length = parsed.arguments.singleOrNull()
             ?: throw TrinoException(GENERIC_INTERNAL_ERROR, "Unexpected Doris varchar COLUMN_TYPE: '${parsed.raw}'")
         val varcharType = createVarcharType(length)
-        return ColumnMapping.sliceMapping(varcharType, varcharReadFunction(varcharType), varcharWriteFunction(), NULL_ONLY_PUSHDOWN)
+        return ColumnMapping.sliceMapping(varcharType, varcharReadFunction(varcharType), varcharWriteFunction(), VARCHAR_PUSHDOWN)
     }
 
     private fun unboundedVarcharMapping(): ColumnMapping {
         val varcharType = createUnboundedVarcharType()
-        return ColumnMapping.sliceMapping(varcharType, varcharReadFunction(varcharType), varcharWriteFunction(), NULL_ONLY_PUSHDOWN)
+        return ColumnMapping.sliceMapping(varcharType, varcharReadFunction(varcharType), varcharWriteFunction(), VARCHAR_PUSHDOWN)
     }
 
     /** JSON and VARIANT: server-normalized JSON text, strict jsonParse, no blind pushdown (ledger §A; SR K14). */
@@ -296,19 +297,76 @@ internal class DorisTypeMapping(typeManager: TypeManager) {
         private val DECIMAL_38_MAX: BigInteger = BigInteger.TEN.pow(LARGEINT_DECIMAL_PRECISION).subtract(BigInteger.ONE)
 
         /**
-         * G5 string-domain policy: only null-ness (`IS NULL` / `IS NOT NULL`) is pushed for
-         * CHAR/VARCHAR — no equality/range/LIKE until Doris collation is proven. A remote
-         * string equality would be at most a superset pre-filter and stock Trino's behavior
-         * of pushing it is the exact hazard this policy closes (ledger §A row char/varchar;
-         * STOCK pushdown ledger row b).
+         * G5 string-domain policy, mode-resolved per query (probe evidence:
+         * `REPORT-string-comparison-probe-4.1.3.md` — Doris 4.1.3 string comparison is pure
+         * byte semantics, `utf8mb4_0900_bin`):
+         * - NULL_ONLY: null-ness only (exact; no collation hazard).
+         * - GUARDED (default): value domains push as SUPERSET pre-filters with the exact
+         *   Trino filter RETAINED; domains whose values contain a 0x00 byte are skipped
+         *   (defense-in-depth: a NUL-literal comparison once returned wrong-empty under
+         *   host memory pressure; reproductions are byte-exact — skipping is always correct).
+         * - BINARY/FULL: full pushdown, no retained filter (byte-exactness probe-verified;
+         *   the known documented divergence is CHAR trailing-space data).
          */
-        internal val NULL_ONLY_PUSHDOWN = PredicatePushdownController { session, domain ->
-            if (domain.isOnlyNull || domain.values.isAll) {
+        internal val VARCHAR_PUSHDOWN = PredicatePushdownController { session, domain ->
+            when (DorisSessionProperties.getStringPushdownMode(session)) {
+                DorisStringPushdownMode.NULL_ONLY -> nullOnlyResult(session, domain)
+                DorisStringPushdownMode.GUARDED -> guardedResult(session, domain)
+                DorisStringPushdownMode.BINARY, DorisStringPushdownMode.FULL -> FULL_PUSHDOWN.apply(session, domain)
+            }
+        }
+
+        /**
+         * CHAR columns: Doris compares STORED bytes (no padding) while Trino compares
+         * trimmed CHAR values — stored trailing-space data UNDER-returns and is undetectable
+         * from the query (probe report, CHAR row). GUARDED therefore keeps CHAR at null-ness
+         * only; BINARY/FULL push with the divergence documented and tested.
+         */
+        internal val CHAR_PUSHDOWN = PredicatePushdownController { session, domain ->
+            if (DorisSessionProperties.getStringPushdownMode(session).allowsFullStringPushdown) {
+                FULL_PUSHDOWN.apply(session, domain)
+            } else {
+                nullOnlyResult(session, domain)
+            }
+        }
+
+        private fun nullOnlyResult(session: ConnectorSession, domain: Domain): DomainPushdownResult {
+            return if (domain.isOnlyNull || domain.values.isAll) {
                 // Null-ness has no collation hazard; pushing it is exact.
                 DomainPushdownResult(domain, Domain.all(domain.type))
             } else {
                 DISABLE_PUSHDOWN.apply(session, domain)
             }
+        }
+
+        private fun guardedResult(session: ConnectorSession, domain: Domain): DomainPushdownResult {
+            if (domain.isOnlyNull || domain.values.isAll) {
+                return DomainPushdownResult(domain, Domain.all(domain.type))
+            }
+            if (domainValuesContainNulByte(domain)) {
+                // defense-in-depth skip: a retained filter cannot resurrect rows a remote
+                // pre-filter dropped, and a NUL-literal miss was observed once (transient,
+                // probe report) — keeping these local is always correct
+                return DISABLE_PUSHDOWN.apply(session, domain)
+            }
+            // superset pre-filter remotely + the EXACT Trino predicate retained locally
+            return DomainPushdownResult(domain.simplify(getDomainCompactionThreshold(session)), domain)
+        }
+
+        /** Scans every domain value (discrete values and range bounds) for a 0x00 byte. */
+        internal fun domainValuesContainNulByte(domain: Domain): Boolean {
+            val slices = ArrayList<Slice>()
+            domain.values.valuesProcessor.consume(
+                { ranges ->
+                    ranges.orderedRanges.forEach { range ->
+                        range.lowValue.ifPresent { slices.add(it as Slice) }
+                        range.highValue.ifPresent { slices.add(it as Slice) }
+                    }
+                },
+                { discrete -> discrete.values.forEach { slices.add(it as Slice) } },
+                { /* all-or-none carries no values */ },
+            )
+            return slices.any { slice -> (0 until slice.length()).any { slice.getByte(it) == 0.toByte() } }
         }
 
         /**

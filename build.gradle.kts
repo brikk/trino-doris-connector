@@ -99,7 +99,11 @@ configurations.named("runtimeClasspath") {
 tasks.test {
     // Live P1a smoke tests target the already-running stock Doris 4.1.3 compose cluster
     // (./compose, mysql host port 9130). They fail loud if it is down.
-    maxHeapSize = "3g"
+    // 2g is ample for one in-process DistributedQueryRunner + the live suites (3g was
+    // trino-ducklake heritage); a smaller test JVM also keeps host free memory above the
+    // Doris BE's low-water mark (~1.3GB) when other builds run concurrently — below it the
+    // BE fails ALL queries with MEM_ALLOC_FAILED regardless of its own usage.
+    maxHeapSize = "1536m"
 
     // Same JVM flags the in-process Trino 483 engine needs in trino-ducklake's test task
     // (BlockEncodingSimdSupport requires jdk.incubator.vector, etc.).

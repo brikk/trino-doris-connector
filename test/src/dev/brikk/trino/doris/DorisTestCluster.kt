@@ -91,6 +91,28 @@ object DorisTestCluster {
         }
     }
 
+    /**
+     * Parameterized inserts as root — required for fixtures whose values contain NUL,
+     * zero-width, or control characters that cannot travel through SQL literal quoting.
+     */
+    fun executePreparedAsRoot(sql: String, rows: List<List<Any?>>) {
+        openRootConnection().use { connection ->
+            connection.prepareStatement(sql).use { statement ->
+                for (row in rows) {
+                    row.forEachIndexed { index, value ->
+                        when (value) {
+                            null -> statement.setNull(index + 1, java.sql.Types.VARCHAR)
+                            is Int -> statement.setInt(index + 1, value)
+                            is String -> statement.setString(index + 1, value)
+                            else -> error("unsupported fixture parameter type: ${value.javaClass}")
+                        }
+                    }
+                    statement.executeUpdate()
+                }
+            }
+        }
+    }
+
     fun executeAsRoot(vararg statements: String) {
         openRootConnection().use { connection ->
             connection.createStatement().use { statement ->

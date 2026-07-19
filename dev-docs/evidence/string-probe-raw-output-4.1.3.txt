@@ -1,0 +1,102 @@
+== READBACK (id, hex(v), hex(c)) ==
+  1  61  61  
+  2  41  41  
+  3  6120  6120  
+  4  2061  2061  
+  5  C3A9  C3A9  
+  6  65CC81  65CC81  
+  7  F09F9880  F09F9880  
+  8  61E2808B62  61E2808B62  
+  9  610062  61  
+  10  610962  610962  
+  11  7878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787879  6C6F6E67  
+  12  null  null  
+  13  62  62  
+  14  42  42  
+  15  612562  612562  
+  16  615F62  615F62  
+  17  615C62  615C62  
+  18  412542  412542  
+  19  615862  615862  
+  20  6162  6162  
+== COMPARISON MATRIX (parameterized, column v) ==
+v = 'a' -> [1]
+v = 'A' -> [2]
+v = 'a ' -> [3]
+v = NFC(e-acute) -> [5]
+v = NFD(e-acute) -> [6]
+v = emoji -> [7]
+v = a<NUL>b -> []
+v = a<ZWSP>b -> [8]
+v = long -> [11]
+v < 'b' -> [1, 2, 3, 4, 8, 9, 10, 14, 15, 16, 17, 18, 19, 20]
+v > 'a' -> [3, 5, 6, 7, 8, 10, 11, 13, 15, 16, 17, 19, 20]
+v BETWEEN 'A' AND 'b' -> [1, 2, 3, 8, 9, 10, 13, 14, 15, 16, 17, 18, 19, 20]
+v IN ('a','B') -> [1, 14]
+== CHAR column ==
+c = 'a' -> [1, 9]
+c = 'a ' -> [3]
+c = 'a         ' (pad to 10) -> []
+== STRING column ==
+s = 'a' -> [1]
+== LIKE ==
+v LIKE 'a%' -> [1, 3, 8, 9, 10, 15, 16, 17, 19, 20]
+v LIKE 'A%' -> [2, 18]
+v LIKE '_' -> [1, 2, 5, 7, 13, 14]
+v LIKE 'a\%b' (escaped pct) -> [15]
+v LIKE 'a\\b' (escaped backslash) -> [17]
+v LIKE 'a_b' -> [8, 9, 10, 15, 16, 17, 19]
+v LIKE 'a!%b' ESCAPE '!' -> [15]
+== ORDER BY (byte-order check; ids in Doris sort order) ==
+  4  
+  2  
+  18  
+  14  
+  1  
+  9  
+  10  
+  3  
+  15  
+  19  
+  17  
+  16  
+  20  
+  8  
+  13  
+  6  
+  11  
+  5  
+  7  
+== forcing mechanisms ==
+SELECT BINARY 'a' -> OK: a
+SELECT 'a' COLLATE utf8mb4_0900_bin -> OK: a
+Exception in thread "main" java.lang.StringIndexOutOfBoundsException: Range [0, 140) out of bounds for length 29
+	at java.base/jdk.internal.util.Preconditions$1.apply(Preconditions.java:55)
+	at java.base/jdk.internal.util.Preconditions$1.apply(Preconditions.java:52)
+	at java.base/jdk.internal.util.Preconditions$4.apply(Preconditions.java:213)
+	at java.base/jdk.internal.util.Preconditions$4.apply(Preconditions.java:210)
+	at java.base/jdk.internal.util.Preconditions.outOfBounds(Preconditions.java:98)
+	at java.base/jdk.internal.util.Preconditions.outOfBoundsCheckFromToIndex(Preconditions.java:112)
+	at java.base/jdk.internal.util.Preconditions.checkFromToIndex(Preconditions.java:349)
+	at java.base/java.lang.String.checkBoundsBeginEnd(String.java:4937)
+	at java.base/java.lang.String.substring(String.java:2899)
+	at StringProbe.firstLine(StringProbe.java:112)
+	at StringProbe.probe(StringProbe.java:109)
+	at StringProbe.main(StringProbe.java:77)
+v LIKE 'a\%b' ESCAPE '!' -> [17]
+v LIKE a<NUL>b -> [9]
+id9 s hex = 610062
+SELECT CAST('a' AS BINARY) -> REJECTED: errCode = 2, detailMessage = 
+SELECT 'a' = BINARY 'A' -> OK: 0
+SELECT @@collation_connection -> OK: utf8mb4_0900_bin
+
+=== NUL reconciliation reruns (same day, after BE low-water-mark fix) ===
+--- NulProbe (URL + useUnicode=true&useServerPrepStmts=false, fixture p4_strings.t) ---
+param v = a<NUL>b -> [9]
+literal 'a\0b' -> [9]
+stored id9 hex = 610062
+--- NulProbe2 (EXACT original probe URL: characterEncoding=UTF-8 only) ---
+p4_probe.t param a<NUL>b -> [9]
+p4_strings.t param a<NUL>b -> [9]
+Verdict: original "param a<NUL>b -> []" is unreproducible (transient, memory-pressure
+regime); NUL comparisons byte-exact. GUARDED 0x00 skip retained as defense-in-depth.

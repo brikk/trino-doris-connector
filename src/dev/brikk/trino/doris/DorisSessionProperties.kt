@@ -38,14 +38,25 @@ class DorisSessionProperties @Inject constructor(dorisConfig: DorisConfig) : Ses
             dorisConfig.getQueryTimeout(),
             false,
         ),
+        PropertyMetadata.enumProperty(
+            STRING_PUSHDOWN_MODE,
+            "String predicate pushdown mode (NULL_ONLY, GUARDED, BINARY, FULL) — per-query override of doris.string-pushdown.mode",
+            DorisStringPushdownMode::class.java,
+            dorisConfig.getStringPushdownMode(),
+            false,
+        ),
     )
 
     override fun getSessionProperties(): List<PropertyMetadata<*>> = properties
 
     companion object {
         const val QUERY_TIMEOUT = "query_timeout"
+        const val STRING_PUSHDOWN_MODE = "string_pushdown_mode"
 
         fun getQueryTimeout(session: ConnectorSession): Duration? =
             session.getProperty(QUERY_TIMEOUT, Duration::class.java)
+
+        fun getStringPushdownMode(session: ConnectorSession): DorisStringPushdownMode =
+            session.getProperty(STRING_PUSHDOWN_MODE, DorisStringPushdownMode::class.java)
     }
 }
