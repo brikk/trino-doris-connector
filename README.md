@@ -2,87 +2,112 @@
 
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://www.apache.org/licenses/LICENSE-2.0)
 
-A **read-only** [Trino](https://trino.io) 483 connector for [Apache Doris](https://doris.apache.org)
-4.1.3, with **verified, typed predicate pushdown**. Doris speaks the MySQL wire protocol on its
-FE, so a generic JDBC scan can connect — but that leaves Doris's native acceleration
-(inverted indexes, sorted/partitioned storage, engine-native array functions) on the table and
-risks silently-wrong results wherever Doris and MySQL/Trino semantics diverge. This connector
-treats every pushdown as a **correctness claim proven against a live Doris 4.1.3 cluster**, not a
-SQL-rendering convenience, and is **defense-in-depth read-only** so it can never mutate the target.
+A **read-only** [Trino](https://trino.io) connector for [Apache Doris](https://doris.apache.org).
 
-The baseline is pinned: **Apache Doris 4.1.3** + **Trino 483** + **MySQL Connector/J 9.7.0**. Any
-Doris version change voids the semantic evidence and requires re-probing (see `dev-docs/`).
+Doris speaks the MySQL wire protocol, so Trino's generic MySQL connector can technically
+connect — but it silently drops Doris's complex types (ARRAY, JSON edge cases, LARGEINT
+overflows the whole query), leaves array predicates running in Trino where Doris's inverted
+indexes can't help, and will happily execute writes against your Doris cluster. This connector
+fixes all of that:
 
-## Status
+- **Correct types**, including native `ARRAY(T)` columns decoded exactly.
+- **Typed predicate pushdown** rendered so Doris **inverted indexes stay eligible** — every
+  pushed expression is verified for result equivalence (including NULL semantics) against a
+  live Doris cluster.
+- **Read-only by construction**: writes, DDL, and procedure escape hatches are denied inside
+  the connector before any SQL reaches Doris.
 
-Read-only P0–P3 slice complete. **124 tests across 15 suites**, all green in a single
-`./gradlew build`, most of them running live against the compose Doris 4.1.3 cluster.
+Built and tested against **Apache Doris 4.1.3**, **Trino 483**, and MySQL Connector/J 9.7.0.
 
-| Phase | Content |
+## Features
+
+- One Doris statement per table scan — Doris runs its own distributed execution and streams
+  results back; large results are streamed, not buffered in the Trino worker.
+- Trino query cancellation kills the corresponding Doris query (verified sub-second), and each
+  remote query is tagged with the Trino query id for easy correlation in Doris logs.
+- Dynamic catalogs: `CREATE CATALOG` / `DROP CATALOG` at runtime, with configuration validated
+  loudly at create time.
+- Doris session controls per catalog: `doris.query-timeout`, `doris.exec-mem-limit`,
+  `doris.time-zone`, `doris.connect-timeout`, plus a per-query `query_timeout` session property.
+
+### Pushdown
+
+Predicates and query shapes the connector pushes into Doris:
+
+| Trino | Pushed to Doris as | Notes |
+|---|---|---|
+| Column comparisons and ranges (`=`, `<`, `BETWEEN`, `IN`, `IS NULL`) | native predicates | numeric, boolean, date, datetime, and decimal columns (incl. LARGEINT) |
+| `contains(array_col, value)` | `array_contains(col, ?)` | rendered bare so the Doris **inverted index** can fire; numeric/decimal/date/datetime/boolean elements |
+| `arrays_overlap(a, b)` | `arrays_overlap(...)` with a NULL-element guard | guard preserves Trino NULL semantics exactly |
+| `array_position(a, x) <op> n` | `array_position(...)` comparisons | all six comparison operators, either orientation |
+| `NOT` / `AND` / `OR` | composed remote predicates | over value-identical operands (e.g. `array_position` comparisons) |
+| `LIMIT n` | `LIMIT n` | |
+| `ORDER BY ... LIMIT n` (TopN) | `ORDER BY ... NULLS FIRST/LAST LIMIT n` | non-text sort keys; all four NULL orderings render natively |
+
+Deliberately **not** pushed (kept in Trino to guarantee correct results):
+
+- String comparisons, `LIKE`, and string TopN — Doris collation differs from Trino; only
+  `IS [NOT] NULL` is pushed for string columns.
+- `FLOAT`/`DOUBLE` equality — approximate types.
+- Anything whose Doris semantics differ from Trino's (e.g. `element_at`, `length`): unknown or
+  unproven expressions always stay in Trino. Partially-pushable filters are split — the safe
+  conjuncts go remote, the rest are evaluated in Trino.
+
+### Type mapping
+
+| Doris | Trino |
 |---|---|
-| **P0** | Protocol/type probe, ARRAY wire-decoder spike (GO-with-restrictions), stock-MySQL baseline, StarRocks connector audit, plugin-assembly proof, type & capability ledger |
-| **P1a** | Base JDBC plugin, `information_schema`-driven metadata, ledger-exact scalar type mapping, streaming + cancellation, LIMIT pushdown |
-| **P1b** | Read-only defense in depth: `ReadOnlyDorisClient` (76-signature reflection audit), connector access control, airtight `system.execute` denial, `trino_ro` SELECT-only fixture account, query-id remote tagging + audit-log proofs, server-side `query_timeout`, live cancellation |
-| **P2a** | Native `ARRAY(T)` via a strict, fail-loud wire decoder over an unambiguous element allowlist (incl. nesting); string arrays kept non-native (proven byte-identical ambiguity) |
-| **P2b** | Index-aware ARRAY predicate pushdown — `contains` / `arrays_overlap` (NULL-strip guarded) / `array_position` typed rules with live-proven NULL truth tables; bare-truthy rendering that keeps the Doris inverted index eligible (profile-proven) |
-| **P3 slice** | Safe non-text TopN (native `NULLS FIRST/LAST`, `>65535` exactness proven), value-safe `NOT`/`AND`/`OR` composition restricted to value-identical operands (3VL truth tables pinned live), and dynamic `CREATE`/`DROP CATALOG` parity with validation-at-create semantics |
+| BOOLEAN, TINYINT, SMALLINT, INT, BIGINT | same |
+| LARGEINT | DECIMAL(38,0) — out-of-range values fail loudly, never truncate |
+| FLOAT / DOUBLE | REAL / DOUBLE |
+| DECIMAL(p≤38, s) | DECIMAL(p, s) |
+| DECIMAL(p>38, s) | VARCHAR (exact textual value) |
+| DATE, DATETIME(0–6) | DATE, TIMESTAMP(0–6) |
+| CHAR / VARCHAR / STRING | CHAR / VARCHAR |
+| JSON, VARIANT | JSON |
+| IPV4 / IPV6 | IPADDRESS |
+| ARRAY&lt;T&gt; (numeric, decimal, boolean, date, datetime, IP — nesting supported) | ARRAY(T) |
+| ARRAY of string types | not exposed natively (Doris's array wire text is ambiguous for strings; exposed as text with `unsupported-type-handling=CONVERT_TO_VARCHAR`) |
+| MAP / STRUCT | text with `unsupported-type-handling=CONVERT_TO_VARCHAR`, otherwise hidden |
+| BITMAP / HLL / AGG_STATE | hidden (opaque engine state) |
 
-Key capabilities:
+### Read-only
 
-- **Native `ARRAY` support** with a strict wire decoder (fail-loud on ambiguity, exact precision).
-- **Index-eligible pushdown** of `contains` / `arrays_overlap` / `array_position` — rendered so
-  the Doris inverted index still fires (the naive `= 1` wrapper defeats it; proven via profile
-  counters, `dev-docs/evidence/inverted-index-explain-p2b.md`).
-- **Defense-in-depth read-only**: a forwarding client guard, connector access control, and
-  `system.execute` denial — the connector fails loud rather than ever mutating Doris.
-- **Dynamic catalogs**: `CREATE CATALOG` / `DROP CATALOG` with loud config validation at create
-  and lazy reachability at first use.
+The connector is read-only end to end: `INSERT`, `DELETE`, `UPDATE`, `MERGE`, `TRUNCATE`,
+`CREATE`/`ALTER`/`DROP`, comments, property changes, and the JDBC `system.execute` procedure
+are all denied inside the connector — nothing mutating is ever sent to Doris. We also recommend
+connecting with a SELECT-only Doris account (see below) so the database enforces the same
+guarantee independently.
 
-Two decisions are explicitly **parked** (see `dev-docs/STATUS-2026-07-19.md`): the brikk-house
-metadata artifact release that would let pushdown rules carry a pinned evidence citation (rules
-today carry `PENDING RELEASE` citations backed by this repo's own live proofs), and multi-FE
-failover (only the comma-list URL syntax is proven; a ≥3-FE cluster is needed to prove routing).
+## Building
 
-## Quickstart
-
-Prerequisites: a JDK 25 toolchain (via [mise](https://mise.jdx.dev)) and Docker.
+Prerequisites: JDK 25 (via [mise](https://mise.jdx.dev)) and Docker (for the live test cluster).
 
 ```bash
-# 1. JDK 25 (mise reads ./mise.toml)
-mise install
-
-# 2. Bring up the live stock Apache Doris 4.1.3 cluster the live tests target
-#    (FE MySQL on host 127.0.0.1:9130, HTTP on 8130, user root / no password).
-./compose/up.sh
-
-# 3. Build: compile + detekt + 124 tests + plugin assembly + assembly verification
-./gradlew build
+mise install        # JDK 25, from ./mise.toml
+./compose/up.sh     # local Doris 4.1.3 cluster the tests run against
+                    # (FE MySQL on 127.0.0.1:9130, HTTP on 8130, root / no password)
+./gradlew build     # compile + lint + full test suite + plugin assembly + assembly verification
 ```
 
-The live test suites connect to the running compose cluster and **fail loud** if it is down.
-Tear the cluster down with `./compose/up.sh --down`.
+Tear the test cluster down with `./compose/up.sh --down`.
 
-## Plugin installation
+## Installing into Trino
 
-The build assembles a Trino plugin directory (a directory of jars — **not** a shaded fat jar,
-which is how Trino loads plugins):
+The build assembles a standard Trino plugin directory (a directory of jars):
 
 ```bash
-./gradlew pluginAssemble        # -> build/trino-plugin/trino-doris-<version>/
-./gradlew verifyPluginAssembly  # asserts no engine-provided/parent-first SPI jars leaked in,
-                                # base-jdbc + Connector/J are bundled, exactly one guice jar
-```
-
-Copy the assembled directory into your Trino installation's plugin directory and restart the
-coordinator/workers:
-
-```bash
+./gradlew pluginAssemble    # -> build/trino-plugin/trino-doris-<version>/
 cp -r build/trino-plugin/trino-doris-<version> "$TRINO_HOME/plugin/"
 ```
 
-## Catalog configuration
+Restart the coordinator and workers after copying.
 
-Static catalog — `etc/catalog/doris.properties`:
+## Configuring a catalog
+
+### Static catalog
+
+`etc/catalog/doris.properties`:
 
 ```properties
 connector.name=doris
@@ -91,8 +116,10 @@ connection-user=trino_ro
 connection-password=***
 ```
 
-Dynamic catalog at runtime (config is validated at `CREATE` time; reachability is checked lazily
-on first use):
+### Dynamic catalog
+
+With [dynamic catalog management](https://trino.io/docs/current/admin/properties-catalog.html)
+enabled (`catalog.management=dynamic`):
 
 ```sql
 CREATE CATALOG doris USING doris
@@ -101,38 +128,22 @@ WITH (
   "connection-user" = 'trino_ro',
   "connection-password" = '***'
 );
-
--- ... query ...
-
-DROP CATALOG doris;
 ```
 
-## Documentation & evidence
+Configuration is validated at `CREATE CATALOG` time (a malformed URL fails the statement);
+host reachability is checked lazily on first use. `DROP CATALOG doris;` removes it.
 
-Every capability in this connector is backed by a live-verified evidence report. Start here:
+### Recommended: a SELECT-only Doris account
 
-- `dev-docs/STATUS-2026-07-19.md` — state-of-the-connector summary and the parked decisions.
-- `dev-docs/LEDGER-p0-type-and-capability.md` — authoritative type & capability ledger.
-- `dev-docs/PLAN-trino-doris-extension.md` — the founding plan (copied from the origin monorepo).
-- `dev-docs/NOTES-p*-implementation.md` — per-phase implementation notes.
-- `dev-docs/evidence/` — raw probe output, the ARRAY wire-decoder spike, and the inverted-index
-  EXPLAIN/profile proof.
+```sql
+CREATE USER 'trino_ro' IDENTIFIED BY '***';
+GRANT SELECT_PRIV ON *.* TO 'trino_ro';
+```
 
-## Build tooling
+## Development
 
-The build is **Gradle** (9.4.1, Kotlin DSL), inherited from the origin monorepo and trimmed to a
-single-module layout. Gradle was retained deliberately: the connector's build needs a Trino BOM
-`platform()` import, `runtimeClasspath` exclusions to keep parent-first SPI jars out of the plugin
-directory, and a custom plugin-assembly verification task — none of which are expressible in the
-Kotlin Toolchain (`0.11`) build model we considered. Revisit if that changes.
-
-## Provenance
-
-This connector was extracted, **with its git history preserved**, from the brikk monorepo
-(`jvm/trino-doris`) via `git subtree split`. The scaffolding (Gradle wrapper, `build-logic`
-convention plugins, version catalog) was adapted from the same monorepo's `jvm/` conventions. The
-founding plan (`dev-docs/PLAN-trino-doris-extension.md`) travels with the repo so it no longer
-depends on the monorepo for its founding document.
+Design notes, live-probe evidence reports, and the capability ledger behind every mapping and
+pushdown decision live in [`dev-docs/`](./dev-docs).
 
 ## License
 
