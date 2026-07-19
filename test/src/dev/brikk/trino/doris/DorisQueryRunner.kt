@@ -69,6 +69,9 @@ object DorisQueryRunner {
 
         @Throws(Exception::class)
         override fun build(): DistributedQueryRunner {
+            // every live suite comes through here: guarantee the base fixtures exist even on
+            // a completely fresh cluster (CI). Idempotent + JVM-once, so dev runs stay fast.
+            DorisFixtures.ensureBaseFixtures()
             val queryRunner: DistributedQueryRunner = super.build()
             try {
                 queryRunner.installPlugin(DorisPlugin())

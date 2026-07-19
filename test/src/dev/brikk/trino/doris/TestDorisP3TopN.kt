@@ -118,6 +118,8 @@ class TestDorisP3TopN : AbstractTestQueryFramework() {
 
     companion object {
         private fun provisionFixture() {
+            DorisFixtures.ensureBaseFixtures() // the >65535 TopN proof reads p0_probe.nums
+
             DorisTestCluster.executeAsRoot(
                 "DROP DATABASE IF EXISTS p3_topn",
                 "CREATE DATABASE p3_topn",

@@ -190,6 +190,8 @@ class TestDorisCancellation : AbstractTestQueryFramework() {
 
         /** Persistent fixture (cheap to build, ~1.5s): recreated only when missing/short. */
         private fun provisionBigFixture() {
+            DorisFixtures.ensureBaseFixtures() // p1_cancel.big is derived from p0_probe.nums
+
             val existing = runCatching { DorisTestCluster.queryScalar("SELECT COUNT(*) FROM p1_cancel.big")?.toLong() }
                 .getOrNull()
             if (existing == BIG_ROWS) {

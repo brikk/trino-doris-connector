@@ -75,6 +75,8 @@ class TestDorisP2bInvertedIndexEvidence : AbstractTestQueryFramework() {
         private const val EVENT_ROWS = 1_001_000L
 
         private fun provisionIndexFixture() {
+            DorisFixtures.ensureBaseFixtures() // the index fixture is derived from p0_probe.nums
+
             val existing = runCatching { DorisTestCluster.queryScalar("SELECT COUNT(*) FROM p2b_index.events")?.toLong() }
                 .getOrNull()
             if (existing == EVENT_ROWS) {

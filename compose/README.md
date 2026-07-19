@@ -54,9 +54,15 @@ Proven on 4.1.3: `SELECT`/`SHOW` work; `INSERT`/`DELETE`/`UPDATE` fail with
 
 ## Fixture databases
 
-`p0_probe` / `p0_array_spike` / `p0_*` are P0 evidence fixtures — never mutated by tests.
-The P1 suites own and recreate `p1_smoke`, `p1_readonly`, `p1_ro_smoke`, and `p1_cancel`
-(`p1_cancel.big` is ~500 MB on the wire but near-zero on disk; kept across runs).
+`p0_probe` is provisioned AUTOMATICALLY by the test harness (`DorisFixtures`, wired into
+every query-runner build): a fresh cluster gets the full byte-exact replica of the original
+P0 evidence fixtures (scalars/arrays/mapstruct/opaque/scalars_view + the 1M-row `nums`,
+seeded in ~250ms via the `numbers()` TVF) on first suite run; complete fixtures are detected
+by row-count fingerprint and skipped. Tests never mutate it. The suites own and recreate
+`p1_smoke`, `p1_readonly`, `p1_ro_smoke`, `p1_cancel` (`p1_cancel.big` is ~500 MB on the
+wire but near-zero on disk), `p2_*`, `p3_*`, `p4_*`, and `p5_batch`. **No manual fixture
+step exists anymore** — `./up.sh` + `./gradlew build` from zero is the supported path (this
+is what CI does).
 
 ## Lessons baked in
 
