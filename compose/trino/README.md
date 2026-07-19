@@ -33,6 +33,24 @@ Trino HTTP + CLI: **http://localhost:18080** (host `18080` → container `8080`)
 docker exec -it trino-doris-manual trino
 ```
 
+Or connect **externally** — the sandbox publishes plain HTTP on host port `18080` with
+**no authentication configured** (no authenticator at all, not merely a blank password):
+
+- CLI: `trino --server http://<host>:18080 --user whoever`
+- Web UI: `http://<host>:18080` (any username)
+- **JDBC** (DBeaver/DataGrip/code): use `sessionUser` in the URL and do **not** fill in
+  user/password fields:
+
+  ```
+  jdbc:trino://<host>:18080?sessionUser=trino
+  ```
+
+  Driver trap (verified 2026-07-19): supplying credentials via the `user`/`password`
+  properties — which most GUI tools do, sending an empty password — engages the Trino
+  JDBC driver's authentication path, and that path **hard-requires SSL** regardless of
+  the password being empty. `sessionUser=` sets your identity without touching the
+  credential path, which is the only shape that works against a no-auth server.
+
 ```sql
 -- YOUR OWN external Doris server (host.docker.internal reaches a Doris on THIS
 -- machine; use a LAN IP for another host). Give Trino a SELECT-only account first:
