@@ -5,12 +5,16 @@ assertj = "3.27.3"
 trino = "483"
 mysql = "9.7.0"
 detekt = "2.0.0-alpha.3"
+# brikk-sql-metadata: the featherweight embeddable hazard registry — a sanctioned PRODUCTION
+# dependency (PLAN G3); first non-SNAPSHOT release, pinned. sha256 asserted in the drift suite.
+brikk-sql-metadata = "0.7.0"
 
 [libraries]
 kotlin-bom = { module = "org.jetbrains.kotlin:kotlin-bom", version.ref = "kotlin" }
 
 trino-bom = { module = "io.trino:trino-root", version.ref = "trino" }
 mysql-jdbc = { module = "com.mysql:mysql-connector-j", version.ref = "mysql" }
+brikk-sql-metadata = { module = "dev.brikk.house:brikk-sql-metadata-jvm", version.ref = "brikk-sql-metadata" }
 
 junit-bom = { module = "org.junit:junit-bom", version.ref = "junit" }
 junit-jupiter-api = { module = "org.junit.jupiter:junit-jupiter-api" }

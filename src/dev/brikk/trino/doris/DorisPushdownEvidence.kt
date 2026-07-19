@@ -13,93 +13,174 @@
  */
 package dev.brikk.trino.doris
 
+import dev.brikk.house.sql.metadata.FunctionHazard
+import dev.brikk.house.sql.metadata.HazardRegistry
+import dev.brikk.house.sql.metadata.HazardVerdict
+import io.trino.spi.StandardErrorCode.GENERIC_INTERNAL_ERROR
+import io.trino.spi.TrinoException
+
 /**
- * Evidence bridge for every pushdown rule (PLAN §6.3 contract, G3 verdict-gating).
+ * Evidence bridge for every pushdown rule (PLAN §6.3 contract, G3 verdict-gating), backed by
+ * the RELEASED `dev.brikk.house:brikk-sql-metadata-jvm:0.7.0` hazard registry (the P2 exit
+ * criterion "mapping API released and pinned" is CLOSED — 0.7.0 carries the
+ * direction-oriented `sourceName`/`targetName` fields this connector requested).
  *
- * The brikk `brikk-sql-metadata` artifact is UNRELEASED and PARKED pending user approval
- * (ledger §F; BRIKK audit) — so the hazard evidence is carried here as CITATIONS (per the
- * agreed boundary: comments referencing the audit reports, never copied brikk data files).
- * When the brikk pin lands, each entry gains the artifact coordinates + registry key without
- * reworking the rules: the rule classes reference these constants and nothing else changes.
+ * Trust model: the tuples pinned HERE are the source of truth the connector was proven
+ * against; [HazardRegistry] is CROSS-CHECKED against them at connector construction
+ * ([verifyAgainstRegistry], invoked from [DorisClientModule]) and again by the drift suite
+ * (`TestDorisPushdownEvidenceDrift`, which also pins the artifact version + jar sha256).
+ * A silently-changed future brikk artifact therefore cannot alter connector behavior — it
+ * can only FAIL LOUD (catalog creation refuses; the build's drift suite goes red).
  *
- * Every rule is additionally backed by connector-owned LIVE proof (this repo's P2b probes and
- * `TestDorisP2bPushdown` truth-table pins) — brikk supplies evidence, the connector owns the
- * exact typed rendering (PLAN §6.3: "No function is pushed merely because it appears in both
- * function catalogs").
+ * Every rule remains additionally backed by connector-owned LIVE proof (truth-table pins and
+ * differentials) — brikk supplies evidence, the connector owns the exact typed rendering
+ * (PLAN §6.3: "No function is pushed merely because it appears in both function catalogs").
  */
 internal object DorisPushdownEvidence {
+    /** G3 gating category — how a verdict must be treated by the implementing rule. */
+    internal enum class Treatment {
+        /** IDENTICAL: direct typed rule. */
+        DIRECT,
+
+        /** CONDITIONALLY_EQUIVALENT: rule must carry an explicit guard/wrapper ([Evidence.guard]). */
+        GUARDED_WRAPPER,
+
+        /** DIVERGENT: connector-original rewrite, requires a dedicated live test ([Evidence.liveProof]). */
+        CONNECTOR_ORIGINAL_REWRITE,
+    }
+
     internal data class Evidence(
-        /** Trino source function name (hazard-JSON `trino` field, cited). */
+        /** Trino source shape (documentation). */
         val trinoFunction: String,
-        /** Doris target rendering (hazard-JSON `doris` field is name-level; the connector owns the shape). */
+        /** Registry lookup key == hazard-JSON `trino` field. */
+        val registrySource: String,
+        /** Pinned registry `targetName` (hazard-JSON `doris` field). */
+        val expectedTarget: String,
+        /** Pinned registry verdict. */
+        val expectedVerdict: HazardVerdict,
+        /** Pinned registry provenance string. */
+        val expectedProvenance: String,
+        /** What the rule actually renders (must contain [expectedTarget]). */
         val dorisRendering: String,
-        /** Verdict per PLAN G3 gating (IDENTICAL / CONDITIONALLY_EQUIVALENT / DIVERGENT-with-explicit-rewrite). */
-        val verdict: String,
-        /** One-line hazard summary. */
+        /** G3 treatment implementing the verdict. */
+        val treatment: Treatment,
+        /** For GUARDED_WRAPPER: the exact guard fragment present in the rendering. */
+        val guard: String? = null,
+        /** Connector-owned one-line hazard summary. */
         val hazard: String,
-        /** Where the evidence lives. */
-        val provenance: String,
-        val brikkArtifactPin: String = "PENDING RELEASE (ledger §F: no released brikk-sql-metadata artifact exists; approval parked)",
+        /** The live proof (test class) backing the rule's safety argument. */
+        val liveProof: String,
     )
 
+    const val ARTIFACT_PIN = "dev.brikk.house:brikk-sql-metadata-jvm:0.7.0"
+    const val ARTIFACT_SHA256 = "693575c17a041a0370b44a233969350f95d27c9bb47b14ebbbd1c80d2d3b1de8"
+
+    private const val DIFFERENTIAL_PROBE_PROVENANCE = "REPORT-doris-differential-probe-2026-07-13.md#batch7-array"
+
     /**
-     * PLAN §6.2 row 1: "contains(array, value) -> array_contains(array, value) = 1 —
-     * connector-original name/boolean-shape rewrite; brikk supplies the divergent-hazard
-     * evidence. Prove NULL and element coercion." The live P2b truth table (2026-07-19,
-     * Doris 4.1.3) proves: for a NON-NULL needle the only value divergence is
-     * not-found-with-NULL-elements (Trino NULL vs Doris 0) — indistinguishable in top-level
-     * WHERE-conjunct context, the ONLY context this connector emits (no NOT/IS NULL/boolean
-     * composition rules exist). The `= 1` wrapper from the PLAN shape is deliberately DROPPED:
-     * profile evidence shows it defeats Doris inverted-index acceleration
-     * (`RowsInvertedIndexFiltered: 0` wrapped vs `997.997K` bare — see
-     * evidence/inverted-index-explain-p2b.md), and bare tinyint truthiness is
-     * predicate-equivalent.
+     * `contains` does not exist in Doris; the DIVERGENT verdict is exactly why this is a
+     * connector-original rewrite per G3. Rendered BARE (no `= 1` wrapper): profile-proven to
+     * be the only form Doris accelerates with an ARRAY inverted index
+     * (`evidence/inverted-index-explain-p2b.md`), and predicate-equivalent because this
+     * connector emits it exclusively as a top-level WHERE conjunct (no composition rules for
+     * predicate-level rewrites — enforced structurally).
      */
     val CONTAINS = Evidence(
         trinoFunction = "contains(array(T), T)",
+        registrySource = "contains",
+        expectedTarget = "array_contains",
+        expectedVerdict = HazardVerdict.DIVERGENT,
+        expectedProvenance = DIFFERENTIAL_PROBE_PROVENANCE,
         dorisRendering = "(array_contains(`col`, ?))  -- bare truthy form, predicate context only",
-        verdict = "DIVERGENT (name + boolean shape) -> explicit connector rewrite per PLAN G3, live-proven",
-        hazard = "Doris returns 0 where Trino returns NULL for not-found-in-array-with-NULL-elements; " +
-            "equivalent only as a top-level WHERE conjunct (NULL and false both drop the row)",
-        provenance = "PLAN §6.2 (brikk trino-doris-hazards.json cited therein, 216 pairs at P0 pin); " +
-            "live truth table + profile probes 2026-07-19 vs Doris 4.1.3 (TestDorisP2bPushdown pins)",
+        treatment = Treatment.CONNECTOR_ORIGINAL_REWRITE,
+        hazard = "Doris has no 'contains'; array_contains returns 0 where Trino returns NULL for " +
+            "not-found-in-array-with-NULL-elements — equivalent only as a top-level WHERE conjunct",
+        liveProof = "TestDorisP2bPushdown",
     )
 
     /**
-     * PLAN §6.2 row 2: "arrays_overlap -> arrays_overlap(...) = 1 — connector-original
-     * predicate normalization over brikk's conditional value-equivalence evidence." Live P2b
-     * truth table found the condition the brikk verdict warned about: Doris `arrays_overlap`
-     * treats NULL elements as EQUAL (`[1,null] × [null,4]` -> 1) where Trino returns NULL —
-     * a pushed bare rendering would OVER-RETURN (silently wrong). The guard wrapper
-     * `array_filter(x -> x IS NOT NULL, left)` strips one side's NULLs (Doris never matches
-     * NULL to a value, proven), restoring exact predicate-level equivalence on all 8 probed
-     * shapes. This is the G3 CONDITIONALLY_EQUIVALENT path: "requires a connector rule with
-     * explicit guards or wrappers".
+     * The CONDITIONALLY_EQUIVALENT condition found live: Doris `arrays_overlap` treats NULL
+     * elements as EQUAL (`[1,null] × [null,4]` -> 1) where Trino returns NULL — unguarded
+     * pushdown would OVER-RETURN. The mandatory guard strips one side's NULLs (Doris never
+     * matches NULL to a value), restoring exact predicate-level equivalence on all probed
+     * shapes — G3's "requires a connector rule with explicit guards or wrappers".
      */
     val ARRAYS_OVERLAP = Evidence(
         trinoFunction = "arrays_overlap(array(T), array(T))",
+        registrySource = "arrays_overlap",
+        expectedTarget = "arrays_overlap",
+        expectedVerdict = HazardVerdict.CONDITIONALLY_EQUIVALENT,
+        expectedProvenance = DIFFERENTIAL_PROBE_PROVENANCE,
         dorisRendering = "(arrays_overlap(array_filter(x -> x IS NOT NULL, `left`), `right`))",
-        verdict = "CONDITIONALLY_EQUIVALENT -> guarded wrapper per PLAN G3, live-proven",
+        treatment = Treatment.GUARDED_WRAPPER,
+        guard = "array_filter(x -> x IS NOT NULL",
         hazard = "Doris matches NULL elements to each other (returns 1) where Trino returns NULL -> " +
             "unguarded pushdown OVER-RETURNS; fixed by stripping NULL elements from one side",
-        provenance = "PLAN §6.2; live truth table probes 2026-07-19 vs Doris 4.1.3 " +
-            "(both_null_elems: bare=1 vs fixed=0; TestDorisP2bPushdown pins)",
+        liveProof = "TestDorisP2bPushdown",
     )
 
     /**
-     * PLAN §6.2 row 3: "array_position(array, value) in comparison — proven 1-based and
-     * zero-if-absent; typed comparisons only." Live P2b truth table proves FULL value-level
-     * equivalence for non-NULL needles: 1-based first occurrence (NULL elements counted
-     * identically), 0 if absent (even with NULL elements present — both engines), NULL if the
-     * array is NULL. Identical values make EVERY comparison operator exactly equivalent, so
-     * all six operators are pushed with a non-NULL integer bound.
+     * IDENTICAL at value level for non-NULL needles (1-based, 0-if-absent, NULL-array
+     * propagation all match — live truth-table pins), so every comparison operator is exactly
+     * safe, and NOT/AND/OR composition over these comparisons is safe too (Doris 3VL proven
+     * cell-identical, `TestDorisP3Composition`).
      */
     val ARRAY_POSITION = Evidence(
         trinoFunction = "array_position(array(T), T) <cmp> bigint-literal",
+        registrySource = "array_position",
+        expectedTarget = "array_position",
+        expectedVerdict = HazardVerdict.IDENTICAL,
+        expectedProvenance = DIFFERENTIAL_PROBE_PROVENANCE,
         dorisRendering = "(array_position(`col`, ?) <cmp> n)",
-        verdict = "IDENTICAL (value-level, non-NULL needle) -> typed comparison rule per PLAN G3, live-proven",
-        hazard = "none observed for non-NULL needles: 1-based/0-if-absent/NULL-array-propagation all match " +
-            "(NULL needles are never pushed; Trino=NULL vs Doris=1 for NULL-needle-with-NULL-element)",
-        provenance = "PLAN §6.2; live truth table probes 2026-07-19 vs Doris 4.1.3 (TestDorisP2bPushdown pins)",
+        treatment = Treatment.DIRECT,
+        hazard = "none observed for non-NULL needles (NULL needles are never pushed: " +
+            "Trino=NULL vs Doris=1 for NULL-needle-with-NULL-element)",
+        liveProof = "TestDorisP2bPushdown",
     )
+
+    /** Every rule the connector registers — one Evidence entry per pushdown rule, no more, no fewer. */
+    val ALL: List<Evidence> = listOf(CONTAINS, ARRAYS_OVERLAP, ARRAY_POSITION)
+
+    /**
+     * Fail-loud registry cross-check, run at connector construction (from
+     * [DorisClientModule.setup]): refuses to construct the connector when the registry entry
+     * is missing or any pinned field drifted. Behavior can never silently follow the
+     * artifact — the pins here win or nothing runs.
+     */
+    fun verifyAgainstRegistry() {
+        ALL.forEach(::verify)
+    }
+
+    internal fun verify(evidence: Evidence) {
+        val entry = HazardRegistry.lookup("trino", "doris", evidence.registrySource)
+            ?: fail(evidence, "no trino->doris registry entry")
+        if (entry.verdict != evidence.expectedVerdict) {
+            fail(evidence, "verdict drifted: registry=${entry.verdict}, pinned=${evidence.expectedVerdict}")
+        }
+        if (entry.sourceName != evidence.registrySource) {
+            fail(evidence, "sourceName drifted: registry=${entry.sourceName}, pinned=${evidence.registrySource}")
+        }
+        if (entry.targetName != evidence.expectedTarget) {
+            fail(evidence, "targetName drifted: registry=${entry.targetName}, pinned=${evidence.expectedTarget}")
+        }
+        if (entry.provenance != evidence.expectedProvenance) {
+            fail(evidence, "provenance drifted: registry=${entry.provenance}, pinned=${evidence.expectedProvenance}")
+        }
+        // structural self-check: the rule's rendering really uses the pinned target function
+        if (!evidence.dorisRendering.contains(evidence.expectedTarget)) {
+            fail(evidence, "rendering '${evidence.dorisRendering}' does not use pinned target '${evidence.expectedTarget}'")
+        }
+    }
+
+    internal fun lookup(registrySource: String): FunctionHazard? =
+        HazardRegistry.lookup("trino", "doris", registrySource)
+
+    private fun fail(evidence: Evidence, reason: String): Nothing {
+        throw TrinoException(
+            GENERIC_INTERNAL_ERROR,
+            "Pushdown evidence drift for '${evidence.registrySource}' against $ARTIFACT_PIN: $reason. " +
+                "Refusing to construct the Doris connector — re-verify the rule against live Doris " +
+                "and re-pin (PLAN G3/§6.3).",
+        )
+    }
 }

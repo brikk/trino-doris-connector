@@ -5,6 +5,20 @@ branch `trino-doris`).
 **To:** the agent working in `brikk-house`.
 **Date:** 2026-07-19.
 
+> ## FULFILLED — 2026-07-19, `brikk-sql-metadata-jvm:0.7.0` on Maven Central
+> brikk shipped the request with one improvement over the letter of this document: the
+> registry became DIRECTION-ORIENTED — `sourceName`/`targetName` are populated per lookup
+> direction (a `trino->doris` lookup carries the Trino name as source and the probed Doris
+> name as target), which is strictly better for our drift pins than the raw JSON field
+> passthrough requested below. `HazardRegistry.lookup` is unchanged, as requested. Verified
+> entries used by this connector: contains->array_contains [DIVERGENT],
+> arrays_overlap->arrays_overlap [CONDITIONALLY_EQUIVALENT],
+> array_position->array_position [IDENTICAL] (plus regexp_like->regexp and
+> json_extract_scalar->json_unquote for future rules). Artifact pinned + sha256-asserted in
+> `TestDorisPushdownEvidenceDrift`; connector-construction cross-check in
+> `DorisPushdownEvidence.verifyAgainstRegistry()`. This document is retained as the
+> historical request.
+
 This is the complete request. Nothing beyond what is written here is wanted.
 
 ## What we consume

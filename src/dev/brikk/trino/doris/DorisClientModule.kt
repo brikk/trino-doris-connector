@@ -50,6 +50,13 @@ import java.util.Properties
  */
 class DorisClientModule : AbstractConfigurationAwareModule() {
     override fun setup(binder: Binder) {
+        // G3/§6.3 evidence gate: cross-check every pushdown rule's pinned evidence tuple
+        // against the released brikk hazard registry BEFORE anything is bound. Any drift
+        // (missing entry, changed verdict/target/provenance) refuses to construct the
+        // connector — catalog creation and server startup fail loud, never silently follow
+        // a changed artifact.
+        DorisPushdownEvidence.verifyAgainstRegistry()
+
         // G7 defense in depth, layer 2: the Base JDBC client stack sits BEHIND the read-only
         // guard — every JdbcClient consumer (metadata, page source, procedures) reaches
         // DorisClient only through ReadOnlyDorisClient.
