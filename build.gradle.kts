@@ -10,7 +10,7 @@ plugins {
 // -Pversion=<derived-from-branch> (e.g. release-483-2 -> 483-2). A plain Gradle script
 // assignment would clobber the -P property (proven: it runs after Gradle applies project
 // properties), so honor an explicit -Pversion when present and fall back to the dev default.
-version = (findProperty("version") as? String)?.takeIf { it != "unspecified" } ?: "483-1-ALPHA"
+version = (findProperty("version") as? String)?.takeIf { it != "unspecified" } ?: "483-0.2.0-SNAPSHOT"
 
 // Idiomatic-Kotlin quality gate, same setup as trino-ducklake.
 detekt {
