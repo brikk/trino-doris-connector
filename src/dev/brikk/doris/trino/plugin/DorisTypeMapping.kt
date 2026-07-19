@@ -22,6 +22,7 @@ import io.trino.plugin.jdbc.ColumnMapping
 import io.trino.plugin.jdbc.JdbcTypeHandle
 import io.trino.plugin.jdbc.LongReadFunction
 import io.trino.plugin.jdbc.ObjectReadFunction
+import io.trino.plugin.jdbc.ObjectWriteFunction
 import io.trino.plugin.jdbc.PredicatePushdownController
 import io.trino.plugin.jdbc.PredicatePushdownController.DISABLE_PUSHDOWN
 import io.trino.plugin.jdbc.PredicatePushdownController.DomainPushdownResult
@@ -45,10 +46,13 @@ import io.trino.plugin.jdbc.StandardColumnMappings.varcharWriteFunction
 import io.trino.plugin.jdbc.TypeHandlingJdbcSessionProperties.getUnsupportedTypeHandling
 import io.trino.plugin.jdbc.UnsupportedTypeHandling.CONVERT_TO_VARCHAR
 import io.trino.spi.StandardErrorCode.GENERIC_INTERNAL_ERROR
+import io.trino.spi.StandardErrorCode.NOT_SUPPORTED
 import io.trino.spi.StandardErrorCode.NUMERIC_VALUE_OUT_OF_RANGE
 import io.trino.spi.TrinoException
+import io.trino.spi.block.Block
 import io.trino.spi.connector.ConnectorSession
 import io.trino.spi.predicate.Domain
+import io.trino.spi.type.ArrayType
 import io.trino.spi.type.CharType.createCharType
 import io.trino.spi.type.DateType.DATE
 import io.trino.spi.type.DecimalType.createDecimalType
@@ -56,6 +60,7 @@ import io.trino.spi.type.DoubleType.DOUBLE
 import io.trino.spi.type.Int128
 import io.trino.spi.type.RealType.REAL
 import io.trino.spi.type.StandardTypes
+import io.trino.spi.type.TimestampType
 import io.trino.spi.type.TimestampType.createTimestampType
 import io.trino.spi.type.Type
 import io.trino.spi.type.TypeDescriptor
@@ -113,6 +118,36 @@ internal class DorisTypeMapping(typeManager: TypeManager) {
         put("variant") { _ -> Optional.of(jsonMapping()) }
         put("ipv4") { _ -> Optional.of(ipAddressMapping()) }
         put("ipv6") { _ -> Optional.of(ipAddressMapping()) }
+        put("array") { parsed -> arrayColumnMapping(parsed) }
+    }
+
+    /**
+     * The ARRAY element allowlist (ledger §A "ARRAY element allowlist verdict"; spike §1/§4):
+     * a resolver returning null means the element type is DENIED — string-family leaves are
+     * provably ambiguous on the wire (zero escaping, spike F4), JSON is not creatable (F5),
+     * MAP/STRUCT/VARIANT are separate wire work, and DECIMAL(>38) exceeds Trino's ceiling.
+     * A nested array whose (possibly deep) leaf is denied inherits the denial (spike §7.3).
+     */
+    private val arrayElementResolvers: Map<String, (DorisColumnType) -> DorisArrayElement?> = buildMap {
+        put("boolean") { _ -> DorisArrayElement.BooleanElement }
+        put("tinyint") { parsed ->
+            if (parsed.arguments == listOf(1)) DorisArrayElement.BooleanElement else DorisArrayElement.TinyintElement
+        }
+        put("smallint") { _ -> DorisArrayElement.SmallintElement }
+        put("int") { _ -> DorisArrayElement.IntegerElement }
+        put("bigint") { _ -> DorisArrayElement.BigintElement }
+        put("largeint") { _ -> DorisArrayElement.LargeintElement }
+        put("float") { _ -> DorisArrayElement.RealElement }
+        put("double") { _ -> DorisArrayElement.DoubleElement }
+        put("decimal") { parsed -> decimalArrayElement(parsed) }
+        put("decimalv3") { parsed -> decimalArrayElement(parsed) }
+        put("date") { _ -> DorisArrayElement.DateElement }
+        put("datetime") { parsed -> DorisArrayElement.TimestampElement(timestampType(parsed)) }
+        put("ipv4") { _ -> DorisArrayElement.IpAddressElement(ipAddressType) }
+        put("ipv6") { _ -> DorisArrayElement.IpAddressElement(ipAddressType) }
+        put("array") { parsed ->
+            resolveArrayElement(arrayElementColumnType(parsed.raw))?.let { DorisArrayElement.NestedArrayElement(it) }
+        }
     }
 
     /**
@@ -120,22 +155,62 @@ internal class DorisTypeMapping(typeManager: TypeManager) {
      * is not exposed (unsupported-type policy: column hidden).
      *
      * `unsupported-type-handling=CONVERT_TO_VARCHAR` is honored exactly where the ledger
-     * permits a VARCHAR-of-wire-text policy: ARRAY (ledger §A "unsupported column, or
-     * VARCHAR-of-whole-array-text") and MAP/STRUCT ("unsupported or VARCHAR-of-text"). The
+     * permits a VARCHAR-of-wire-text policy: denied-leaf ARRAY (ledger §A "unsupported column,
+     * or VARCHAR-of-whole-array-text") and MAP/STRUCT ("unsupported or VARCHAR-of-text"). The
      * wire text of all three is a proven server-rendered grammar (PROBE §"wire-format").
-     * Opaque engine states (BITMAP/HLL/QUANTILE_STATE/AGG_STATE) stay hidden under EVERY
-     * policy — their "text" is NULL or raw state bytes, never meaningful (PROBE Impl #9).
+     * Allowlisted ARRAY element types map NATIVELY regardless of the policy. Opaque engine
+     * states (BITMAP/HLL/QUANTILE_STATE/AGG_STATE) stay hidden under EVERY policy — their
+     * "text" is NULL or raw state bytes, never meaningful (PROBE Impl #9).
      */
     fun toColumnMapping(session: ConnectorSession, columnType: String): Optional<ColumnMapping> {
         val parsed = DorisColumnType.parse(columnType)
-        val mapper = mappers[parsed.baseName]
-        if (mapper != null) {
-            return mapper(parsed)
+        val mapping = mappers[parsed.baseName]?.invoke(parsed) ?: Optional.empty()
+        if (mapping.isPresent) {
+            return mapping
         }
         if (parsed.baseName in TEXT_SAFE_COMPLEX_TYPES && getUnsupportedTypeHandling(session) == CONVERT_TO_VARCHAR) {
             return Optional.of(unboundedVarcharTextMapping())
         }
         return Optional.empty()
+    }
+
+    /**
+     * Native `ARRAY<T>` for the allowlist: `getString()` wire text -> strict
+     * [DorisArrayWireDecoder] -> Trino elements Block (PostgreSqlClient Block-construction
+     * pattern only — Connector/J implements no `java.sql.Array` for Doris, spike §6).
+     * No ARRAY predicate pushdown in P2a (typed `contains`/`arrays_overlap` rules are P2b).
+     */
+    private fun arrayColumnMapping(parsed: DorisColumnType): Optional<ColumnMapping> {
+        val element = resolveArrayElement(arrayElementColumnType(parsed.raw)) ?: return Optional.empty()
+        return Optional.of(
+            ColumnMapping.objectMapping(
+                ArrayType(element.trinoType),
+                ObjectReadFunction.of(Block::class.java) { resultSet, columnIndex ->
+                    val wire = resultSet.getString(columnIndex)
+                        ?: throw TrinoException(GENERIC_INTERNAL_ERROR, "ARRAY read function called on a NULL array value")
+                    DorisArrayWireDecoder.elementsBlock(element, DorisArrayWireDecoder.decode(wire, element))
+                },
+                readOnlyArrayWriteFunction(),
+                DISABLE_PUSHDOWN,
+            ),
+        )
+    }
+
+    internal fun resolveArrayElement(columnType: String): DorisArrayElement? {
+        val parsed = DorisColumnType.parse(columnType)
+        return arrayElementResolvers[parsed.baseName]?.invoke(parsed)
+    }
+
+    private fun decimalArrayElement(parsed: DorisColumnType): DorisArrayElement? {
+        if (parsed.arguments.size != 2) {
+            throw TrinoException(GENERIC_INTERNAL_ERROR, "Unexpected Doris decimal COLUMN_TYPE: '${parsed.raw}'")
+        }
+        val (precision, scale) = parsed.arguments
+        if (precision > MAX_TRINO_DECIMAL_PRECISION) {
+            // Decimal256 array elements exceed Trino's DECIMAL ceiling -> denied leaf.
+            return null
+        }
+        return DorisArrayElement.DecimalElement(createDecimalType(precision, scale))
     }
 
     /**
@@ -343,12 +418,16 @@ internal class DorisTypeMapping(typeManager: TypeManager) {
          * zone and throws `YEAR` on `0000-*` (PROBE §3/§6, Impl #5; ledger §A "DATETIME
          * read-via-LocalDateTime rule"). Max proven precision is 6 (microseconds).
          */
-        private fun dorisTimestampColumnMapping(parsed: DorisColumnType): ColumnMapping {
+        internal fun timestampType(parsed: DorisColumnType): TimestampType {
             val precision = parsed.arguments.firstOrNull() ?: 0
             if (precision !in 0..DORIS_MAX_DATETIME_PRECISION) {
                 throw TrinoException(GENERIC_INTERNAL_ERROR, "Unsupported Doris DATETIME precision (max proven is 6): '${parsed.raw}'")
             }
-            val timestampType = createTimestampType(precision)
+            return createTimestampType(precision)
+        }
+
+        private fun dorisTimestampColumnMapping(parsed: DorisColumnType): ColumnMapping {
+            val timestampType = timestampType(parsed)
             return ColumnMapping.longMapping(
                 timestampType,
                 object : LongReadFunction {
@@ -365,8 +444,11 @@ internal class DorisTypeMapping(typeManager: TypeManager) {
             )
         }
 
-        private fun readIpAddress(resultSet: ResultSet, columnIndex: Int): Slice {
-            val text = resultSet.getString(columnIndex)
+        private fun readIpAddress(resultSet: ResultSet, columnIndex: Int): Slice =
+            ipAddressSlice(resultSet.getString(columnIndex))
+
+        /** Canonical Doris IPV4/IPV6 text -> Trino IPADDRESS slice; unparseable text fails loud. */
+        internal fun ipAddressSlice(text: String): Slice {
             val address = try {
                 InetAddresses.forString(text)
             } catch (e: IllegalArgumentException) {
@@ -374,6 +456,25 @@ internal class DorisTypeMapping(typeManager: TypeManager) {
             }
             return wrappedBuffer(*toTrinoIpAddressBytes(address))
         }
+
+        /**
+         * Extracts the element COLUMN_TYPE from an `array<...>` COLUMN_TYPE string, nesting-
+         * aware (`array<array<int(11)>>` -> `array<int(11)>`); malformed text fails loud.
+         */
+        internal fun arrayElementColumnType(raw: String): String {
+            val trimmed = raw.trim()
+            val open = trimmed.indexOf('<')
+            if (open <= 0 || !trimmed.endsWith(">") || open >= trimmed.length - 1) {
+                throw TrinoException(GENERIC_INTERNAL_ERROR, "Malformed Doris ARRAY COLUMN_TYPE: '$raw'")
+            }
+            return trimmed.substring(open + 1, trimmed.length - 1)
+        }
+
+        /** Read-only connector: array values are never written or bound as parameters (pushdown disabled). */
+        private fun readOnlyArrayWriteFunction(): ObjectWriteFunction =
+            ObjectWriteFunction.of(Block::class.java) { _, _, _ ->
+                throw TrinoException(NOT_SUPPORTED, "The Doris connector is read-only and does not allow any mutating operation")
+            }
 
         /** Trino IPADDRESS representation: 16 bytes, IPv4 as IPv4-mapped IPv6 (::ffff:a.b.c.d). */
         private fun toTrinoIpAddressBytes(address: InetAddress): ByteArray {

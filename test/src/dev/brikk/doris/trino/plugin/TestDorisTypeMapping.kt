@@ -18,6 +18,7 @@ import io.trino.plugin.jdbc.TypeHandlingJdbcSessionProperties
 import io.trino.plugin.jdbc.UnsupportedTypeHandling
 import io.trino.spi.TrinoException
 import io.trino.spi.connector.ConnectorSession
+import io.trino.spi.type.ArrayType
 import io.trino.spi.type.BigintType.BIGINT
 import io.trino.spi.type.BooleanType.BOOLEAN
 import io.trino.spi.type.CharType.createCharType
@@ -25,7 +26,9 @@ import io.trino.spi.type.DateType.DATE
 import io.trino.spi.type.DecimalType.createDecimalType
 import io.trino.spi.type.DoubleType.DOUBLE
 import io.trino.spi.type.Int128
+import io.trino.spi.type.IntegerType.INTEGER
 import io.trino.spi.type.RealType.REAL
+import io.trino.spi.type.SmallintType.SMALLINT
 import io.trino.spi.type.TimestampType.createTimestampType
 import io.trino.spi.type.TinyintType.TINYINT
 import io.trino.spi.type.Type
@@ -108,11 +111,38 @@ class TestDorisTypeMapping {
     }
 
     @Test
+    fun testArrayAllowlistMapsNatively() {
+        // Ledger §A "ARRAY element allowlist verdict" (GO-WITH-RESTRICTIONS).
+        assertMappedTo("array<tinyint(1)>", ArrayType(BOOLEAN)) // Doris ARRAY<BOOLEAN>
+        assertMappedTo("array<tinyint(4)>", ArrayType(TINYINT))
+        assertMappedTo("array<smallint(6)>", ArrayType(SMALLINT))
+        assertMappedTo("array<int(11)>", ArrayType(INTEGER))
+        assertMappedTo("array<bigint(20)>", ArrayType(BIGINT))
+        assertMappedTo("array<largeint>", ArrayType(createDecimalType(38, 0)))
+        assertMappedTo("array<decimalv3(9, 2)>", ArrayType(createDecimalType(9, 2)))
+        assertMappedTo("array<decimalv3(38, 10)>", ArrayType(createDecimalType(38, 10)))
+        assertMappedTo("array<float>", ArrayType(REAL))
+        assertMappedTo("array<double>", ArrayType(DOUBLE))
+        assertMappedTo("array<date>", ArrayType(DATE))
+        assertMappedTo("array<datetime(6)>", ArrayType(createTimestampType(6)))
+        assertMappedTo("array<datetime>", ArrayType(createTimestampType(0)))
+        assertThat(mapping.toColumnMapping(session, "array<ipv4>").orElseThrow().type.toString()).isEqualTo("array(ipaddress)")
+        assertThat(mapping.toColumnMapping(session, "array<ipv6>").orElseThrow().type.toString()).isEqualTo("array(ipaddress)")
+        // nesting of allowlisted leaves (>=3 levels proven, spike F2)
+        assertMappedTo("array<array<int(11)>>", ArrayType(ArrayType(INTEGER)))
+        assertMappedTo("array<array<array<largeint>>>", ArrayType(ArrayType(ArrayType(createDecimalType(38, 0)))))
+    }
+
+    @Test
     fun testUnsupportedTypesAreHidden() {
-        // ARRAY comes in P2; MAP/STRUCT deferred; opaque engine states hidden (ledger §A).
+        // String-family ARRAY leaves are a hard NO-GO (unescaped wire text is provably
+        // ambiguous, spike F4); MAP/STRUCT deferred; opaque engine states hidden (ledger §A).
         for (columnType in listOf(
-            "array<int(11)>",
             "array<varchar(50)>",
+            "array<char(10)>",
+            "array<string>",
+            "array<decimalv3(76, 10)>",
+            "array<array<varchar(50)>>", // denied leaf inherits the denial (spike §7.3)
             "map<string,int(11)>",
             "struct<int(11),string>",
             "bitmap",
@@ -121,19 +151,22 @@ class TestDorisTypeMapping {
             "agg_state",
             "unknown",
         )) {
-            assertThat(mapping.toColumnMapping(session, columnType)).isEmpty()
+            assertThat(mapping.toColumnMapping(session, columnType)).describedAs(columnType).isEmpty()
         }
     }
 
     @Test
     fun testConvertToVarcharExposesTextSafeComplexTypesOnly() {
-        // Ledger §A permits VARCHAR-of-wire-text for ARRAY/MAP/STRUCT; opaque engine states
-        // stay hidden under EVERY policy (their "text" is NULL or raw state bytes).
-        for (columnType in listOf("array<int(11)>", "array<varchar(50)>", "map<string,int(11)>", "struct<int(11),string>")) {
+        // Ledger §A permits VARCHAR-of-wire-text for denied-leaf ARRAY and MAP/STRUCT; opaque
+        // engine states stay hidden under EVERY policy (their "text" is NULL or raw state bytes).
+        for (columnType in listOf("array<varchar(50)>", "array<string>", "map<string,int(11)>", "struct<int(11),string>")) {
             val columnMapping = mapping.toColumnMapping(convertToVarcharSession, columnType)
             assertThat(columnMapping).describedAs(columnType).isPresent
             assertThat(columnMapping.orElseThrow().type).describedAs(columnType).isEqualTo(createUnboundedVarcharType())
         }
+        // allowlisted ARRAY elements stay NATIVE regardless of the policy
+        assertThat(mapping.toColumnMapping(convertToVarcharSession, "array<int(11)>").orElseThrow().type)
+            .isEqualTo(ArrayType(INTEGER))
         for (columnType in listOf("bitmap", "hll", "quantile_state", "agg_state", "unknown")) {
             assertThat(mapping.toColumnMapping(convertToVarcharSession, columnType)).describedAs(columnType).isEmpty()
         }

@@ -88,9 +88,15 @@ class TestDorisP1aSmoke : AbstractTestQueryFramework() {
 
     @Test
     fun testUnsupportedColumnsAreHiddenNotErroring() {
-        // arrays: every ARRAY column hidden until P2; mapstruct: MAP/STRUCT deferred;
-        // opaque: BITMAP/HLL/AGG_STATE are opaque engine states (ledger §A).
-        assertThat(describedColumnNames("doris.p0_probe.arrays")).isEqualTo(setOf<Any>("id"))
+        // arrays (P2a): allowlisted element types are native; string-family leaves are hidden
+        // (unescaped wire text is provably ambiguous — spike F4). mapstruct: MAP/STRUCT
+        // deferred; opaque: BITMAP/HLL/AGG_STATE are opaque engine states (ledger §A).
+        assertThat(describedColumnNames("doris.p0_probe.arrays")).isEqualTo(
+            setOf<Any>(
+                "id", "a_int", "a_bigint", "a_largeint", "a_float", "a_double",
+                "a_dec9_2", "a_date", "a_dt6", "a_boolean", "a_array_int",
+            ),
+        )
         assertThat(describedColumnNames("doris.p0_probe.mapstruct")).isEqualTo(setOf<Any>("id"))
         assertThat(describedColumnNames("doris.p0_probe.opaque")).isEqualTo(setOf<Any>("id"))
         // ... and scanning such a table still works on the visible columns.
@@ -100,16 +106,18 @@ class TestDorisP1aSmoke : AbstractTestQueryFramework() {
     @Test
     fun testConvertToVarcharExposesComplexWireTextButNeverOpaqueStates() {
         // unsupported-type-handling=CONVERT_TO_VARCHAR is honored exactly where the ledger
-        // permits VARCHAR-of-wire-text (ARRAY/MAP/STRUCT); opaque engine states stay hidden.
+        // permits VARCHAR-of-wire-text (denied-leaf ARRAY, MAP/STRUCT); allowlisted arrays
+        // stay NATIVE; opaque engine states stay hidden.
         val session: Session = Session.builder(getSession())
             .setCatalogSessionProperty(DorisQueryRunner.CATALOG, "unsupported_type_handling", "CONVERT_TO_VARCHAR")
             .build()
         val arrayColumns = computeActual(session, "DESCRIBE doris.p0_probe.arrays").materializedRows
             .associate { it.getField(0) as String to it.getField(1) as String }
-        assertThat(arrayColumns["a_int"]).isEqualTo("varchar")
+        assertThat(arrayColumns["a_int"]).isEqualTo("array(integer)") // allowlisted: native even under the policy
         assertThat(arrayColumns["a_varchar50"]).isEqualTo("varchar")
-        assertThat(computeActual(session, "SELECT a_int FROM doris.p0_probe.arrays WHERE id = 1").onlyValue)
-            .isEqualTo("[1, 2, 3]")
+        assertThat(arrayColumns["a_string"]).isEqualTo("varchar")
+        assertThat(computeActual(session, "SELECT a_varchar50 FROM doris.p0_probe.arrays WHERE id = 1").onlyValue)
+            .isEqualTo("""["a", "b", "c"]""")
         assertThat(computeActual(session, "SELECT m_si FROM doris.p0_probe.mapstruct WHERE id = 1").rowCount).isEqualTo(1)
         // BITMAP/HLL/AGG_STATE remain hidden under every policy (ledger §A; PROBE Impl #9).
         assertThat(computeActual(session, "DESCRIBE doris.p0_probe.opaque").materializedRows.map { it.getField(0) })
