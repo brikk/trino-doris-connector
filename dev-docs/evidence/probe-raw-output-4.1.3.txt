@@ -1,0 +1,655 @@
+=== Doris 4.1.3 P0 protocol/type probe ===
+Connector/J: 9.7.0
+JVM: 21.0.2 / Oracle Corporation
+[setup] unicode edge rows inserted.
+DB product: MySQL 5.7.99
+Driver: MySQL Connector/J mysql-connector-j-9.7.0 (Revision: 0aade1f13bcc98faf7dda5c02e782481eb291f62)
+SELECT VERSION(): 5.7.99
+
+########## SECTION 1: DatabaseMetaData.getColumns (TYPE_NAME, DATA_TYPE, COLUMN_SIZE, DECIMAL_DIGITS, IS_NULLABLE) ##########
+
+----- table scalars -----
+COLUMN           TYPE_NAME                    DATA_TYPE  COLUMN_SIZE DECIMAL_DIGITS IS_NULLABLE
+id               INT                          4(INTEGER) 10          null          YES        
+c_boolean        BOOLEAN                      16(BOOLEAN) 3           null          YES        
+c_tinyint        TINYINT                      -6(TINYINT) 3           null          YES        
+c_smallint       SMALLINT                     5(SMALLINT) 5           null          YES        
+c_int            INT                          4(INTEGER) 10          null          YES        
+c_bigint         BIGINT                       -5(BIGINT) 19          null          YES        
+c_largeint       INT                          4(INTEGER) 10          null          YES        
+c_float          FLOAT                        7(REAL)    12          0             YES        
+c_double         DOUBLE                       8(DOUBLE)  22          0             YES        
+c_dec9_2         DECIMAL                      3(DECIMAL) 9           2             YES        
+c_dec38_10       DECIMAL                      3(DECIMAL) 38          10            YES        
+c_dec76_10       DECIMAL                      3(DECIMAL) 76          10            YES        
+c_date           DATE                         91(DATE)   10          null          YES        
+c_dt0            DATETIME                     93(TIMESTAMP) 19          null          YES        
+c_dt3            DATETIME                     93(TIMESTAMP) 23          null          YES        
+c_dt6            DATETIME                     93(TIMESTAMP) 26          null          YES        
+c_char10         CHAR                         1(CHAR)    10          null          YES        
+c_varchar100     VARCHAR                      12(VARCHAR) 100         null          YES        
+c_string         TEXT                         -1(LONGVARCHAR) 65535       null          YES        
+c_json           JSON                         -1(LONGVARCHAR) 1073741824  null          YES        
+c_ipv4           UNKNOWN                      1111(OTHER) 65535       null          YES        
+c_ipv6           UNKNOWN                      1111(OTHER) 65535       null          YES        
+c_variant        UNKNOWN                      1111(OTHER) 65535       null          YES        
+
+----- table arrays -----
+COLUMN           TYPE_NAME                    DATA_TYPE  COLUMN_SIZE DECIMAL_DIGITS IS_NULLABLE
+id               INT                          4(INTEGER) 10          null          YES        
+a_int            INT                          4(INTEGER) 10          null          YES        
+a_bigint         BIGINT                       -5(BIGINT) 19          null          YES        
+a_largeint       INT                          4(INTEGER) 10          null          YES        
+a_float          FLOAT                        7(REAL)    12          0             YES        
+a_double         DOUBLE                       8(DOUBLE)  22          0             YES        
+a_dec9_2         DECIMAL                      3(DECIMAL) 9           2             YES        
+a_date           DATE                         91(DATE)   10          null          YES        
+a_dt6            DATETIME                     93(TIMESTAMP) 26          null          YES        
+a_boolean        BOOLEAN                      16(BOOLEAN) 3           null          YES        
+a_varchar50      VARCHAR                      12(VARCHAR) 50          null          YES        
+a_string         TEXT                         -1(LONGVARCHAR) 65535       null          YES        
+a_array_int      INT                          4(INTEGER) 10          null          YES        
+
+----- table mapstruct -----
+COLUMN           TYPE_NAME                    DATA_TYPE  COLUMN_SIZE DECIMAL_DIGITS IS_NULLABLE
+id               INT                          4(INTEGER) 10          null          YES        
+m_si             INT                          4(INTEGER) 10          null          YES        
+s_ab             INT                          4(INTEGER) 10          null          YES        
+
+----- table opaque -----
+COLUMN           TYPE_NAME                    DATA_TYPE  COLUMN_SIZE DECIMAL_DIGITS IS_NULLABLE
+id               INT                          4(INTEGER) 10          null          YES        
+bm_col           BIT                          -7(BIT)    1           null          NO         
+hll_col          UNKNOWN                      1111(OTHER) 65535       null          NO         
+aggst_col        UNKNOWN                      1111(OTHER) 65535       null          NO         
+
+----- table nums -----
+COLUMN           TYPE_NAME                    DATA_TYPE  COLUMN_SIZE DECIMAL_DIGITS IS_NULLABLE
+n                BIGINT                       -5(BIGINT) 19          null          YES        
+
+########## SECTION 2+3: ResultSetMetaData + getObject/getString per column, all edge rows ##########
+
+----- RSMD for scalars -----
+COLUMN           getColumnTypeName      type       getColumnClassName                       prec      scale  signed  
+id               INT                    4(INTEGER) java.lang.Integer                        10        0      true    
+c_boolean        TINYINT                -6(TINYINT) java.lang.Integer                        3         0      true    
+c_tinyint        TINYINT                -6(TINYINT) java.lang.Integer                        3         0      true    
+c_smallint       SMALLINT               5(SMALLINT) java.lang.Integer                        5         0      true    
+c_int            INT                    4(INTEGER) java.lang.Integer                        10        0      true    
+c_bigint         BIGINT                 -5(BIGINT) java.lang.Long                           19        0      true    
+c_largeint       CHAR                   1(CHAR)    java.lang.String                         85        0      false   
+c_float          FLOAT                  7(REAL)    java.lang.Float                          12        0      true    
+c_double         DOUBLE                 8(DOUBLE)  java.lang.Double                         22        0      true    
+c_dec9_2         DECIMAL                3(DECIMAL) java.math.BigDecimal                     9         2      true    
+c_dec38_10       DECIMAL                3(DECIMAL) java.math.BigDecimal                     38        10     true    
+c_dec76_10       DECIMAL                3(DECIMAL) java.math.BigDecimal                     76        10     true    
+c_date           DATE                   91(DATE)   java.sql.Date                            3         0      false   
+c_dt0            DATETIME               93(TIMESTAMP) java.time.LocalDateTime                  6         0      false   
+c_dt3            DATETIME               93(TIMESTAMP) java.time.LocalDateTime                  6         0      false   
+c_dt6            DATETIME               93(TIMESTAMP) java.time.LocalDateTime                  6         0      false   
+c_char10         CHAR                   1(CHAR)    java.lang.String                         85        0      false   
+c_varchar100     CHAR                   1(CHAR)    java.lang.String                         85        0      false   
+c_string         TINYTEXT               12(VARCHAR) java.lang.String                         85        0      false   
+c_json           JSON                   -1(LONGVARCHAR) java.lang.String                         85        0      false   
+c_ipv4           CHAR                   1(CHAR)    java.lang.String                         85        0      false   
+c_ipv6           CHAR                   1(CHAR)    java.lang.String                         85        0      false   
+c_variant        JSON                   -1(LONGVARCHAR) java.lang.String                         85        0      false   
+
+----- getObject / getString per row for scalars -----
+>>> scalars row id=1
+   id             getObject[java.lang.Integer]=1 | getString="1"  [len=1, utf8bytes=1]
+   c_boolean      getObject[java.lang.Integer]=1 | getString="1"  [len=1, utf8bytes=1]
+   c_tinyint      getObject[java.lang.Integer]=42 | getString="42"  [len=2, utf8bytes=2]
+   c_smallint     getObject[java.lang.Integer]=1234 | getString="1234"  [len=4, utf8bytes=4]
+   c_int          getObject[java.lang.Integer]=100000 | getString="100000"  [len=6, utf8bytes=6]
+   c_bigint       getObject[java.lang.Long]=9000000000000000000 | getString="9000000000000000000"  [len=19, utf8bytes=19]
+   c_largeint     getObject[java.lang.String]=170141183460469231731687303715884105727 | getString="170141183460469231731687303715884105727"  [len=39, utf8bytes=39]
+   c_float        getObject[java.lang.Float]=3.14 | getString="3.14"  [len=4, utf8bytes=4]
+   c_double       getObject[java.lang.Double]=2.718281828459045 | getString="2.718281828459045"  [len=17, utf8bytes=17]
+   c_dec9_2       getObject[java.math.BigDecimal]=1234567.89 | getString="1234567.89"  [len=10, utf8bytes=10]
+   c_dec38_10     getObject[java.math.BigDecimal]=12345678901234567890.1234567890 | getString="12345678901234567890.1234567890"  [len=31, utf8bytes=31]
+   c_dec76_10     getObject[java.math.BigDecimal]=123456789012345678901234567890.1234567890 | getString="123456789012345678901234567890.1234567890"  [len=41, utf8bytes=41]
+   c_date         getObject[java.sql.Date]=2021-06-15 | getString="2021-06-15"  [len=10, utf8bytes=10]
+   c_dt0          getObject[java.time.LocalDateTime]=2021-06-15T12:34:56 | getString="2021-06-15 12:34:56"  [len=19, utf8bytes=19]
+   c_dt3          getObject[java.time.LocalDateTime]=2021-06-15T12:34:56.789 | getString="2021-06-15 12:34:56.789"  [len=23, utf8bytes=23]
+   c_dt6          getObject[java.time.LocalDateTime]=2021-06-15T12:34:56.789012 | getString="2021-06-15 12:34:56.789012"  [len=26, utf8bytes=26]
+   c_char10       getObject[java.lang.String]=char10 | getString="char10"  [len=6, utf8bytes=6]
+   c_varchar100   getObject[java.lang.String]=a normal varchar | getString="a normal varchar"  [len=16, utf8bytes=16]
+   c_string       getObject[java.lang.String]=a normal string | getString="a normal string"  [len=15, utf8bytes=15]
+   c_json         getObject[java.lang.String]={"k":"v","n":42,"arr":[1,2,3]} | getString="{\"k\":\"v\",\"n\":42,\"arr\":[1,2,3]}"  [len=30, utf8bytes=30]
+   c_ipv4         getObject[java.lang.String]=192.168.1.1 | getString="192.168.1.1"  [len=11, utf8bytes=11]
+   c_ipv6         getObject[java.lang.String]=2001:db8::ff00:42:8329 | getString="2001:db8::ff00:42:8329"  [len=22, utf8bytes=22]
+   c_variant      getObject[java.lang.String]={"vk":"vv","vn":7} | getString="{\"vk\":\"vv\",\"vn\":7}"  [len=18, utf8bytes=18]
+   [natural getters] getLong(c_bigint)=9000000000000000000 getBigDecimal(c_largeint)=170141183460469231731687303715884105727 getBigDecimal(c_dec38_10)=12345678901234567890.1234567890 getBigDecimal(c_dec76_10)=123456789012345678901234567890.1234567890 getTimestamp(c_dt6)=2021-06-15 12:34:56.789012 getObject(c_dt6,LocalDateTime)=2021-06-15T12:34:56.789012 getDate(c_date)=2021-06-15 getBoolean(c_boolean)=true
+>>> scalars row id=2
+   id             getObject[java.lang.Integer]=2 | getString="2"  [len=1, utf8bytes=1]
+   c_boolean      getObject[java.lang.Integer]=0 | getString="0"  [len=1, utf8bytes=1]
+   c_tinyint      getObject[java.lang.Integer]=-128 | getString="-128"  [len=4, utf8bytes=4]
+   c_smallint     getObject[java.lang.Integer]=-32768 | getString="-32768"  [len=6, utf8bytes=6]
+   c_int          getObject[java.lang.Integer]=-2147483648 | getString="-2147483648"  [len=11, utf8bytes=11]
+   c_bigint       getObject[java.lang.Long]=-9223372036854775808 | getString="-9223372036854775808"  [len=20, utf8bytes=20]
+   c_largeint     getObject[java.lang.String]=-170141183460469231731687303715884105727 | getString="-170141183460469231731687303715884105727"  [len=40, utf8bytes=40]
+   c_float        getObject[java.lang.Float]=-3.402823E38 | getString="-3.402823E38"  [len=12, utf8bytes=12]
+   c_double       getObject[ERR]=ERR(SQLDataException: Value '-∞' is outside of valid range for type java.lang.Double) | getString="-Infinity"  [len=9, utf8bytes=9]
+   c_dec9_2       getObject[java.math.BigDecimal]=-9999999.99 | getString="-9999999.99"  [len=11, utf8bytes=11]
+   c_dec38_10     getObject[java.math.BigDecimal]=-9999999999999999999999999999.9999999999 | getString="-9999999999999999999999999999.9999999999"  [len=40, utf8bytes=40]
+   c_dec76_10     getObject[java.math.BigDecimal]=-99999999999999999999999999999999999999999999999999999999999999999.9999999999 | getString="-99999999999999999999999999999999999999999999999999999999999999999.9999999999"  [len=77, utf8bytes=77]
+   c_date         getObject[ERR]=ERR(SQLException: YEAR) | getString="0000-01-01"  [len=10, utf8bytes=10]
+   c_dt0          getObject[java.time.LocalDateTime]=0000-01-01T00:00 | getString="0000-01-01 00:00:00"  [len=19, utf8bytes=19]
+   c_dt3          getObject[java.time.LocalDateTime]=0000-01-01T00:00 | getString="0000-01-01 00:00:00"  [len=19, utf8bytes=19]
+   c_dt6          getObject[java.time.LocalDateTime]=0000-01-01T00:00 | getString="0000-01-01 00:00:00"  [len=19, utf8bytes=19]
+   c_char10       getObject[java.lang.String]= | getString=""  [len=0, utf8bytes=0]
+   c_varchar100   getObject[java.lang.String]= | getString=""  [len=0, utf8bytes=0]
+   c_string       getObject[java.lang.String]= | getString=""  [len=0, utf8bytes=0]
+   c_json         getObject[java.lang.String]=null | getString="null"  [len=4, utf8bytes=4]
+   c_ipv4         getObject[java.lang.String]=0.0.0.0 | getString="0.0.0.0"  [len=7, utf8bytes=7]
+   c_ipv6         getObject[java.lang.String]=:: | getString="::"  [len=2, utf8bytes=2]
+   c_variant      getObject[java.lang.String]={} | getString="{}"  [len=2, utf8bytes=2]
+   [natural getters] getLong(c_bigint)=-9223372036854775808 getBigDecimal(c_largeint)=ERR(SQLDataException:Invalid integer format for value '-170141183460469231731687303715884105727') getBigDecimal(c_dec38_10)=-9999999999999999999999999999.9999999999 getBigDecimal(c_dec76_10)=-99999999999999999999999999999999999999999999999999999999999999999.9999999999 getTimestamp(c_dt6)=ERR(SQLException:YEAR) getObject(c_dt6,LocalDateTime)=0000-01-01T00:00 getDate(c_date)=ERR(SQLException:YEAR) getBoolean(c_boolean)=false
+>>> scalars row id=3
+   id             getObject[java.lang.Integer]=3 | getString="3"  [len=1, utf8bytes=1]
+   c_boolean      getObject[java.lang.Integer]=1 | getString="1"  [len=1, utf8bytes=1]
+   c_tinyint      getObject[java.lang.Integer]=127 | getString="127"  [len=3, utf8bytes=3]
+   c_smallint     getObject[java.lang.Integer]=32767 | getString="32767"  [len=5, utf8bytes=5]
+   c_int          getObject[java.lang.Integer]=2147483647 | getString="2147483647"  [len=10, utf8bytes=10]
+   c_bigint       getObject[java.lang.Long]=9223372036854775807 | getString="9223372036854775807"  [len=19, utf8bytes=19]
+   c_largeint     getObject[java.lang.String]=170141183460469231731687303715884105727 | getString="170141183460469231731687303715884105727"  [len=39, utf8bytes=39]
+   c_float        getObject[java.lang.Float]=3.402823E38 | getString="3.402823E38"  [len=11, utf8bytes=11]
+   c_double       getObject[ERR]=ERR(SQLDataException: Value '∞' is outside of valid range for type java.lang.Double) | getString="Infinity"  [len=8, utf8bytes=8]
+   c_dec9_2       getObject[java.math.BigDecimal]=9999999.99 | getString="9999999.99"  [len=10, utf8bytes=10]
+   c_dec38_10     getObject[java.math.BigDecimal]=9999999999999999999999999999.9999999999 | getString="9999999999999999999999999999.9999999999"  [len=39, utf8bytes=39]
+   c_dec76_10     getObject[java.math.BigDecimal]=99999999999999999999999999999999999999999999999999999999999999999.9999999999 | getString="99999999999999999999999999999999999999999999999999999999999999999.9999999999"  [len=76, utf8bytes=76]
+   c_date         getObject[java.sql.Date]=9999-12-31 | getString="9999-12-31"  [len=10, utf8bytes=10]
+   c_dt0          getObject[java.time.LocalDateTime]=9999-12-31T23:59:59 | getString="9999-12-31 23:59:59"  [len=19, utf8bytes=19]
+   c_dt3          getObject[java.time.LocalDateTime]=9999-12-31T23:59:59.999 | getString="9999-12-31 23:59:59.999"  [len=23, utf8bytes=23]
+   c_dt6          getObject[java.time.LocalDateTime]=9999-12-31T23:59:59.999999 | getString="9999-12-31 23:59:59.999999"  [len=26, utf8bytes=26]
+   c_char10       getObject[java.lang.String]=ABCDEFGHIJ | getString="ABCDEFGHIJ"  [len=10, utf8bytes=10]
+   c_varchar100   getObject[java.lang.String]=xyz | getString="xyz"  [len=3, utf8bytes=3]
+   c_string       getObject[java.lang.String]=zzz | getString="zzz"  [len=3, utf8bytes=3]
+   c_json         getObject[java.lang.String]=[1,2,3] | getString="[1,2,3]"  [len=7, utf8bytes=7]
+   c_ipv4         getObject[java.lang.String]=255.255.255.255 | getString="255.255.255.255"  [len=15, utf8bytes=15]
+   c_ipv6         getObject[java.lang.String]=ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff | getString="ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff"  [len=39, utf8bytes=39]
+   c_variant      getObject[java.lang.String]=[true,null,"x"] | getString="[true,null,\"x\"]"  [len=15, utf8bytes=15]
+   [natural getters] getLong(c_bigint)=9223372036854775807 getBigDecimal(c_largeint)=170141183460469231731687303715884105727 getBigDecimal(c_dec38_10)=9999999999999999999999999999.9999999999 getBigDecimal(c_dec76_10)=99999999999999999999999999999999999999999999999999999999999999999.9999999999 getTimestamp(c_dt6)=9999-12-31 23:59:59.999999 getObject(c_dt6,LocalDateTime)=9999-12-31T23:59:59.999999 getDate(c_date)=9999-12-31 getBoolean(c_boolean)=true
+>>> scalars row id=4
+   id             getObject[java.lang.Integer]=4 | getString="4"  [len=1, utf8bytes=1]
+   c_boolean      getObject[java.lang.Integer]=1 | getString="1"  [len=1, utf8bytes=1]
+   c_tinyint      getObject[java.lang.Integer]=0 | getString="0"  [len=1, utf8bytes=1]
+   c_smallint     getObject[-]=<null> | getString=<null>
+   c_int          getObject[java.lang.Integer]=0 | getString="0"  [len=1, utf8bytes=1]
+   c_bigint       getObject[-]=<null> | getString=<null>
+   c_largeint     getObject[-]=<null> | getString=<null>
+   c_float        getObject[-]=<null> | getString=<null>
+   c_double       getObject[-]=<null> | getString=<null>
+   c_dec9_2       getObject[-]=<null> | getString=<null>
+   c_dec38_10     getObject[-]=<null> | getString=<null>
+   c_dec76_10     getObject[-]=<null> | getString=<null>
+   c_date         getObject[java.sql.Date]=2000-02-29 | getString="2000-02-29"  [len=10, utf8bytes=10]
+   c_dt0          getObject[-]=<null> | getString=<null>
+   c_dt3          getObject[-]=<null> | getString=<null>
+   c_dt6          getObject[java.time.LocalDateTime]=2000-02-29T01:02:03.000001 | getString="2000-02-29 01:02:03.000001"  [len=26, utf8bytes=26]
+   c_char10       getObject[java.lang.String]=ab | getString="ab"  [len=2, utf8bytes=2]
+   c_varchar100   getObject[java.lang.String]=comma,'single'"double"[br]\bs | getString="comma,'single'\"double\"[br]\\bs"  [len=29, utf8bytes=29]
+   c_string       getObject[java.lang.String]=emoji 😀 CJK 中文 tab	tab nl
+nl | getString="emoji \ud83d\ude00 CJK \u4e2d\u6587 tab\ttab nl\nnl"  [len=29, utf8bytes=35]
+   c_json         getObject[java.lang.String]={"unicode":"中文 😀","q":"he said \"hi\"","path":"a\\b"} | getString="{\"unicode\":\"\u4e2d\u6587 \ud83d\ude00\",\"q\":\"he said \\\"hi\\\"\",\"path\":\"a\\\\b\"}"  [len=54, utf8bytes=60]
+   c_ipv4         getObject[java.lang.String]=10.0.0.255 | getString="10.0.0.255"  [len=10, utf8bytes=10]
+   c_ipv6         getObject[java.lang.String]=fe80::1 | getString="fe80::1"  [len=7, utf8bytes=7]
+   c_variant      getObject[java.lang.String]={"deep":{"a":[1,{"b":"中文"}]}} | getString="{\"deep\":{\"a\":[1,{\"b\":\"\u4e2d\u6587\"}]}}"  [len=29, utf8bytes=33]
+   [natural getters] getLong(c_bigint)=0 getBigDecimal(c_largeint)=null getBigDecimal(c_dec38_10)=null getBigDecimal(c_dec76_10)=null getTimestamp(c_dt6)=2000-02-29 01:02:03.000001 getObject(c_dt6,LocalDateTime)=2000-02-29T01:02:03.000001 getDate(c_date)=2000-02-29 getBoolean(c_boolean)=true
+>>> scalars row id=5
+   id             getObject[java.lang.Integer]=5 | getString="5"  [len=1, utf8bytes=1]
+   c_boolean      getObject[-]=<null> | getString=<null>
+   c_tinyint      getObject[-]=<null> | getString=<null>
+   c_smallint     getObject[-]=<null> | getString=<null>
+   c_int          getObject[-]=<null> | getString=<null>
+   c_bigint       getObject[-]=<null> | getString=<null>
+   c_largeint     getObject[-]=<null> | getString=<null>
+   c_float        getObject[-]=<null> | getString=<null>
+   c_double       getObject[-]=<null> | getString=<null>
+   c_dec9_2       getObject[-]=<null> | getString=<null>
+   c_dec38_10     getObject[-]=<null> | getString=<null>
+   c_dec76_10     getObject[-]=<null> | getString=<null>
+   c_date         getObject[-]=<null> | getString=<null>
+   c_dt0          getObject[-]=<null> | getString=<null>
+   c_dt3          getObject[-]=<null> | getString=<null>
+   c_dt6          getObject[-]=<null> | getString=<null>
+   c_char10       getObject[-]=<null> | getString=<null>
+   c_varchar100   getObject[-]=<null> | getString=<null>
+   c_string       getObject[-]=<null> | getString=<null>
+   c_json         getObject[-]=<null> | getString=<null>
+   c_ipv4         getObject[-]=<null> | getString=<null>
+   c_ipv6         getObject[-]=<null> | getString=<null>
+   c_variant      getObject[-]=<null> | getString=<null>
+   [natural getters] getLong(c_bigint)=0 getBigDecimal(c_largeint)=null getBigDecimal(c_dec38_10)=null getBigDecimal(c_dec76_10)=null getTimestamp(c_dt6)=null getObject(c_dt6,LocalDateTime)=null getDate(c_date)=null getBoolean(c_boolean)=false
+>>> scalars row id=6
+   id             getObject[java.lang.Integer]=6 | getString="6"  [len=1, utf8bytes=1]
+   c_boolean      getObject[-]=<null> | getString=<null>
+   c_tinyint      getObject[-]=<null> | getString=<null>
+   c_smallint     getObject[-]=<null> | getString=<null>
+   c_int          getObject[-]=<null> | getString=<null>
+   c_bigint       getObject[-]=<null> | getString=<null>
+   c_largeint     getObject[-]=<null> | getString=<null>
+   c_float        getObject[java.lang.Float]=NaN | getString="NaN"  [len=3, utf8bytes=3]
+   c_double       getObject[ERR]=ERR(SQLDataException: Value '∞' is outside of valid range for type java.lang.Double) | getString="Infinity"  [len=8, utf8bytes=8]
+   c_dec9_2       getObject[-]=<null> | getString=<null>
+   c_dec38_10     getObject[-]=<null> | getString=<null>
+   c_dec76_10     getObject[-]=<null> | getString=<null>
+   c_date         getObject[-]=<null> | getString=<null>
+   c_dt0          getObject[-]=<null> | getString=<null>
+   c_dt3          getObject[-]=<null> | getString=<null>
+   c_dt6          getObject[-]=<null> | getString=<null>
+   c_char10       getObject[-]=<null> | getString=<null>
+   c_varchar100   getObject[-]=<null> | getString=<null>
+   c_string       getObject[-]=<null> | getString=<null>
+   c_json         getObject[-]=<null> | getString=<null>
+   c_ipv4         getObject[-]=<null> | getString=<null>
+   c_ipv6         getObject[-]=<null> | getString=<null>
+   c_variant      getObject[-]=<null> | getString=<null>
+   [natural getters] getLong(c_bigint)=0 getBigDecimal(c_largeint)=null getBigDecimal(c_dec38_10)=null getBigDecimal(c_dec76_10)=null getTimestamp(c_dt6)=null getObject(c_dt6,LocalDateTime)=null getDate(c_date)=null getBoolean(c_boolean)=false
+>>> scalars row id=6
+   id             getObject[java.lang.Integer]=6 | getString="6"  [len=1, utf8bytes=1]
+   c_boolean      getObject[-]=<null> | getString=<null>
+   c_tinyint      getObject[-]=<null> | getString=<null>
+   c_smallint     getObject[-]=<null> | getString=<null>
+   c_int          getObject[-]=<null> | getString=<null>
+   c_bigint       getObject[-]=<null> | getString=<null>
+   c_largeint     getObject[-]=<null> | getString=<null>
+   c_float        getObject[java.lang.Float]=-0.0 | getString="-0.0"  [len=4, utf8bytes=4]
+   c_double       getObject[java.lang.Double]=-0.0 | getString="-0.0"  [len=4, utf8bytes=4]
+   c_dec9_2       getObject[-]=<null> | getString=<null>
+   c_dec38_10     getObject[-]=<null> | getString=<null>
+   c_dec76_10     getObject[-]=<null> | getString=<null>
+   c_date         getObject[-]=<null> | getString=<null>
+   c_dt0          getObject[-]=<null> | getString=<null>
+   c_dt3          getObject[-]=<null> | getString=<null>
+   c_dt6          getObject[-]=<null> | getString=<null>
+   c_char10       getObject[-]=<null> | getString=<null>
+   c_varchar100   getObject[-]=<null> | getString=<null>
+   c_string       getObject[-]=<null> | getString=<null>
+   c_json         getObject[-]=<null> | getString=<null>
+   c_ipv4         getObject[-]=<null> | getString=<null>
+   c_ipv6         getObject[-]=<null> | getString=<null>
+   c_variant      getObject[-]=<null> | getString=<null>
+   [natural getters] getLong(c_bigint)=0 getBigDecimal(c_largeint)=null getBigDecimal(c_dec38_10)=null getBigDecimal(c_dec76_10)=null getTimestamp(c_dt6)=null getObject(c_dt6,LocalDateTime)=null getDate(c_date)=null getBoolean(c_boolean)=false
+>>> scalars row id=6
+   id             getObject[java.lang.Integer]=6 | getString="6"  [len=1, utf8bytes=1]
+   c_boolean      getObject[-]=<null> | getString=<null>
+   c_tinyint      getObject[-]=<null> | getString=<null>
+   c_smallint     getObject[-]=<null> | getString=<null>
+   c_int          getObject[-]=<null> | getString=<null>
+   c_bigint       getObject[-]=<null> | getString=<null>
+   c_largeint     getObject[-]=<null> | getString=<null>
+   c_float        getObject[java.lang.Float]=-0.0 | getString="-0.0"  [len=4, utf8bytes=4]
+   c_double       getObject[java.lang.Double]=-0.0 | getString="-0.0"  [len=4, utf8bytes=4]
+   c_dec9_2       getObject[-]=<null> | getString=<null>
+   c_dec38_10     getObject[-]=<null> | getString=<null>
+   c_dec76_10     getObject[-]=<null> | getString=<null>
+   c_date         getObject[-]=<null> | getString=<null>
+   c_dt0          getObject[-]=<null> | getString=<null>
+   c_dt3          getObject[-]=<null> | getString=<null>
+   c_dt6          getObject[-]=<null> | getString=<null>
+   c_char10       getObject[-]=<null> | getString=<null>
+   c_varchar100   getObject[-]=<null> | getString=<null>
+   c_string       getObject[-]=<null> | getString=<null>
+   c_json         getObject[-]=<null> | getString=<null>
+   c_ipv4         getObject[-]=<null> | getString=<null>
+   c_ipv6         getObject[-]=<null> | getString=<null>
+   c_variant      getObject[-]=<null> | getString=<null>
+   [natural getters] getLong(c_bigint)=0 getBigDecimal(c_largeint)=null getBigDecimal(c_dec38_10)=null getBigDecimal(c_dec76_10)=null getTimestamp(c_dt6)=null getObject(c_dt6,LocalDateTime)=null getDate(c_date)=null getBoolean(c_boolean)=false
+
+----- RSMD for arrays -----
+COLUMN           getColumnTypeName      type       getColumnClassName                       prec      scale  signed  
+id               INT                    4(INTEGER) java.lang.Integer                        10        0      true    
+a_int            CHAR                   1(CHAR)    java.lang.String                         85        0      false   
+a_bigint         CHAR                   1(CHAR)    java.lang.String                         85        0      false   
+a_largeint       CHAR                   1(CHAR)    java.lang.String                         85        0      false   
+a_float          CHAR                   1(CHAR)    java.lang.String                         85        0      false   
+a_double         CHAR                   1(CHAR)    java.lang.String                         85        0      false   
+a_dec9_2         CHAR                   1(CHAR)    java.lang.String                         85        0      false   
+a_date           CHAR                   1(CHAR)    java.lang.String                         85        0      false   
+a_dt6            CHAR                   1(CHAR)    java.lang.String                         85        0      false   
+a_boolean        CHAR                   1(CHAR)    java.lang.String                         85        0      false   
+a_varchar50      CHAR                   1(CHAR)    java.lang.String                         85        0      false   
+a_string         CHAR                   1(CHAR)    java.lang.String                         85        0      false   
+a_array_int      CHAR                   1(CHAR)    java.lang.String                         85        0      false   
+
+----- getObject / getString per row for arrays -----
+>>> arrays row id=1
+   id             getObject[java.lang.Integer]=1 | getString="1"  [len=1, utf8bytes=1]
+   a_int          getObject[java.lang.String]=[1, 2, 3] | getString="[1, 2, 3]"  [len=9, utf8bytes=9]
+   a_bigint       getObject[java.lang.String]=[10, 20, 30] | getString="[10, 20, 30]"  [len=12, utf8bytes=12]
+   a_largeint     getObject[java.lang.String]=[170141183460469231731687303715884105727, -1] | getString="[170141183460469231731687303715884105727, -1]"  [len=45, utf8bytes=45]
+   a_float        getObject[java.lang.String]=[1.5, 2.5] | getString="[1.5, 2.5]"  [len=10, utf8bytes=10]
+   a_double       getObject[java.lang.String]=[1.25, 2.5] | getString="[1.25, 2.5]"  [len=11, utf8bytes=11]
+   a_dec9_2       getObject[java.lang.String]=[1.10, 2.20] | getString="[1.10, 2.20]"  [len=12, utf8bytes=12]
+   a_date         getObject[java.lang.String]=["2021-01-01", "2021-12-31"] | getString="[\"2021-01-01\", \"2021-12-31\"]"  [len=28, utf8bytes=28]
+   a_dt6          getObject[java.lang.String]=["2021-06-15 12:34:56.789012", "2000-01-01 00:00:00.000000"] | getString="[\"2021-06-15 12:34:56.789012\", \"2000-01-01 00:00:00.000000\"]"  [len=60, utf8bytes=60]
+   a_boolean      getObject[java.lang.String]=[1, 0, 1] | getString="[1, 0, 1]"  [len=9, utf8bytes=9]
+   a_varchar50    getObject[java.lang.String]=["a", "b", "c"] | getString="[\"a\", \"b\", \"c\"]"  [len=15, utf8bytes=15]
+   a_string       getObject[java.lang.String]=["s1", "s2"] | getString="[\"s1\", \"s2\"]"  [len=12, utf8bytes=12]
+   a_array_int    getObject[java.lang.String]=[[1, 2], [3, 4]] | getString="[[1, 2], [3, 4]]"  [len=16, utf8bytes=16]
+>>> arrays row id=2
+   id             getObject[java.lang.Integer]=2 | getString="2"  [len=1, utf8bytes=1]
+   a_int          getObject[java.lang.String]=[] | getString="[]"  [len=2, utf8bytes=2]
+   a_bigint       getObject[java.lang.String]=[] | getString="[]"  [len=2, utf8bytes=2]
+   a_largeint     getObject[java.lang.String]=[] | getString="[]"  [len=2, utf8bytes=2]
+   a_float        getObject[java.lang.String]=[] | getString="[]"  [len=2, utf8bytes=2]
+   a_double       getObject[java.lang.String]=[] | getString="[]"  [len=2, utf8bytes=2]
+   a_dec9_2       getObject[java.lang.String]=[] | getString="[]"  [len=2, utf8bytes=2]
+   a_date         getObject[java.lang.String]=[] | getString="[]"  [len=2, utf8bytes=2]
+   a_dt6          getObject[java.lang.String]=[] | getString="[]"  [len=2, utf8bytes=2]
+   a_boolean      getObject[java.lang.String]=[] | getString="[]"  [len=2, utf8bytes=2]
+   a_varchar50    getObject[java.lang.String]=[] | getString="[]"  [len=2, utf8bytes=2]
+   a_string       getObject[java.lang.String]=[] | getString="[]"  [len=2, utf8bytes=2]
+   a_array_int    getObject[java.lang.String]=[] | getString="[]"  [len=2, utf8bytes=2]
+>>> arrays row id=3
+   id             getObject[java.lang.Integer]=3 | getString="3"  [len=1, utf8bytes=1]
+   a_int          getObject[-]=<null> | getString=<null>
+   a_bigint       getObject[-]=<null> | getString=<null>
+   a_largeint     getObject[-]=<null> | getString=<null>
+   a_float        getObject[-]=<null> | getString=<null>
+   a_double       getObject[-]=<null> | getString=<null>
+   a_dec9_2       getObject[-]=<null> | getString=<null>
+   a_date         getObject[-]=<null> | getString=<null>
+   a_dt6          getObject[-]=<null> | getString=<null>
+   a_boolean      getObject[-]=<null> | getString=<null>
+   a_varchar50    getObject[-]=<null> | getString=<null>
+   a_string       getObject[-]=<null> | getString=<null>
+   a_array_int    getObject[-]=<null> | getString=<null>
+>>> arrays row id=4
+   id             getObject[java.lang.Integer]=4 | getString="4"  [len=1, utf8bytes=1]
+   a_int          getObject[java.lang.String]=[1, null, 3] | getString="[1, null, 3]"  [len=12, utf8bytes=12]
+   a_bigint       getObject[java.lang.String]=[null, 20] | getString="[null, 20]"  [len=10, utf8bytes=10]
+   a_largeint     getObject[java.lang.String]=[null] | getString="[null]"  [len=6, utf8bytes=6]
+   a_float        getObject[java.lang.String]=[null, 1.5] | getString="[null, 1.5]"  [len=11, utf8bytes=11]
+   a_double       getObject[java.lang.String]=[null, 2.5] | getString="[null, 2.5]"  [len=11, utf8bytes=11]
+   a_dec9_2       getObject[java.lang.String]=[null, 1.10] | getString="[null, 1.10]"  [len=12, utf8bytes=12]
+   a_date         getObject[java.lang.String]=[null, "2021-01-01"] | getString="[null, \"2021-01-01\"]"  [len=20, utf8bytes=20]
+   a_dt6          getObject[java.lang.String]=[null, "2021-06-15 12:34:56.789012"] | getString="[null, \"2021-06-15 12:34:56.789012\"]"  [len=36, utf8bytes=36]
+   a_boolean      getObject[java.lang.String]=[null, 1] | getString="[null, 1]"  [len=9, utf8bytes=9]
+   a_varchar50    getObject[java.lang.String]=[null, "has,comma", "has'quote", "has"dq", "has[br]", "has\bs"] | getString="[null, \"has,comma\", \"has'quote\", \"has\"dq\", \"has[br]\", \"has\\bs\"]"  [len=63, utf8bytes=63]
+   a_string       getObject[java.lang.String]=[null, "emoji 😀", "CJK 中文", "tab	here", "nl here"] | getString="[null, \"emoji \ud83d\ude00\", \"CJK \u4e2d\u6587\", \"tab\there\", \"nl here\"]"  [len=51, utf8bytes=57]
+   a_array_int    getObject[java.lang.String]=[[1, null], null, []] | getString="[[1, null], null, []]"  [len=21, utf8bytes=21]
+
+----- RSMD for mapstruct -----
+COLUMN           getColumnTypeName      type       getColumnClassName                       prec      scale  signed  
+id               INT                    4(INTEGER) java.lang.Integer                        10        0      true    
+m_si             CHAR                   1(CHAR)    java.lang.String                         85        0      false   
+s_ab             CHAR                   1(CHAR)    java.lang.String                         85        0      false   
+
+----- getObject / getString per row for mapstruct -----
+>>> mapstruct row id=1
+   id             getObject[java.lang.Integer]=1 | getString="1"  [len=1, utf8bytes=1]
+   m_si           getObject[java.lang.String]={"a":1, "b":2} | getString="{\"a\":1, \"b\":2}"  [len=14, utf8bytes=14]
+   s_ab           getObject[java.lang.String]={"a":10, "b":"hello"} | getString="{\"a\":10, \"b\":\"hello\"}"  [len=21, utf8bytes=21]
+>>> mapstruct row id=2
+   id             getObject[java.lang.Integer]=2 | getString="2"  [len=1, utf8bytes=1]
+   m_si           getObject[java.lang.String]={} | getString="{}"  [len=2, utf8bytes=2]
+   s_ab           getObject[java.lang.String]={"a":null, "b":null} | getString="{\"a\":null, \"b\":null}"  [len=20, utf8bytes=20]
+>>> mapstruct row id=3
+   id             getObject[java.lang.Integer]=3 | getString="3"  [len=1, utf8bytes=1]
+   m_si           getObject[-]=<null> | getString=<null>
+   s_ab           getObject[-]=<null> | getString=<null>
+>>> mapstruct row id=4
+   id             getObject[java.lang.Integer]=4 | getString="4"  [len=1, utf8bytes=1]
+   m_si           getObject[java.lang.String]={"k,1":1, "q'ok":2, "uni 中文":3} | getString="{\"k,1\":1, \"q'ok\":2, \"uni \u4e2d\u6587\":3}"  [len=31, utf8bytes=35]
+   s_ab           getObject[java.lang.String]={"a":-1, "b":"comma,'q'"dq"\bs 中文"} | getString="{\"a\":-1, \"b\":\"comma,'q'\"dq\"\\bs \u4e2d\u6587\"}"  [len=35, utf8bytes=39]
+
+----- opaque (BITMAP/HLL/AGG_STATE selectability) -----
+   SELECT bm_col -> OK  typeName=CHAR class=java.lang.String values=[<null>  <null>  ]
+   SELECT hll_col -> OK  typeName=CHAR class=java.lang.String values=[<null>  <null>  ]
+   SELECT aggst_col -> OK  typeName=CHAR class=java.lang.String values=["\x01\x01\x05\x00\x00\x00\x01\n\x00\x00\x00"  [len=11, utf8bytes=11]  "\x01\x01\x07\x00\x00\x00\x01\x14\x00\x00\x00"  [len=11, utf8bytes=11]  ]
+   SELECT bitmap_to_string(bm_col) AS bm_str -> OK  typeName=TINYTEXT class=java.lang.String values=["100"  [len=3, utf8bytes=3]  "200"  [len=3, utf8bytes=3]  ]
+   SELECT bitmap_count(bm_col) AS bm_cnt -> OK  typeName=BIGINT class=java.lang.Long values=["1"  [len=1, utf8bytes=1]  "1"  [len=1, utf8bytes=1]  ]
+   SELECT hll_cardinality(hll_col) AS hll_card -> OK  typeName=BIGINT class=java.lang.Long values=["1"  [len=1, utf8bytes=1]  "1"  [len=1, utf8bytes=1]  ]
+
+########## SECTION 10: getTables labeling + information_schema ##########
+
+----- DatabaseMetaData.getTables (p0_probe) -----
+   arrays               TABLE_TYPE=TABLE
+   mapstruct            TABLE_TYPE=TABLE
+   nums                 TABLE_TYPE=TABLE
+   opaque               TABLE_TYPE=TABLE
+   scalars              TABLE_TYPE=TABLE
+   scalars_view         TABLE_TYPE=VIEW
+
+----- DatabaseMetaData.getTableTypes -----
+   [LOCAL TEMPORARY, SYSTEM TABLE, SYSTEM VIEW, TABLE, VIEW]
+
+----- information_schema.tables (p0_probe) TABLE_TYPE column -----
+   arrays               TABLE_TYPE=BASE TABLE   ENGINE=Doris
+   mapstruct            TABLE_TYPE=BASE TABLE   ENGINE=Doris
+   nums                 TABLE_TYPE=BASE TABLE   ENGINE=Doris
+   opaque               TABLE_TYPE=BASE TABLE   ENGINE=Doris
+   scalars              TABLE_TYPE=BASE TABLE   ENGINE=Doris
+   scalars_view         TABLE_TYPE=VIEW         ENGINE=View
+
+----- information_schema tables/views present (sample) -----
+   count=55: active_queries, authentication_integrations, backend_active_tasks, backend_configuration, backend_kerberos_ticket_cache, backend_ms_rpc_table_throttlers, backend_tablets, be_compaction_tasks, blackhole, catalog_meta_cache_statistics, character_sets, cluster_snapshot_properties, cluster_snapshots, collations, column_data_sizes, column_privileges, column_statistics, columns, encryption_keys, engines, events, file_cache_info, file_cache_statistics, files, global_variables, key_column_usage, load_jobs, metadata_name_ids, parameters, partitions, processlist, profiling, referential_constraints, role_mappings, routine_load_jobs, routines, rowsets, schema_privileges, schemata, session_variables, sql_block_rule_status, statistics, table_constraints, table_options, table_privileges, table_properties, tables, triggers, user_privileges, view_dependency, views, workload_group_privileges, workload_group_resource_usage, workload_groups, workload_policy, 
+
+----- getSchemas / catalogs -----
+   catalogs: __internal_schema, information_schema, mysql, p0_probe, 
+
+########## SECTION 4: BOOLEAN & TINYINT reporting under tinyInt1isBit=false vs default(true) ##########
+
+----- tinyInt1isBit=false -----
+   col c_boolean    typeName=TINYINT    type=-6(TINYINT) class=java.lang.Integer
+   col c_tinyint    typeName=TINYINT    type=-6(TINYINT) class=java.lang.Integer
+   row: c_boolean getObject=1(Integer) getString=1 | c_tinyint getObject=42(Integer) getString=42
+   row: c_boolean getObject=0(Integer) getString=0 | c_tinyint getObject=-128(Integer) getString=-128
+
+----- tinyInt1isBit=true -----
+   col c_boolean    typeName=BIT        type=-7(BIT)  class=java.lang.Boolean
+   col c_tinyint    typeName=TINYINT    type=-6(TINYINT) class=java.lang.Integer
+   row: c_boolean getObject=true(Boolean) getString=1 | c_tinyint getObject=42(Integer) getString=42
+   row: c_boolean getObject=false(Boolean) getString=0 | c_tinyint getObject=-128(Integer) getString=-128
+
+########## SECTION 5: PreparedStatement params — client emulation vs useServerPrepStmts=true ##########
+
+----- useServerPrepStmts=false -----
+   INT=100000 -> matched ids [1] (impl=ClientPreparedStatement)
+   BIGINT -> matched ids [1] (impl=ClientPreparedStatement)
+   DECIMAL(9,2) -> matched ids [1] (impl=ClientPreparedStatement)
+   DATE -> matched ids [1] (impl=ClientPreparedStatement)
+   DATETIME(6) -> matched ids [1] (impl=ClientPreparedStatement)
+   VARCHAR -> matched ids [1] (impl=ClientPreparedStatement)
+   BOOLEAN -> matched ids [1, 3, 4] (impl=ClientPreparedStatement)
+
+----- useServerPrepStmts=true -----
+   INT=100000 -> matched ids [1] (impl=ServerPreparedStatement)
+   BIGINT -> matched ids [1] (impl=ServerPreparedStatement)
+   DECIMAL(9,2) -> matched ids [1] (impl=ServerPreparedStatement)
+   DATE -> matched ids [1] (impl=ServerPreparedStatement)
+   DATETIME(6) -> matched ids [1] (impl=ServerPreparedStatement)
+   VARCHAR -> matched ids [1] (impl=ServerPreparedStatement)
+   BOOLEAN -> matched ids [1, 3, 4] (impl=ServerPreparedStatement)
+
+########## SECTION 6: DATETIME under session timezones (UTC / America/New_York / Asia/Shanghai) ##########
+
+----- connectionTimeZone=UTC -----
+   getTimestamp(c_dt6)=2021-06-15 12:34:56.789012 | getObject(LocalDateTime)=2021-06-15T12:34:56.789012 | getString(c_dt6)=2021-06-15 12:34:56.789012 | getDate(c_date)=2021-06-15
+   session @@time_zone=+00:00 @@system_time_zone=Etc/UTC
+
+----- connectionTimeZone=America/New_York -----
+   getTimestamp(c_dt6)=2021-06-15 16:34:56.789012 | getObject(LocalDateTime)=2021-06-15T12:34:56.789012 | getString(c_dt6)=2021-06-15 12:34:56.789012 | getDate(c_date)=2021-06-15
+   session @@time_zone=America/New_York @@system_time_zone=Etc/UTC
+
+----- connectionTimeZone=Asia/Shanghai -----
+   getTimestamp(c_dt6)=2021-06-15 04:34:56.789012 | getObject(LocalDateTime)=2021-06-15T12:34:56.789012 | getString(c_dt6)=2021-06-15 12:34:56.789012 | getDate(c_date)=2021-06-15
+   session @@time_zone=Asia/Shanghai @@system_time_zone=Etc/UTC
+
+########## SECTION 7: streaming — default vs setFetchSize(MIN_VALUE) vs useCursorFetch on 1,001,000 rows ##########
+
+----- DEFAULT (no fetch tuning) -----
+   rows=1001000 sum=500999999500  elapsed=324ms  rows/sec=3089506  memBefore=4MB peakDuring=128MB memAfter=124MB
+
+----- STREAMING setFetchSize(Integer.MIN_VALUE) -----
+   rows=1001000 sum=500999999500  elapsed=225ms  rows/sec=4448889  memBefore=4MB peakDuring=56MB memAfter=13MB
+
+----- useCursorFetch=true setFetchSize(1000) -----
+   rows=1001000 sum=500999999500  elapsed=347ms  rows/sec=2884726  memBefore=4MB peakDuring=129MB memAfter=134MB
+
+########## SECTION 8: Statement.cancel() + SHOW PROCESSLIST + query_timeout ##########
+   after 3s: runnerDone=false running non-idle queries in processlist=1 (query stillRunning=true)
+   cancel() called; runner returned after ~207ms; processlist non-idle now=1
+   runner done=false err=MySQLStatementCancelledException:Statement cancelled due to client request
+   total wall from query start to cancel-observed: 3218ms
+
+----- SET query_timeout (session) then run heavy query -----
+   @@query_timeout=3
+   heavy query aborted after 3003ms: SQLException: errCode = 2, detailMessage = query timeout
+
+########## SECTION 9: session variables (query_timeout, exec_mem_limit, time_zone) defaults + set ##########
+   default @@query_timeout = 900
+   default @@exec_mem_limit = 100147483648
+   default @@time_zone = Etc/UTC
+   after SET:
+     @@query_timeout = 123
+     @@exec_mem_limit = 2147483648
+     @@time_zone = +08:00
+
+########## SECTION 11: multi-host URL syntax acceptance ##########
+   URL: jdbc:mysql://127.0.0.1:9130,127.0.0.1:9130/p0_probe?user=root&password=&useSSL=false&allowPublicKeyRetrieval=true
+   multi-host connect OK, SELECT 1 = 1
+   sequential-form ERR(SQLNonTransientConnectionException: Cannot load connection class because of underlying exception: com.mysql.cj.exceptions.WrongArgumentException: Failed to parse the host:port pair 'sequential:(host=127.0.0.1,port=9130)'.)
+
+=== PROBE COMPLETE ===
+=====================================================================
+APPENDIX A: cluster version + topology (docker exec SHOW ...)
+=====================================================================
+mysql_proto_version
+5.7.99
+Variable_name	Value	Default_Value	Changed
+version	5.7.99	5.7.99	0
+version_comment	doris version doris-4.1.3-rc02-7126cf65d96	doris version doris-4.1.3-rc02-7126cf65d96	0
+--- SHOW FRONTENDS ---
+*************************** 1. row ***************************
+              Name: fe_248d55c7_0e10_4537_9673_46b7daba08c3
+              Host: 172.30.81.10
+       EditLogPort: 9010
+          HttpPort: 8030
+         QueryPort: 9030
+           RpcPort: 9020
+ArrowFlightSqlPort: 8070
+              Role: FOLLOWER
+          IsMaster: true
+         ClusterId: 84929531
+              Join: true
+             Alive: true
+ ReplayedJournalId: 424
+     LastStartTime: 2026-07-19 01:29:37
+     LastHeartbeat: 2026-07-19 01:39:18
+          IsHelper: true
+            ErrMsg: 
+           Version: doris-4.1.3-rc02-7126cf65d96
+  CurrentConnected: Yes
+         LiveSince: NULL
+--- SHOW BACKENDS ---
+*************************** 1. row ***************************
+              BackendId: 1784424576981
+                   Host: 172.30.81.20
+          HeartbeatPort: 9050
+                 BePort: 9060
+               HttpPort: 8040
+               BrpcPort: 8060
+     ArrowFlightSqlPort: 8050
+          LastStartTime: 2026-07-19 01:29:43
+          LastHeartbeat: 2026-07-19 01:39:18
+                  Alive: true
+   SystemDecommissioned: false
+              TabletNum: 50
+       DataUsedCapacity: 363.027 KB
+      TrashUsedCapacity: 0.000 
+          AvailCapacity: 1.580 TB
+          TotalCapacity: 1.830 TB
+                UsedPct: 13.70 %
+         MaxDiskUsedPct: 13.70 %
+     RemoteUsedCapacity: 0.000 
+                    Tag: {"location" : "default"}
+                 ErrMsg: 
+                Version: doris-4.1.3-rc02-7126cf65d96
+                 Status: {"lastSuccessReportTabletsTime":"2026-07-19 01:39:17","lastStreamLoadTime":-1,"isQueryDisabled":false,"isLoadDisabled":false,"isActive":true,"isShutdown":false,"currentFragmentNum":2,"lastFragmentUpdateTime":1784425137244}
+HeartbeatFailureCounter: 0
+               CpuCores: 24
+                 Memory: 26.54 GB
+              LiveSince: 2026-07-19 01:39:18
+           RunningTasks: 0
+               NodeRole: mix
+
+=====================================================================
+APPENDIX B: FE-side SHOW PROCESSLIST + KILL QUERY cancellation timing
+=====================================================================
+--- SHOW PROCESSLIST while SLEEP(20) runs (Info col shows the query) ---
+         Command: Query
+            Time: 0
+           State: OK
+--
+            Info: SHOW PROCESSLIST
+              FE: 172.30.81.10
+    CloudCluster: NULL
+--
+         Command: Query
+            Time: 2
+           State: OK
+--
+            Info: SELECT SLEEP(20)
+              FE: 172.30.81.10
+    CloudCluster: NULL
+query connection Id = 254
+ERROR 1105 (HY000) at line 1: errCode = 2, detailMessage = cancel query by user from 127.0.0.1:54688
+SELECT SLEEP(20) disappeared from processlist ~15ms after KILL QUERY
+
+=====================================================================
+APPENDIX C: information_schema.columns DATA_TYPE / COLUMN_TYPE (the
+authoritative Doris type strings — DatabaseMetaData.getColumns hides
+several of these behind OTHER/UNKNOWN or narrows LARGEINT to INT)
+=====================================================================
+TABLE_NAME	COLUMN_NAME	DATA_TYPE	COLUMN_TYPE
+arrays	id	int	int(11)
+arrays	a_int	array	array<int(11)>
+arrays	a_bigint	array	array<bigint(20)>
+arrays	a_largeint	array	array<largeint>
+arrays	a_float	array	array<float>
+arrays	a_double	array	array<double>
+arrays	a_dec9_2	array	array<decimalv3(9, 2)>
+arrays	a_date	array	array<date>
+arrays	a_dt6	array	array<datetime(6)>
+arrays	a_boolean	array	array<tinyint(1)>
+arrays	a_varchar50	array	array<varchar(50)>
+arrays	a_string	array	array<string>
+arrays	a_array_int	array	array<array<int(11)>>
+mapstruct	id	int	int(11)
+mapstruct	m_si	map	map<string,int(11)>
+mapstruct	s_ab	struct	struct<int(11),string>
+nums	n	bigint	bigint(20)
+opaque	id	int	int(11)
+opaque	bm_col	bitmap	bitmap
+opaque	hll_col	hll	hll
+opaque	aggst_col	unknown	unknown
+scalars	id	int	int(11)
+scalars	c_boolean	tinyint	tinyint(1)
+scalars	c_tinyint	tinyint	tinyint(4)
+scalars	c_smallint	smallint	smallint(6)
+scalars	c_int	int	int(11)
+scalars	c_bigint	bigint	bigint(20)
+scalars	c_largeint	bigint unsigned	largeint
+scalars	c_float	float	float
+scalars	c_double	double	double
+scalars	c_dec9_2	decimal	decimalv3(9, 2)
+scalars	c_dec38_10	decimal	decimalv3(38, 10)
+scalars	c_dec76_10	decimal	decimalv3(76, 10)
+scalars	c_date	date	date
+scalars	c_dt0	datetime	datetime
+scalars	c_dt3	datetime	datetime(3)
+scalars	c_dt6	datetime	datetime(6)
+scalars	c_char10	char	char(10)
+scalars	c_varchar100	varchar	varchar(100)
+scalars	c_string	varchar	string
+scalars	c_json	json	json
+scalars	c_ipv4	ipv4	ipv4
+scalars	c_ipv6	ipv6	ipv6
+scalars	c_variant	variant	variant
+scalars_view	id	int	int(11)
+scalars_view	c_int	int	int(11)
+scalars_view	c_varchar100	varchar	varchar(100)

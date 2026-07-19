@@ -1,0 +1,7 @@
+# Gitignored runtime copy of fe.conf. Doris's init_fe.sh APPENDS a
+# priority_networks line to the mounted fe.conf at every boot; mounting a
+# throwaway copy (staged by up.sh from the tracked pristine fe.conf) keeps
+# those appends out of the repo.
+.fe.conf.runtime
+# Same story for be.conf: init_be.sh appends priority_networks on first init.
+.be.conf.runtime
