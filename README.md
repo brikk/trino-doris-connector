@@ -1,5 +1,6 @@
 # trino-doris-connector
 
+[![CI](https://github.com/brikk/trino-doris-connector/actions/workflows/ci.yml/badge.svg)](https://github.com/brikk/trino-doris-connector/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://www.apache.org/licenses/LICENSE-2.0)
 
 A **read-only** [Trino](https://trino.io) connector for [Apache Doris](https://doris.apache.org).
@@ -40,7 +41,9 @@ Predicates and query shapes the connector pushes into Doris:
 | `contains(array_col, value)` | `array_contains(col, ?)` | rendered bare so the Doris **inverted index** can fire; numeric/decimal/date/datetime/boolean elements |
 | `arrays_overlap(a, b)` | `arrays_overlap(...)` with a NULL-element guard | guard preserves Trino NULL semantics exactly |
 | `array_position(a, x) <op> n` | `array_position(...)` comparisons | all six comparison operators, either orientation |
-| `NOT` / `AND` / `OR` | composed remote predicates | over value-identical operands (e.g. `array_position` comparisons) |
+| `cardinality(array_col) <op> n` | `array_size(col)` comparisons | all six operators, `BETWEEN`, either orientation; NULL/empty/NULL-element semantics verified identical |
+| `json_extract_scalar(json_col, '$.path') = 'text'` | `json_unquote(json_extract(col, '$.path')) = ?` | equality only, simple constant paths (`$.a.b`, `$.a[0]`); literals that could collide with Doris's non-scalar/number text renderings stay in Trino (see dev-docs/NOTES-p5-batch.md) |
+| `NOT` / `AND` / `OR` | composed remote predicates | over value-identical operands (e.g. `array_position` / `cardinality` comparisons) |
 | `LIMIT n` | `LIMIT n` | |
 | `ORDER BY ... LIMIT n` (TopN) | `ORDER BY ... NULLS FIRST/LAST LIMIT n` | non-text sort keys (plus VARCHAR keys in `BINARY`/`FULL` string modes); all four NULL orderings render natively |
 | String predicates and `LIKE` | mode-dependent | see [String pushdown modes](#string-pushdown-modes) |
@@ -68,7 +71,7 @@ overrides catalog in either direction):
 | mode | VARCHAR/STRING predicates | CHAR predicates | string TopN | `LIKE` |
 |---|---|---|---|---|
 | `NULL_ONLY` | `IS [NOT] NULL` only | same | off | off |
-| `GUARDED` (default) | pushed as a remote **pre-filter** with the exact Trino filter retained locally — results always identical to `NULL_ONLY`, but Doris prunes rows early | not pushed | off | off |
+| `GUARDED` (default) | pushed as a remote **pre-filter** with the exact Trino filter retained locally — results always identical to `NULL_ONLY`, but Doris prunes rows early | not pushed | off | prefix patterns (`LIKE 'foo%'`) ship a byte-range pre-filter (`col >= 'foo' AND col < 'fop'`); the exact `LIKE` is retained locally |
 | `BINARY` | full pushdown, no retained filter | full pushdown | VARCHAR keys pushed | pushed |
 | `FULL` | same as `BINARY` | same | same | same |
 
@@ -132,6 +135,19 @@ cp -r build/trino-plugin/trino-doris-<version> "$TRINO_HOME/plugin/"
 ```
 
 Restart the coordinator and workers after copying.
+
+### Releases (prebuilt plugin)
+
+As an alternative to building from source, download the prebuilt plugin zip from the
+[GitHub releases page](https://github.com/brikk/trino-doris-connector/releases) and unzip it
+into your Trino plugin directory:
+
+```bash
+unzip trino-doris-<version>.zip -d "$TRINO_HOME/plugin/"   # -> $TRINO_HOME/plugin/trino-doris-<version>/
+```
+
+Then restart the coordinator and workers. Each release is cut from a `release-<version>`
+branch and only published if the full live-test suite passes in CI.
 
 ## Configuring a catalog
 

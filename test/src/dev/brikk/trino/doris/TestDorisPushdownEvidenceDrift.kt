@@ -38,7 +38,8 @@ class TestDorisPushdownEvidenceDrift {
 
     @Test
     fun testEveryRulePinMatchesTheRegistry() {
-        assertThat(DorisPushdownEvidence.ALL).hasSize(3) // contains, arrays_overlap, array_position
+        // contains, arrays_overlap, array_position, json_extract_scalar, cardinality
+        assertThat(DorisPushdownEvidence.ALL).hasSize(5)
         for (evidence in DorisPushdownEvidence.ALL) {
             val entry = DorisPushdownEvidence.lookup(evidence.registrySource)
             assertThat(entry).describedAs(evidence.registrySource).isNotNull

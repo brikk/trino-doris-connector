@@ -138,8 +138,53 @@ internal object DorisPushdownEvidence {
         liveProof = "TestDorisP2bPushdown",
     )
 
+    /**
+     * Registry-IDENTICAL for the scalar rendering (`json_unquote(json_extract(...))` matches
+     * Trino's unquoted scalar text — the 0.7.0 entry documents the generator fix that
+     * introduced the wrap). The connector's own P5 probe found two cells the registry tuple
+     * does not cover, both handled by rule-side SCOPE guards (not rendering changes, so the
+     * treatment stays DIRECT, same policy as ARRAY_POSITION's never-pushed NULL needles):
+     * non-scalar path values (Trino NULL vs Doris JSON text -> literals starting `{`/`[`
+     * never push; `<>`/IS-NULL forms never push) and independent number canonicalization
+     * (Doris `1e+30`/`-0` vs Trino `1E+30`/`0` -> numeric-looking literals never push).
+     */
+    val JSON_EXTRACT_SCALAR = Evidence(
+        trinoFunction = "json_extract_scalar(json, varchar-path) = varchar-literal",
+        registrySource = "json_extract_scalar",
+        expectedTarget = "json_unquote",
+        expectedVerdict = HazardVerdict.IDENTICAL,
+        expectedProvenance = "REPORT-doris-differential-probe-2026-07-13.md#batch12-bucketb-trino; " +
+            "generator fixed in BUGS-doris-generator-mappings-2026-07-13",
+        dorisRendering = "(json_unquote(json_extract(`col`, ?)) = ?)  -- equality only, guarded literal/path shapes",
+        treatment = Treatment.DIRECT,
+        hazard = "non-scalar path values: Trino NULL vs Doris JSON text ('{...}'/'[...]') -> " +
+            "equality-only with {/[-prefixed literals excluded; number text canonicalization " +
+            "diverges (1e+30 vs 1E+30, -0 vs 0) -> numeric-looking literals excluded",
+        liveProof = "TestDorisP5Batch",
+    )
+
+    /**
+     * DIVERGENT in the registry purely as a RENAME (Doris has no array `cardinality`; the
+     * portable name is `array_size`) — G3's connector-original-rewrite lane. Value-level
+     * identity live-proven on every reachable cell (NULL array -> NULL, empty -> 0, NULL
+     * elements counted, NOT/AND/OR composition cell-identical), so the rule sits in the
+     * VALUE-SAFE composable tier with `array_position`.
+     */
+    val CARDINALITY = Evidence(
+        trinoFunction = "cardinality(array(T)) <cmp> bigint-literal | BETWEEN lo AND hi",
+        registrySource = "cardinality",
+        expectedTarget = "array_size",
+        expectedVerdict = HazardVerdict.DIVERGENT,
+        expectedProvenance = DIFFERENTIAL_PROBE_PROVENANCE,
+        dorisRendering = "(array_size(`col`) <cmp> n) | (array_size(`col`) BETWEEN lo AND hi)",
+        treatment = Treatment.CONNECTOR_ORIGINAL_REWRITE,
+        hazard = "pure rename (Doris lacks array 'cardinality'; array_size is the portable name); " +
+            "map-cardinality is out of scope (no native MAP columns exist in this connector)",
+        liveProof = "TestDorisP5Batch",
+    )
+
     /** Every rule the connector registers — one Evidence entry per pushdown rule, no more, no fewer. */
-    val ALL: List<Evidence> = listOf(CONTAINS, ARRAYS_OVERLAP, ARRAY_POSITION)
+    val ALL: List<Evidence> = listOf(CONTAINS, ARRAYS_OVERLAP, ARRAY_POSITION, JSON_EXTRACT_SCALAR, CARDINALITY)
 
     /**
      * Fail-loud registry cross-check, run at connector construction (from

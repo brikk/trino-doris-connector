@@ -1,0 +1,150 @@
+# Release-artifact flow for trino-doris-connector.
+#
+# Trigger: push to a release branch. Two spellings are accepted so either Git
+# convention works:
+#     release-<version>    e.g. release-483-2
+#     release/<version>    e.g. release/483-2
+# In BOTH cases the release version is the branch suffix: 483-2. The version is
+# NOT parsed for semver — it is passed verbatim to Gradle's -Pversion and used to
+# name the plugin dir (trino-doris-<version>), the zip (trino-doris-<version>.zip)
+# and the git tag (v<version>). Keep the suffix free of characters illegal in a
+# path / tag (stick to the <trino>-<n> shape the repo already uses, e.g. 483-2).
+#
+# This runs the SAME build+live-test gate as ci.yml FIRST; the assemble/zip/release
+# steps only run on success, so a red build produces no artifact and no release.
+name: Release
+
+on:
+  push:
+    branches:
+      - 'release-*'
+      - 'release/*'
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write  # required for `gh release create` to push a tag + upload assets
+
+jobs:
+  release:
+    name: gated build + plugin release
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # full history so release-notes generation has commits to diff
+
+      # Derive the release version from the branch name. github.ref_name strips the
+      # refs/heads/ prefix; we then strip whichever release prefix is present.
+      #   release-483-2 -> 483-2   |   release/483-2 -> 483-2
+      - name: Derive release version
+        id: version
+        run: |
+          set -euo pipefail
+          branch="${GITHUB_REF_NAME}"
+          version="${branch#release-}"
+          version="${version#release/}"
+          if [ -z "${version}" ] || [ "${version}" = "${branch}" ]; then
+            echo "::error::could not derive version from branch '${branch}'"
+            exit 1
+          fi
+          echo "version=${version}" >> "${GITHUB_OUTPUT}"
+          echo "tag=v${version}" >> "${GITHUB_OUTPUT}"
+          echo "Release version: ${version} (tag v${version})"
+
+      - name: Free up disk space
+        uses: jlumbroso/free-disk-space@v1.3.1
+        with:
+          tool-cache: false
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: false
+          swap-storage: false
+
+      - name: Set up JDK 25
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '25'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Bring up Doris 4.1.3 cluster
+        run: ./compose/up.sh
+
+      - name: Verify cluster healthy
+        run: |
+          set -euo pipefail
+          alive=$(docker exec trino-doris-fe mysql -h127.0.0.1 -P9030 -uroot -N \
+            -e "SHOW BACKENDS" | awk -F'\t' '$10=="true"{n++} END{print n+0}')
+          echo "backends alive: ${alive}"
+          test "${alive}" -ge 1
+
+      # GATE: same full build + live tests as CI, but with the release version wired in
+      # via -Pversion (build.gradle.kts honors an explicit -Pversion, else defaults to
+      # the dev version). If this fails, no later step runs -> no artifact, no release.
+      - name: Build + live-test gate (release version)
+        run: ./gradlew build --no-daemon -Pversion=${{ steps.version.outputs.version }}
+
+      # Assemble the plugin dir and re-run the G12 bundling guard, both at the release
+      # version so the produced dir is trino-doris-<version>/.
+      - name: Assemble + verify plugin
+        run: >-
+          ./gradlew pluginAssemble verifyPluginAssembly --no-daemon
+          -Pversion=${{ steps.version.outputs.version }}
+
+      # Zip the plugin dir. We zip the dir itself (so it unzips to
+      # trino-doris-<version>/) which is exactly what drops into $TRINO_HOME/plugin/.
+      - name: Package plugin zip
+        id: package
+        run: |
+          set -euo pipefail
+          version="${{ steps.version.outputs.version }}"
+          plugin_dir="build/trino-plugin/trino-doris-${version}"
+          test -d "${plugin_dir}" || { echo "::error::missing ${plugin_dir}"; exit 1; }
+          zip_name="trino-doris-${version}.zip"
+          (cd build/trino-plugin && zip -r -q "${GITHUB_WORKSPACE}/${zip_name}" "trino-doris-${version}")
+          echo "zip=${zip_name}" >> "${GITHUB_OUTPUT}"
+          echo "Packaged ${zip_name}:"
+          unzip -l "${zip_name}" | tail -1
+
+      # Create the GitHub release, tag v<version>, attach the zip, auto-generate notes
+      # from commits since the previous tag. gh is preinstalled + authenticated on the
+      # runner via GITHUB_TOKEN.
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: >-
+          gh release create "${{ steps.version.outputs.tag }}"
+          "${{ steps.package.outputs.zip }}"
+          --title "${{ steps.version.outputs.tag }}"
+          --generate-notes
+          --target "${GITHUB_SHA}"
+
+      - name: Collect Doris container logs
+        if: failure()
+        run: |
+          mkdir -p docker-logs
+          docker logs trino-doris-fe > docker-logs/trino-doris-fe.log 2>&1 || true
+          docker logs trino-doris-be > docker-logs/trino-doris-be.log 2>&1 || true
+
+      - name: Upload Doris container logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: doris-logs
+          path: docker-logs/
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Tear down Doris cluster
+        if: always()
+        run: ./compose/up.sh --down

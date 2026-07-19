@@ -1,0 +1,116 @@
+# Full build + live-test gate for trino-doris-connector.
+#
+# The suite is NOT hermetic: ~170 tests connect to a real stock Doris 4.1.3 FE+BE
+# (FE MySQL on host 127.0.0.1:9130) AND docker-exec into the `trino-doris-fe`
+# container for oracle EXPLAIN / audit-log assertions (see test/.../DorisTestCluster.kt
+# and TestDorisP2bInvertedIndexEvidence.kt). That container-exec requirement is why we
+# run real `docker compose` on the runner via ./compose/up.sh rather than GH Actions
+# `services:` containers — service containers are reachable by name/port but you cannot
+# `docker exec` into them from the job the way these tests need.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Cancel superseded runs on the same ref to save the (scarce) large-runner minutes.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: build + live tests (Doris 4.1.3)
+    runs-on: ubuntu-latest
+    # Cluster boot ~2-4 min + cold Gradle dependency resolution + detekt + ~170 live
+    # tests. 30 min leaves headroom for a cold-cache first run without hanging forever.
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # The FE (3.6 GB) + BE (8.3 GB) images are ~12 GB together; ubuntu-latest has
+      # ~14 GB free on /. Pruning preinstalled toolchains (Android SDK, .NET, GHC, etc.)
+      # reclaims ~30 GB and keeps `docker pull` from ENOSPC. Cheap insurance; keep it.
+      - name: Free up disk space
+        uses: jlumbroso/free-disk-space@v1.3.1
+        with:
+          tool-cache: false
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: false
+          swap-storage: false
+
+      # setup-java Temurin 25 pins the same JDK MAJOR that mise.toml pins locally (25),
+      # so mise is not needed on CI. The Gradle wrapper stays the build entry point; the
+      # foojay toolchain resolver in settings.gradle.kts would fetch 25 anyway, but a
+      # JDK-25 runtime is required just to START the wrapper (build requires JVM >= 25).
+      - name: Set up JDK 25
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '25'
+
+      # Gradle dependency + build cache. setup-gradle also configures the wrapper and
+      # reports build scans; read-only cache writes on non-default branches by default.
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      # docker compose v2 (`docker compose`, not `docker-compose`) is preinstalled on
+      # ubuntu-latest. up.sh pins platform to linux/amd64 (matches the x86_64 runner, so
+      # no emulation) and gates on FE SELECT 1 + BE Alive=true with a 240s deadline each.
+      - name: Bring up Doris 4.1.3 cluster
+        run: ./compose/up.sh
+
+      # up.sh already blocks until FE accepts SQL and one BE is Alive, so it is itself the
+      # wait-for-healthy gate. Belt-and-suspenders re-assert here so a flake in the boot
+      # gate surfaces as an explicit, greppable failure line rather than a mid-test error.
+      - name: Verify cluster healthy
+        run: |
+          set -euo pipefail
+          alive=$(docker exec trino-doris-fe mysql -h127.0.0.1 -P9030 -uroot -N \
+            -e "SHOW BACKENDS" | awk -F'\t' '$10=="true"{n++} END{print n+0}')
+          echo "backends alive: ${alive}"
+          test "${alive}" -ge 1
+
+      - name: Build (compile + detekt + live tests + plugin assembly)
+        run: ./gradlew build --no-daemon
+
+      # Diagnostics only on failure: JUnit HTML/XML reports + FE/BE container logs make a
+      # red run debuggable without re-running. `if: failure()` so green runs stay lean.
+      - name: Upload test reports
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-reports
+          path: |
+            build/reports/tests/
+            build/test-results/
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Collect Doris container logs
+        if: failure()
+        run: |
+          mkdir -p docker-logs
+          docker logs trino-doris-fe > docker-logs/trino-doris-fe.log 2>&1 || true
+          docker logs trino-doris-be > docker-logs/trino-doris-be.log 2>&1 || true
+
+      - name: Upload Doris container logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: doris-logs
+          path: docker-logs/
+          if-no-files-found: ignore
+          retention-days: 14
+
+      # Always tear the cluster down (containers + volumes) so a cancelled/failed run does
+      # not leak state. up.sh --down re-stages the runtime confs so the mounts resolve.
+      - name: Tear down Doris cluster
+        if: always()
+        run: ./compose/up.sh --down

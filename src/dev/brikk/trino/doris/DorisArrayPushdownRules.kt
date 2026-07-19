@@ -30,6 +30,7 @@ import io.trino.spi.expression.Call
 import io.trino.spi.expression.ConnectorExpression
 import io.trino.spi.expression.Constant
 import io.trino.spi.expression.FunctionName
+import io.trino.spi.expression.StandardFunctions.BETWEEN_FUNCTION_NAME
 import io.trino.spi.expression.StandardFunctions.EQUAL_OPERATOR_FUNCTION_NAME
 import io.trino.spi.expression.StandardFunctions.GREATER_THAN_OPERATOR_FUNCTION_NAME
 import io.trino.spi.expression.StandardFunctions.GREATER_THAN_OR_EQUAL_OPERATOR_FUNCTION_NAME
@@ -283,5 +284,89 @@ internal class RewriteArrayPositionComparison(
             .with(functionName().matching { it in COMPARISON_OPERATORS.keys })
             .with(type().equalTo(BOOLEAN))
             .with(argumentCount().equalTo(2))
+    }
+}
+
+/**
+ * `cardinality(array(T)) <cmp> n` (either orientation) and `cardinality(array(T)) BETWEEN
+ * lo AND hi` -> `(array_size(`col`) ...)` — the registry verdict is DIVERGENT purely as a
+ * RENAME (Doris has no `cardinality` for this shape; the portable name is `array_size`), so
+ * per G3 this is a connector-original rewrite backed by its own live truth table
+ * ([DorisPushdownEvidence.CARDINALITY]): NULL array -> NULL on both engines, empty -> 0,
+ * NULL elements COUNTED on both, and NOT-composition cell-identical — VALUE-level identical,
+ * so the rule lives in the VALUE-SAFE tier (composable under NOT/AND/OR) alongside
+ * `array_position` comparisons. Bounds are validated Longs rendered inline (no injection
+ * surface). Column guard reuses the pushable-array allowlist (FLOAT/DOUBLE/IP element
+ * arrays are excluded — over-tight for a size check, but keeps one proof surface; noted in
+ * NOTES-p5-batch).
+ */
+internal class RewriteCardinalityComparison(
+    private val support: DorisArrayPushdownSupport,
+) : ConnectorExpressionRule<Call, ParameterizedExpression> {
+    override fun getPattern(): Pattern<Call> = PATTERN
+
+    override fun rewrite(expression: Call, captures: Captures, context: RewriteContext<ParameterizedExpression>): Optional<ParameterizedExpression> {
+        if (expression.functionName == BETWEEN_FUNCTION_NAME) {
+            val cardinalityCall = expression.arguments[0] as? Call ?: return Optional.empty()
+            val column = pushableCardinalityColumn(cardinalityCall, context) ?: return Optional.empty()
+            val low = integerBound(expression.arguments[1]) ?: return Optional.empty()
+            val high = integerBound(expression.arguments[2]) ?: return Optional.empty()
+            return Optional.of(ParameterizedExpression("(array_size(${column.quotedName}) BETWEEN $low AND $high)", listOf()))
+        }
+        val left = expression.arguments[0]
+        val right = expression.arguments[1]
+        val operator = COMPARISON_OPERATORS.getValue(expression.functionName)
+        val (cardinalityCall, bound, effectiveOperator) = when {
+            left is Call && right is Constant -> Triple(left, right, operator)
+            left is Constant && right is Call -> Triple(right, left, flip(operator))
+            else -> return Optional.empty()
+        }
+        val column = pushableCardinalityColumn(cardinalityCall, context) ?: return Optional.empty()
+        val boundValue = integerBound(bound) ?: return Optional.empty()
+        return Optional.of(ParameterizedExpression("(array_size(${column.quotedName}) $effectiveOperator $boundValue)", listOf()))
+    }
+
+    private fun pushableCardinalityColumn(
+        call: Call,
+        context: RewriteContext<ParameterizedExpression>,
+    ): DorisArrayPushdownSupport.PushableArrayColumn? {
+        if (call.functionName != CARDINALITY || call.arguments.size != 1 || call.type != BIGINT) {
+            return null
+        }
+        val arrayArgument = call.arguments[0] as? Variable ?: return null
+        return support.pushableArrayColumn(context, arrayArgument)
+    }
+
+    private fun integerBound(expression: ConnectorExpression): Long? {
+        val constant = expression as? Constant ?: return null
+        if (constant.type != BIGINT && constant.type != INTEGER) {
+            return null
+        }
+        return constant.value as? Long
+    }
+
+    companion object {
+        private val CARDINALITY = FunctionName("cardinality")
+
+        private val COMPARISON_OPERATORS: Map<FunctionName, String> = mapOf(
+            EQUAL_OPERATOR_FUNCTION_NAME to "=",
+            NOT_EQUAL_OPERATOR_FUNCTION_NAME to "<>",
+            LESS_THAN_OPERATOR_FUNCTION_NAME to "<",
+            LESS_THAN_OR_EQUAL_OPERATOR_FUNCTION_NAME to "<=",
+            GREATER_THAN_OPERATOR_FUNCTION_NAME to ">",
+            GREATER_THAN_OR_EQUAL_OPERATOR_FUNCTION_NAME to ">=",
+        )
+
+        private fun flip(operator: String): String = when (operator) {
+            "<" -> ">"
+            "<=" -> ">="
+            ">" -> "<"
+            ">=" -> "<="
+            else -> operator // = and <> are symmetric
+        }
+
+        private val PATTERN: Pattern<Call> = call()
+            .with(functionName().matching { it in COMPARISON_OPERATORS.keys || it == BETWEEN_FUNCTION_NAME })
+            .with(type().equalTo(BOOLEAN))
     }
 }

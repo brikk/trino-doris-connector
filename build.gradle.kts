@@ -6,7 +6,11 @@ plugins {
     alias(libs.plugins.detekt)
 }
 
-version = "483-1-ALPHA"
+// Default dev version. CI release flow (.github/workflows/release.yml) overrides this with
+// -Pversion=<derived-from-branch> (e.g. release-483-2 -> 483-2). A plain Gradle script
+// assignment would clobber the -P property (proven: it runs after Gradle applies project
+// properties), so honor an explicit -Pversion when present and fall back to the dev default.
+version = (findProperty("version") as? String)?.takeIf { it != "unspecified" } ?: "483-1-ALPHA"
 
 // Idiomatic-Kotlin quality gate, same setup as trino-ducklake.
 detekt {

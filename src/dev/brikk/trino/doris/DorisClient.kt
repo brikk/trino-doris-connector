@@ -118,6 +118,9 @@ class DorisClient @Inject constructor(
         val valueSafe = DorisValueSafeRewriter()
         val valueSafeRules = listOf(
             RewriteArrayPositionComparison(support),
+            // cardinality -> array_size: value-identical on every reachable cell (P5 pins),
+            // so composable — [DorisPushdownEvidence.CARDINALITY]
+            RewriteCardinalityComparison(support),
             RewriteValueSafeNot(valueSafe),
             RewriteValueSafeLogical(valueSafe),
         )
@@ -131,6 +134,10 @@ class DorisClient @Inject constructor(
             // LIKE pushes only in BINARY/FULL string mode (rule.isEnabled gates per session);
             // stays out of the value-safe tier (no composition) — probe report, LIKE section.
             .add(RewriteStringLike(::quoted))
+            // JSON equality is PREDICATE-level (divergent cells are both-drop only under a
+            // top-level '='), so it too stays out of the value-safe tier —
+            // [DorisPushdownEvidence.JSON_EXTRACT_SCALAR]
+            .add(RewriteJsonExtractScalarEquality(::quoted))
             .build()
     }
 
