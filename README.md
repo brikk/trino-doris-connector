@@ -43,12 +43,19 @@ Predicates and query shapes the connector pushes into Doris:
 | `NOT` / `AND` / `OR` | composed remote predicates | over value-identical operands (e.g. `array_position` comparisons) |
 | `LIMIT n` | `LIMIT n` | |
 | `ORDER BY ... LIMIT n` (TopN) | `ORDER BY ... NULLS FIRST/LAST LIMIT n` | non-text sort keys; all four NULL orderings render natively |
+| `count(*)` / `count(col)` / `count(DISTINCT col)` | `count(...)` | any column type for plain counts; DISTINCT on non-text exact types only |
+| `min` / `max` | `min(col)` / `max(col)` | numeric, decimal (incl. LARGEINT), date, datetime, boolean — not text (collation), not FLOAT/DOUBLE (Doris ranks NaN largest, Trino doesn't) |
+| `sum([DISTINCT] col)` | `sum(...)` | DECIMAL(p≤18) only — every other sum type overflows *silently* in Doris where Trino raises an error, so those stay in Trino |
+| `GROUP BY` (with the above) | `GROUP BY ...` | grouping keys restricted to the same non-text exact types; NULL grouping verified identical |
 
 Deliberately **not** pushed (kept in Trino to guarantee correct results):
 
 - String comparisons, `LIKE`, and string TopN — Doris collation differs from Trino; only
   `IS [NOT] NULL` is pushed for string columns.
 - `FLOAT`/`DOUBLE` equality — approximate types.
+- `sum`/`avg` outside the table above — Doris wraps integer/decimal/LARGEINT sum overflow
+  silently and truncates decimal averages where Trino rounds; these run in Trino so overflow
+  still fails loudly and results stay Trino-exact.
 - Anything whose Doris semantics differ from Trino's (e.g. `element_at`, `length`): unknown or
   unproven expressions always stay in Trino. Partially-pushable filters are split — the safe
   conjuncts go remote, the rest are evaluated in Trino.

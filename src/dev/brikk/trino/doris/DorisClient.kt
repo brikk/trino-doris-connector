@@ -19,6 +19,7 @@ import com.google.common.util.concurrent.MoreExecutors.directExecutor
 import com.google.inject.Inject
 import com.mysql.cj.jdbc.JdbcStatement
 import io.airlift.log.Logger
+import io.trino.plugin.base.aggregation.AggregateFunctionRewriter
 import io.trino.plugin.base.expression.ConnectorExpressionRewriter
 import io.trino.plugin.base.mapping.IdentifierMapping
 import io.trino.plugin.jdbc.BaseJdbcClient
@@ -27,6 +28,7 @@ import io.trino.plugin.jdbc.ColumnMapping
 import io.trino.plugin.jdbc.ConnectionFactory
 import io.trino.plugin.jdbc.JdbcColumnHandle
 import io.trino.plugin.jdbc.JdbcErrorCode.JDBC_ERROR
+import io.trino.plugin.jdbc.JdbcExpression
 import io.trino.plugin.jdbc.JdbcSortItem
 import io.trino.plugin.jdbc.JdbcSplit
 import io.trino.plugin.jdbc.JdbcTableHandle
@@ -34,8 +36,11 @@ import io.trino.plugin.jdbc.JdbcTypeHandle
 import io.trino.plugin.jdbc.QueryBuilder
 import io.trino.plugin.jdbc.RemoteTableName
 import io.trino.plugin.jdbc.WriteMapping
+import io.trino.plugin.jdbc.aggregation.ImplementCount
+import io.trino.plugin.jdbc.aggregation.ImplementCountAll
 import io.trino.plugin.jdbc.expression.JdbcConnectorExpressionRewriterBuilder
 import io.trino.plugin.jdbc.expression.ParameterizedExpression
+import io.trino.plugin.jdbc.expression.RewriteVariable
 import io.trino.plugin.jdbc.logging.RemoteQueryModifier
 import io.trino.spi.StandardErrorCode.NOT_SUPPORTED
 import io.trino.spi.TrinoException
@@ -341,13 +346,83 @@ class DorisClient @Inject constructor(
     // so the engine may drop its local TopN entirely.
     override fun isTopNGuaranteed(session: ConnectorSession): Boolean = true
 
+    /**
+     * Verified aggregate pushdown (PLAN §6.5, P4), one live-proven family at a time. The
+     * argument rewriter is DELIBERATELY only [RewriteVariable] (quote a column reference):
+     * aggregate arguments must stay bare columns — no derived-expression surface. Family
+     * verdicts (full proofs in `dev-docs/NOTES-p4-aggregates.md`, pinned by
+     * `TestDorisP4AggregateProbes`):
+     *
+     * - `count(*)` / `count(x)`: pushed (stock rules; bigint result; empty/all-NULL proven).
+     * - `count(DISTINCT x)`, exact key types: pushed ([DorisImplementCountDistinct]).
+     * - `min/max`, exact key types: pushed ([DorisImplementMinMax]); text (collation) and
+     *   REAL/DOUBLE (Doris max = NaN vs Trino 483 max = Infinity — divergent) stay local.
+     * - `sum(DECIMAL(p<=18, s))`: pushed ([DorisImplementSum]); every other sum family stays
+     *   local — Doris sums wrap SILENTLY (bigint at 2^64, decimal/largeint at 2^128) where
+     *   Trino throws.
+     * - `avg`: NEVER pushed. Doris avg(DECIMALV3(p, s)) computes at scale max(s, 4) with
+     *   TRUNCATION (live: avg{0.0001, 0.0000} = 0.0000 vs Trino HALF_UP 0.0001 at s=4) and
+     *   silently corrupts at p=38 (intermediate overflow); Doris avg(BIGINT) computes an
+     *   EXACT wide integer sum (live: avg{2^53, 1, -2^53, 1} = 0.5) while Trino 483
+     *   accumulates in DOUBLE (order-dependent, lossy — BigintAverageAggregations). Kept
+     *   local, Trino semantics preserved.
+     */
+    private val aggregateFunctionRewriter: AggregateFunctionRewriter<JdbcExpression, ParameterizedExpression> = AggregateFunctionRewriter(
+        JdbcConnectorExpressionRewriterBuilder.newBuilder()
+            .add(RewriteVariable { name -> quoted(name) })
+            .build(),
+        ImmutableSet.of(
+            ImplementCountAll(BIGINT_TYPE_HANDLE),
+            ImplementCount(BIGINT_TYPE_HANDLE),
+            DorisImplementCountDistinct(),
+            DorisImplementMinMax(),
+            DorisImplementSum(),
+        ),
+    )
+
+    override fun implementAggregation(
+        session: ConnectorSession,
+        aggregate: AggregateFunction,
+        assignments: Map<String, ColumnHandle>,
+    ): Optional<JdbcExpression> {
+        val rewritten = aggregateFunctionRewriter.rewrite(session, aggregate, assignments)
+        if (log.isDebugEnabled) {
+            if (rewritten.isPresent) {
+                log.debug("aggregate pushdown accepted: %s -> %s", aggregate, rewritten.get().expression)
+            } else {
+                log.debug("aggregate pushdown rejected (no verified family): %s", aggregate)
+            }
+        }
+        return rewritten
+    }
+
+    /**
+     * GROUP BY comes with aggregate pushdown, so every grouping key must be an exact-pushable
+     * type ([DorisAggregatePushdown.isExactPushableKeyType]) — a STRICTER form of base-jdbc's
+     * `preventTextualTypeAggregationPushdown` (text keys are a collation hazard, REAL/DOUBLE
+     * keys a NaN/±0.0 grouping hazard, everything else unproven). NULL grouping semantics are
+     * live-proven identical (NULL keys form one group; multi-key NULL combinations likewise).
+     */
     override fun supportsAggregationPushdown(
         session: ConnectorSession,
         table: JdbcTableHandle,
         aggregates: List<AggregateFunction>,
         assignments: Map<String, ColumnHandle>,
         groupingSets: List<List<ColumnHandle>>,
-    ): Boolean = false
+    ): Boolean {
+        val unsupportedKey = groupingSets.flatten()
+            .map { it as JdbcColumnHandle }
+            .firstOrNull { !DorisAggregatePushdown.isExactPushableKeyType(it.columnType) }
+        if (unsupportedKey != null) {
+            log.debug(
+                "aggregate pushdown rejected (grouping key type not exact-pushable: %s %s)",
+                unsupportedKey.columnName,
+                unsupportedKey.columnType,
+            )
+            return false
+        }
+        return true
+    }
 
     companion object {
         private val log = Logger.get(DorisClient::class.java)
@@ -362,19 +437,15 @@ class DorisClient @Inject constructor(
             SortOrder.DESC_NULLS_LAST to "DESC NULLS LAST",
         )
 
-        /** Non-text exact types only (KDoc on [supportsTopN] carries the exclusion evidence). */
-        private fun isPushableSortKey(type: Type): Boolean = when (type) {
-            is io.trino.spi.type.TinyintType,
-            is io.trino.spi.type.SmallintType,
-            is io.trino.spi.type.IntegerType,
-            is io.trino.spi.type.BigintType,
-            is io.trino.spi.type.DecimalType,
-            is io.trino.spi.type.DateType,
-            is io.trino.spi.type.TimestampType,
-            is io.trino.spi.type.BooleanType,
-            -> true
-            else -> false
-        }
+        /**
+         * Non-text exact types only (KDoc on [supportsTopN] carries the exclusion evidence).
+         * The SAME identity evidence covers min/max arguments and GROUP BY keys, so P4 shares
+         * the set ([DorisAggregatePushdown.isExactPushableKeyType]).
+         */
+        private fun isPushableSortKey(type: Type): Boolean = DorisAggregatePushdown.isExactPushableKeyType(type)
+
+        /** Synthesized result handle for remote BIGINT aggregate results (count family). */
+        private val BIGINT_TYPE_HANDLE: JdbcTypeHandle = DorisTypeMapping.toTypeHandle("bigint")
 
         private const val COLUMNS_QUERY = """
             SELECT COLUMN_NAME, COLUMN_TYPE, IS_NULLABLE, COLUMN_COMMENT
