@@ -58,6 +58,34 @@ against PLAN §6.5/§10-P3, SR K6 + drift watchlist.
   `((array_position(`a_int`, 1) = 1) OR (array_position(`a_int`, 9) = 1))`; the
   never-compose battery for contains/arrays_overlap.
 
+## Dynamic catalog management (side quest, proven)
+
+`CREATE CATALOG doris_dyn USING doris WITH ("connection-url" = '...', "connection-user" =
+'...', "doris.query-timeout" = '300s', ...)` works with NO connector changes —
+`TestDorisDynamicCatalog` proves create/query/pushdown/read-only-denial/drop parity with a
+static catalog (test recipe = upstream 483 `TestDynamicCatalogs`: `TestingTrinoServer` runs
+dynamic catalog management with an in-memory catalog store by default, so the test runner
+needs no extra coordinator properties; `DorisQueryRunner.dynamicCatalogBuilder()` just skips
+static catalog creation).
+
+Proven semantics worth carrying into user-facing docs later:
+- **Operator enablement**: `catalog.management=dynamic` on coordinator AND workers; add
+  `catalog.store=file` + `catalog.config-dir` if created catalogs must survive restarts (the
+  default in-memory store loses them; file store writes the WITH properties — INCLUDING
+  credentials — to `.properties` files on disk).
+- **Validation timing**: `DorisJdbcConfig` bean validation runs AT `CREATE CATALOG` time —
+  a non-MySQL URL, a URL with a database path, or a missing `connection-url` fails the
+  CREATE statement loudly (as configuration errors) and the catalog is not registered.
+  Host REACHABILITY is not checked at CREATE (Base JDBC connects lazily): a well-formed URL
+  to an unreachable host creates successfully and fails loudly on first use.
+- **Secrets caveat**: `connection-password` in a `WITH` clause travels through query
+  text/event listeners/query history; prefer secret references (`${'$'}{ENV:...}`) or the
+  static properties file for credentialed deployments.
+- `DROP CATALOG doris_dyn` removes it; subsequent queries fail with
+  `Catalog 'doris_dyn' not found`.
+- `doris.*` extras round-trip: `"doris.query-timeout" = '300s'` surfaces as the
+  `doris_dyn.query_timeout` session-property default (`300.00s`).
+
 ## Open items
 
 Unchanged from NOTES-p2b (scalar families per-family proofs, constant-array arrays_overlap,
