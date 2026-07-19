@@ -91,7 +91,7 @@ configurations.named("runtimeClasspath") {
 
 tasks.test {
     // Live P1a smoke tests target the already-running stock Doris 4.1.3 compose cluster
-    // (jvm/trino-doris/compose, mysql host port 9130). They fail loud if it is down.
+    // (./compose, mysql host port 9130). They fail loud if it is down.
     maxHeapSize = "3g"
 
     // Same JVM flags the in-process Trino 483 engine needs in trino-ducklake's test task

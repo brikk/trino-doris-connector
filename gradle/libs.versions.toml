@@ -1,0 +1,25 @@
+[versions]
+kotlin = "2.3.10"
+junit = "5.12.2"
+assertj = "3.27.3"
+trino = "483"
+mysql = "9.7.0"
+detekt = "2.0.0-alpha.3"
+
+[libraries]
+kotlin-bom = { module = "org.jetbrains.kotlin:kotlin-bom", version.ref = "kotlin" }
+
+trino-bom = { module = "io.trino:trino-root", version.ref = "trino" }
+mysql-jdbc = { module = "com.mysql:mysql-connector-j", version.ref = "mysql" }
+
+junit-bom = { module = "org.junit:junit-bom", version.ref = "junit" }
+junit-jupiter-api = { module = "org.junit.jupiter:junit-jupiter-api" }
+junit-jupiter-engine = { module = "org.junit.jupiter:junit-jupiter-engine" }
+junit-platform-launcher = { module = "org.junit.platform:junit-platform-launcher" }
+assertj-core = { module = "org.assertj:assertj-core", version.ref = "assertj" }
+
+kotlin-test-junit = { module = "org.jetbrains.kotlin:kotlin-test-junit", version.ref = "kotlin" }
+
+[plugins]
+kotlin-jvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }
+detekt = { id = "dev.detekt", version.ref = "detekt" }

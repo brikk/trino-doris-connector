@@ -1,0 +1,47 @@
+.gradle
+build/
+!gradle/wrapper/gradle-wrapper.jar
+!**/src/main/**/build/
+!**/src/test/**/build/
+
+### STS ###
+.apt_generated
+.classpath
+.factorypath
+.project
+.settings
+.springBeans
+.sts4-cache
+bin/
+!**/src/main/**/bin/
+!**/src/test/**/bin/
+
+### IntelliJ IDEA ###
+.idea
+*.iws
+*.iml
+*.ipr
+out/
+!**/src/main/**/out/
+!**/src/test/**/out/
+
+### NetBeans ###
+/nbproject/private/
+/nbbuild/
+/dist/
+/nbdist/
+/.nb-gradle/
+
+### VS Code ###
+.vscode/
+
+### Kotlin ###
+# Kotlin daemon session metadata (Kotlin 2.x creates this at the project root)
+.kotlin/
+
+### Compose runtime confs ###
+# Doris's init_fe.sh / init_be.sh APPEND priority_networks to the mounted
+# fe.conf / be.conf at every boot; up.sh stages throwaway runtime copies from
+# the tracked pristine files so those appends never pollute the repo.
+compose/.fe.conf.runtime
+compose/.be.conf.runtime
