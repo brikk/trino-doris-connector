@@ -1,0 +1,457 @@
+########################################################################
+# STOCK TRINO 483 MySQL CONNECTOR vs DORIS 4.1.3 - RAW SMOKE OUTPUT
+# Generated: 2026-07-19T01:45:19Z
+########################################################################
+
+=== Trino CLI version ===
+Trino CLI 483
+=== Trino image digest ===
+trinodb/trino@sha256:db58cc93e593a2706553745f276bb119c9810e69918be56ecde088ba7ccb0534
+=== Doris FE image digest ===
+apache/doris@sha256:3dd47644cd9fa8152028bdae449e77170ab0de004bd7a3fa311a204a106c26c7
+=== Doris VERSION() ===
+5.7.99
+doris version doris-4.1.3-rc02-7126cf65d96
+
+=== Catalog properties (doris.properties) ===
+connector.name=mysql
+connection-url=jdbc:mysql://172.30.81.10:9030
+connection-user=root
+connection-password=
+
+########## STEP 1: CONNECTIVITY ##########
+=== SHOW SCHEMAS FROM doris ===
+"__internal_schema"
+"information_schema"
+"p0_array_probe0"
+"p0_exotic_probe"
+"p0_nest_probe"
+"p0_probe"
+
+=== SHOW TABLES FROM doris.p0_probe ===
+"arrays"
+"mapstruct"
+"nums"
+"opaque"
+"scalars"
+"scalars_view"
+
+########## STEP 2: DESCRIBE (TYPE SURFACE) ##########
+=== DESCRIBE doris.p0_probe.scalars ===
+"id","integer","",""
+"c_boolean","tinyint","",""
+"c_tinyint","tinyint","",""
+"c_smallint","smallint","",""
+"c_int","integer","",""
+"c_bigint","bigint","",""
+"c_largeint","decimal(20,0)","",""
+"c_float","real","",""
+"c_double","double","",""
+"c_dec9_2","decimal(9,2)","",""
+"c_dec38_10","decimal(38,10)","",""
+"c_dec76_10","number","",""
+"c_date","date","",""
+"c_dt0","timestamp(0)","",""
+"c_dt3","timestamp(3)","",""
+"c_dt6","timestamp(6)","",""
+"c_char10","char(10)","",""
+"c_varchar100","varchar(100)","",""
+"c_string","varchar(2147483643)","",""
+"c_json","json","",""
+
+=== DESCRIBE doris.p0_probe.arrays ===
+"id","integer","",""
+
+=== DESCRIBE doris.p0_probe.mapstruct ===
+"id","integer","",""
+
+=== DESCRIBE doris.p0_probe.opaque ===
+"id","integer","",""
+
+=== DESCRIBE doris.p0_probe.nums ===
+"n","bigint","",""
+
+=== DESCRIBE doris.p0_probe.scalars_view ===
+"id","integer","",""
+"c_int","integer","",""
+"c_varchar100","varchar(100)","",""
+
+########## STEP 2b: DROPPED COLUMNS (Doris side vs Trino side) ##########
+=== Doris information_schema.columns for p0_probe.scalars ===
+id	int	int(11)
+c_boolean	tinyint	tinyint(1)
+c_tinyint	tinyint	tinyint(4)
+c_smallint	smallint	smallint(6)
+c_int	int	int(11)
+c_bigint	bigint	bigint(20)
+c_largeint	bigint unsigned	largeint
+c_float	float	float
+c_double	double	double
+c_dec9_2	decimal	decimalv3(9, 2)
+c_dec38_10	decimal	decimalv3(38, 10)
+c_dec76_10	decimal	decimalv3(76, 10)
+c_date	date	date
+c_dt0	datetime	datetime
+c_dt3	datetime	datetime(3)
+c_dt6	datetime	datetime(6)
+c_char10	char	char(10)
+c_varchar100	varchar	varchar(100)
+c_string	varchar	string
+c_json	json	json
+c_ipv4	ipv4	ipv4
+c_ipv6	ipv6	ipv6
+c_variant	variant	variant
+
+=== Doris information_schema.columns for p0_probe.arrays ===
+id	int	int(11)
+a_int	array	array<int(11)>
+a_bigint	array	array<bigint(20)>
+a_largeint	array	array<largeint>
+a_float	array	array<float>
+a_double	array	array<double>
+a_dec9_2	array	array<decimalv3(9, 2)>
+a_date	array	array<date>
+a_dt6	array	array<datetime(6)>
+a_boolean	array	array<tinyint(1)>
+a_varchar50	array	array<varchar(50)>
+a_string	array	array<string>
+a_array_int	array	array<array<int(11)>>
+
+=== Doris information_schema.columns for p0_probe.mapstruct/opaque ===
+mapstruct	id	int	int(11)
+mapstruct	m_si	map	map<string,int(11)>
+mapstruct	s_ab	struct	struct<int(11),string>
+opaque	id	int	int(11)
+opaque	bm_col	bitmap	bitmap
+opaque	hll_col	hll	hll
+opaque	aggst_col	unknown	unknown
+
+########## STEP 3: VALUE ROUND-TRIPS (scalars) ##########
+=== Trino: SELECT scalar cols (id order) ===
+ id | c_boolean | c_tinyint | c_smallint |    c_int    |       c_bigint       
+----+-----------+-----------+------------+-------------+----------------------
+  1 |         1 |        42 |       1234 |      100000 |  9000000000000000000 
+  2 |         0 |      -128 |     -32768 | -2147483648 | -9223372036854775808 
+  3 |         1 |       127 |      32767 |  2147483647 |  9223372036854775807 
+  4 |         1 |         0 |       NULL |           0 |                 NULL 
+  5 |      NULL |      NULL |       NULL |        NULL |                 NULL 
+  6 |      NULL |      NULL |       NULL |        NULL |                 NULL 
+  6 |      NULL |      NULL |       NULL |        NULL |                 NULL 
+  6 |      NULL |      NULL |       NULL |        NULL |                 NULL 
+(8 rows)
+
+=== Trino: LARGEINT -> decimal(20,0) (EXPECT overflow on 128-bit extremes) ===
+Query 20260719_014602_00011_vcjr4 failed: Decimal overflow
+
+
+=== Trino: only in-range LARGEINT rows (id=5 all null) ===
+ id | c_largeint 
+----+------------
+  5 |       NULL 
+  4 |       NULL 
+(2 rows)
+
+=== Trino: c_double incl Infinity/-0 (EXPECT error or degrade) ===
+Query 20260719_014613_00013_vcjr4 failed: Value '-∞' is outside of valid range for type java.lang.Double
+
+
+=== Trino: c_float ===
+ id |   c_float    
+----+--------------
+  1 |         3.14 
+  2 | -3.402823E38 
+  3 |  3.402823E38 
+(3 rows)
+
+=== Trino: DATE incl 0000-01-01 (EXPECT error/degrade) ===
+ id |   c_date   
+----+------------
+  1 | 2021-06-15 
+  2 | 0000-01-01 
+  3 | 9999-12-31 
+  4 | 2000-02-29 
+  5 | NULL       
+  6 | NULL       
+  6 | NULL       
+  6 | NULL       
+(8 rows)
+
+=== Trino: DATETIME(6) precision + 0000/9999 edges ===
+ id |        c_dt0        |          c_dt3          |           c_dt6            
+----+---------------------+-------------------------+----------------------------
+  1 | 2021-06-15 12:34:56 | 2021-06-15 12:34:56.789 | 2021-06-15 12:34:56.789012 
+  2 | 0000-01-01 00:00:00 | 0000-01-01 00:00:00.000 | 0000-01-01 00:00:00.000000 
+  3 | 9999-12-31 23:59:59 | 9999-12-31 23:59:59.999 | 9999-12-31 23:59:59.999999 
+  4 | NULL                | NULL                    | 2000-02-29 01:02:03.000001 
+  5 | NULL                | NULL                    | NULL                       
+  6 | NULL                | NULL                    | NULL                       
+  6 | NULL                | NULL                    | NULL                       
+  6 | NULL                | NULL                    | NULL                       
+(8 rows)
+
+=== Trino: strings + json + decimals ===
+ id |  c_char10  |         c_varchar100          |          c_string           |                               c_json                               
+----+------------+-------------------------------+-----------------------------+--------------------------------------------------------------------
+  1 | char10     | a normal varchar              | a normal string             | {"arr":[1,2,3],"k":"v","n":42}                                     
+  5 | NULL       | NULL                          | NULL                        | NULL                                                               
+  4 | ab         | comma,'single'"double"[br]\bs | emoji 😀 CJK 中文 tab	tab nl+| {"path":"a\\b","q":"he said \"hi\"","unicode":"中文 \uD83D\uDE00"} 
+    |            |                               | nl                          |                                                                    
+(3 rows)
+
+=== Trino: decimals incl dec76_10 -> number surrogate ===
+ id |  c_dec9_2   |                c_dec38_10                |                                  c_dec76_10                                   
+----+-------------+------------------------------------------+-------------------------------------------------------------------------------
+  1 |  1234567.89 |          12345678901234567890.1234567890 | 123456789012345678901234567890.123456789                                      
+  2 | -9999999.99 | -9999999999999999999999999999.9999999999 | -99999999999999999999999999999999999999999999999999999999999999999.9999999999 
+  3 |  9999999.99 |  9999999999999999999999999999.9999999999 | 99999999999999999999999999999999999999999999999999999999999999999.9999999999  
+(3 rows)
+
+=== Doris side same rows for decimals (oracle) ===
+id	c_dec9_2	c_dec38_10	c_dec76_10
+1	1234567.89	12345678901234567890.1234567890	123456789012345678901234567890.1234567890
+2	-9999999.99	-9999999999999999999999999999.9999999999	-99999999999999999999999999999999999999999999999999999999999999999.9999999999
+3	9999999.99	9999999999999999999999999999.9999999999	99999999999999999999999999999999999999999999999999999999999999999.9999999999
+
+########## STEP 4: PUSHDOWN EXPLAINS ##########
+=== (a) numeric range predicate: c_int > 1000 ===
+"Trino version: 483
+Fragment 0 [SOURCE]
+    Output layout: [id, c_int]
+    Output partitioning: SINGLE []
+    Output[columnNames = [id, c_int]]
+    │   Layout: [id:integer, c_int:integer]
+    │   Estimates: {rows: ? (?), cpu: 0, memory: 0B, network: 0B}
+    └─ TableScan[table = doris:p0_probe.scalars p0_probe.scalars constraint on [c_int] columns=[id:integer:INT, c_int:integer:INT]]
+           Layout: [id:integer, c_int:integer]
+           Estimates: {rows: ? (?), cpu: ?, memory: 0B, network: 0B}
+           id := id:integer:INT
+           c_int := c_int:integer:INT
+
+"
+
+=== (b) varchar equality: c_varchar100 = 'a normal varchar' ===
+"Trino version: 483
+Fragment 0 [SOURCE]
+    Output layout: [id]
+    Output partitioning: SINGLE []
+    Output[columnNames = [id]]
+    │   Layout: [id:integer]
+    │   Estimates: {rows: ? (?), cpu: 0, memory: 0B, network: 0B}
+    └─ ScanFilterProject[table = doris:p0_probe.scalars p0_probe.scalars constraint on [c_varchar100] columns=[id:integer:INT, c_varchar100:varchar(100):VARCHAR], filterPredicate = (c_varchar100 = varchar(100) 'a normal varchar')]
+           Layout: [id:integer]
+           Estimates: {rows: ? (?), cpu: ?, memory: 0B, network: 0B}/{rows: ? (?), cpu: ?, memory: 0B, network: 0B}/{rows: ? (?), cpu: ?, memory: 0B, network: 0B}
+           id := id:integer:INT
+           c_varchar100 := c_varchar100:varchar(100):VARCHAR
+
+"
+
+=== (c) LIMIT 10 ===
+Query 20260719_014645_00021_vcjr4 failed: line 1:16: Column 'id' cannot be resolved
+LINE 1: EXPLAIN SELECT id FROM nums LIMIT 10
+                       ^
+
+
+=== (c) LIMIT 10 on nums (col n) ===
+"Trino version: 483
+Fragment 0 [SOURCE]
+    Output layout: [n]
+    Output partitioning: SINGLE []
+    Output[columnNames = [n]]
+    │   Layout: [n:bigint]
+    │   Estimates: {rows: 10 (90B), cpu: 0, memory: 0B, network: 0B}
+    └─ TableScan[table = doris:p0_probe.nums p0_probe.nums limit=10]
+           Layout: [n:bigint]
+           Estimates: {rows: 10 (90B), cpu: 90, memory: 0B, network: 0B}
+           n := n:bigint:BIGINT
+
+"
+
+=== (d) ORDER BY n LIMIT 10 (TopN) ===
+"Trino version: 483
+Fragment 0 [SOURCE]
+    Output layout: [n]
+    Output partitioning: SINGLE []
+    Output[columnNames = [n]]
+    │   Layout: [n:bigint]
+    │   Estimates: {rows: 10 (90B), cpu: 0, memory: 0B, network: 0B}
+    └─ TableScan[table = doris:p0_probe.nums p0_probe.nums sortOrder=[n:bigint:BIGINT ASC NULLS LAST] limit=10]
+           Layout: [n:bigint]
+           Estimates: {rows: 10 (90B), cpu: 90, memory: 0B, network: 0B}
+           n := n:bigint:BIGINT
+
+"
+
+=== (e) count(*) ===
+"Trino version: 483
+Fragment 0 [SOURCE]
+    Output layout: [pfgnrtd]
+    Output partitioning: SINGLE []
+    Output[columnNames = [_col0]]
+    │   Layout: [pfgnrtd:bigint]
+    │   Estimates: {rows: 1 (9B), cpu: 0, memory: 0B, network: 0B}
+    │   _col0 := pfgnrtd
+    └─ TableScan[table = doris:Query[SELECT count(*) AS `_pfgnrtd_0` FROM `p0_probe`.`nums`] columns=[_pfgnrtd_0:bigint:bigint]]
+           Layout: [pfgnrtd:bigint]
+           Estimates: {rows: 1 (9B), cpu: 9, memory: 0B, network: 0B}
+           pfgnrtd := _pfgnrtd_0:bigint:bigint
+
+"
+
+=== (e2) sum(n) ===
+"Trino version: 483
+Fragment 0 [SOURCE]
+    Output layout: [pfgnrtd]
+    Output partitioning: SINGLE []
+    Output[columnNames = [_col0]]
+    │   Layout: [pfgnrtd:bigint]
+    │   Estimates: {rows: 1 (9B), cpu: 0, memory: 0B, network: 0B}
+    │   _col0 := pfgnrtd
+    └─ TableScan[table = doris:Query[SELECT sum(`n`) AS `_pfgnrtd_0` FROM `p0_probe`.`nums`] columns=[_pfgnrtd_0:bigint:BIGINT]]
+           Layout: [pfgnrtd:bigint]
+           Estimates: {rows: 1 (9B), cpu: 9, memory: 0B, network: 0B}
+           pfgnrtd := _pfgnrtd_0:bigint:BIGINT
+
+"
+
+########## STEP 4b: VERBATIM REMOTE SQL (from FE audit log) ##########
+(Client=172.30.81.2 = trino-doris-smoke container)
+
+--- numeric range (a): Trino WHERE c_int > 1000 ---
+REMOTE: SELECT `id`, `c_int` FROM `p0_probe`.`scalars` WHERE `c_int` > 1000
+  => PREDICATE PUSHED
+
+--- varchar equality (b): Trino WHERE c_varchar100 = 'a normal varchar' ---
+REMOTE: SELECT `id`, `c_varchar100` FROM `p0_probe`.`scalars` WHERE `c_varchar100` = 'a normal varchar'
+  => PUSHED to Doris, BUT Trino EXPLAIN also keeps a local ScanFilterProject filterPredicate (re-checks locally)
+
+--- LIMIT 10 (c) ---
+REMOTE: SELECT `n` FROM `p0_probe`.`nums` LIMIT 10   => PUSHED
+
+--- ORDER BY n LIMIT 10 / TopN (d) ---
+REMOTE: SELECT `n` FROM `p0_probe`.`nums` ORDER BY ISNULL(`n`) ASC, `n` ASC LIMIT 10   => PUSHED (MySQL-dialect ISNULL() null-ordering wrapper)
+
+--- count(*) (e) ---
+REMOTE: SELECT `_pfgnrtd_0` FROM (SELECT count(*) AS `_pfgnrtd_0` FROM `p0_probe`.`nums`) o   => PUSHED
+
+--- sum(n) (e2) ---
+REMOTE: SELECT `_pfgnrtd_0` FROM (SELECT sum(`n`) AS `_pfgnrtd_0` FROM `p0_probe`.`nums`) o   => PUSHED
+
+NOTE: every scan is preceded by a companion 'SELECT * FROM <table>' metadata-probe
+      statement (ReturnRows=1) the MySQL connector issues to read ResultSetMetaData.
+      The DATA scan itself is a SINGLE statement (confirms G2 single-statement-per-scan).
+
+########## STEP 4f: ARRAY predicate contains() (arrays don't surface) ##########
+=== Trino: try contains(a_int, 1) on arrays table ===
+Query 20260719_014755_00032_vcjr4 failed: line 1:46: Column 'a_int' cannot be resolved
+LINE 1: EXPLAIN SELECT id FROM arrays WHERE contains(a_int, 1)
+                                                     ^
+
+
+########## STEP 5: BEHAVIOR (session/transaction/cancellation) ##########
+=== Session/handshake statements the connector issued (all State=OK, no errors) ===
+  SET SESSION TRANSACTION READ ONLY   -> ACCEPTED by Doris (State=OK)
+  SET autocommit=1                    -> ACCEPTED
+  SET SESSION time_zone='+00:00'      -> ACCEPTED
+  SET net_write_timeout=600           -> ACCEPTED
+  SET character_set_results = NULL    -> ACCEPTED
+  SET sql_mode='ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES' -> ACCEPTED
+  SET sql_select_limit=1 / =DEFAULT   -> ACCEPTED (metadata-probe row cap)
+  Connector/J handshake @@session var block SELECT -> ACCEPTED
+  => No SET TRANSACTION ISOLATION rejection observed; Doris tolerates the MySQL session setup.
+
+=== Cancellation test ===
+  Heavy query: SELECT count(DISTINCT a.n + b.n) FROM nums a, nums b (cartesian, join done in Trino)
+  Doris-side scan observed: Id 454  'SELECT `n` FROM `p0_probe`.`nums`'  Time=41s, State=OK (live)
+  Trino kill_query(20260719_014908_00038_vcjr4) -> Trino query FAILED 'Query killed'
+  Doris processlist Id 454 -> GONE within ~1s of the Trino cancel.
+  VERDICT: Trino query cancellation DOES propagate and kill the live Doris scan.
+
+########## STEP 6: WRITE-PATH DANGER PROBE (sandbox p0_trino_smoke) ##########
+Sandbox seeded via Doris directly: p0_trino_smoke.t1 = (1,a),(2,b),(3,c)
+
+=== (w1) Trino INSERT into existing Doris table ===
+Query 20260719_015035_00045_vcjr4 failed: errCode = 2, detailMessage = replication num should be less than the number of available backends. replication num is 3, available backend num is 1
+
+
+=== (w2) Trino DELETE from Doris table ===
+DELETE: 0 rows
+
+=== (w3) Trino CREATE TABLE in Doris schema ===
+Query 20260719_015037_00047_vcjr4 failed: errCode = 2, detailMessage = 
+mismatched input 'tinytext' expecting {'AGG_STATE', 'ALL', 'ARRAY', 'BIGINT', 'BITMAP', 'BOOLEAN', CHAR, 'DATE', 'DATETIME', 'DATETIMEV2', 'DATEV2', 'DATETIMEV1', 'DATEV1', 'DECIMAL', 'DECIMALV2', 'DECIMALV3', 'DOUBLE', 'FLOAT', 'HLL', 'INT', 'INTEGER', 'IPV4', 'IPV6', 'JSON', 'JSONB', 'LARGEINT', 'MAP', 'QUANTILE_STATE', 'SMALLINT', 'STRING', 'STRUCT', 'TEXT', 'TIME', 'TIMESTAMPTZ', 'TINYINT', 'VARBINARY', 'VARCHAR', 'VARIANT'}(line 1, pos 68)
+
+
+
+=== (w4) Trino CREATE TABLE AS SELECT ===
+Query 20260719_015038_00048_vcjr4 failed: errCode = 2, detailMessage = 
+mismatched input 'tinytext' expecting {'AGG_STATE', 'ALL', 'ARRAY', 'BIGINT', 'BITMAP', 'BOOLEAN', CHAR, 'DATE', 'DATETIME', 'DATETIMEV2', 'DATEV2', 'DATETIMEV1', 'DATEV1', 'DECIMAL', 'DECIMALV2', 'DECIMALV3', 'DOUBLE', 'FLOAT', 'HLL', 'INT', 'INTEGER', 'IPV4', 'IPV6', 'JSON', 'JSONB', 'LARGEINT', 'MAP', 'QUANTILE_STATE', 'SMALLINT', 'STRING', 'STRUCT', 'TEXT', 'TIME', 'TIMESTAMPTZ', 'TINYINT', 'VARBINARY', 'VARCHAR', 'VARIANT'}(line 1, pos 63)
+
+
+
+=== (w5) Trino DROP TABLE ===
+DROP TABLE
+
+=== (w6) Trino UPDATE ===
+Query 20260719_015039_00050_vcjr4 failed: errCode = 2, detailMessage = Only unique table could be updated.
+
+
+########## STEP 6 RESULTS: WRITE-PATH DANGER ##########
+Stock Trino MySQL connector does NOT refuse writes. Verbatim mutation SQL reaching Doris:
+
+  DELETE (SUCCEEDED, State=OK): DELETE FROM `p0_trino_smoke`.`t1` WHERE `id` = 1
+  DELETE (SUCCEEDED, State=OK): DELETE FROM `p0_trino_smoke`.`t2` WHERE `id` = 1
+    -> t2 verified mutated: {1:orig1,2:orig2} BECAME {2:orig2}. ROW PERMANENTLY DELETED via Trino.
+  UPDATE (reached Doris; failed on model): UPDATE `p0_trino_smoke`.`t1` SET `v`='updated' WHERE `id`=2
+    -> only rejected by Doris ('Only unique table could be updated'), NOT by the connector.
+  CTAS (reached Doris): CREATE TABLE `p0_trino_smoke`.`tmp_trino_...` AS SELECT * FROM ... WHERE 0=1
+    -> connector even creates temp tables as part of its write machinery.
+  INSERT (reached Doris; failed on env replication-num default), CREATE/CTAS (failed on 'tinytext' DDL rendering).
+  DROP TABLE: returned success path.
+
+VERDICT: The stock connector has INSERT/DELETE/UPDATE/CREATE/DROP all WIRED and firing.
+  DELETE succeeded and destroyed a row. This is the concrete motivation for G7 (read-only
+  defense in depth) and a SELECT-only Doris account.
+
+########## APPENDIX: RAW FE AUDIT EXCERPTS (verbatim Stmt=) ##########
+=== Read-path scan statements (Client=trino container 172.30.81.2) ===
+[StmtType=SELECT] SELECT * FROM `p0_probe`.`arrays`
+[StmtType=SELECT] SELECT * FROM `p0_probe`.`mapstruct`
+[StmtType=SELECT] SELECT * FROM `p0_probe`.`nums`
+[StmtType=SELECT] SELECT * FROM `p0_probe`.`opaque`
+[StmtType=SELECT] SELECT * FROM `p0_probe`.`scalars_view`
+[StmtType=SELECT] SELECT * FROM `p0_probe`.`scalars`
+[StmtType=SELECT] SELECT `_pfgnrtd_0` FROM (SELECT count(*) AS `_pfgnrtd_0` FROM `p0_probe`.`nums`) o
+[StmtType=SELECT] SELECT `_pfgnrtd_0` FROM (SELECT sum(`n`) AS `_pfgnrtd_0` FROM `p0_probe`.`nums`) o
+[StmtType=SELECT] SELECT `id`, `c_boolean`, `c_tinyint`, `c_smallint`, `c_int`, `c_bigint` FROM `p0_probe`.`scalars`
+[StmtType=SELECT] SELECT `id`, `c_char10`, `c_varchar100`, `c_string`, `c_json` FROM `p0_probe`.`scalars` WHERE `id` IN (1,4,5)
+[StmtType=SELECT] SELECT `id`, `c_date` FROM `p0_probe`.`scalars`
+[StmtType=SELECT] SELECT `id`, `c_dec9_2`, `c_dec38_10`, `c_dec76_10` FROM `p0_probe`.`scalars` WHERE (`id` >= 1 AND `id` <= 3)
+[StmtType=SELECT] SELECT `id`, `c_double` FROM `p0_probe`.`scalars`
+[StmtType=SELECT] SELECT `id`, `c_dt0`, `c_dt3`, `c_dt6` FROM `p0_probe`.`scalars`
+[StmtType=SELECT] SELECT `id`, `c_float` FROM `p0_probe`.`scalars` WHERE (`id` >= 1 AND `id` <= 3)
+[StmtType=SELECT] SELECT `id`, `c_int` FROM `p0_probe`.`scalars` WHERE `c_int` > 1000
+[StmtType=SELECT] SELECT `id`, `c_largeint` FROM `p0_probe`.`scalars`
+[StmtType=SELECT] SELECT `id`, `c_largeint` FROM `p0_probe`.`scalars` WHERE (`id` >= 4 AND `id` <= 5)
+[StmtType=SELECT] SELECT `id`, `c_varchar100` FROM `p0_probe`.`scalars` WHERE `c_varchar100` = 'a normal varchar'
+[StmtType=SELECT] SELECT `n` FROM `p0_probe`.`nums`
+[StmtType=SELECT] SELECT `n` FROM `p0_probe`.`nums` LIMIT 10
+[StmtType=SELECT] SELECT `n` FROM `p0_probe`.`nums` ORDER BY ISNULL(`n`) ASC, `n` ASC LIMIT 10
+[StmtType=SELECT] SELECT `n` FROM `p0_probe`.`nums` WHERE (`n` >= 1 AND `n` <= 1001000)
+[StmtType=SELECT] SELECT `n` FROM `p0_probe`.`nums` WHERE `n` > 0
+
+=== Session-setup statements ===
+SET SESSION TRANSACTION READ ONLY
+SET SESSION time_zone='+00:00'
+SET autocommit=1
+SET character_set_results = NULL
+SET net_write_timeout=600
+SET sql_mode='ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES'
+SET sql_select_limit=1
+SET sql_select_limit=DEFAULT
+
+=== Write-path statements (mutations attempted) ===
+[StmtType=CREATE State=ERR] CREATE TABLE `p0_trino_smoke`.`tmp_trino_f2073e9e_0d70a968` AS SELECT * FROM `p0_trino_smoke`.`t1` WHERE 0 = 1
+[StmtType=DELETE State=OK] DELETE FROM `p0_trino_smoke`.`t1` WHERE `id` = 1
+[StmtType=UPDATE State=ERR] UPDATE `p0_trino_smoke`.`t1` SET `v` = 'updated' WHERE `id` = 2
+[StmtType=CREATE State=ERR] CREATE TABLE `p0_trino_smoke`.`tmp_trino_388e1838_a86c1329` AS SELECT * FROM `p0_trino_smoke`.`t2` WHERE 0 = 1
+[StmtType=DELETE State=OK] DELETE FROM `p0_trino_smoke`.`t2` WHERE `id` = 1
