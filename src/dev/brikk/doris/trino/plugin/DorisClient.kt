@@ -18,6 +18,8 @@ import com.google.common.collect.ImmutableSet
 import com.google.common.util.concurrent.MoreExecutors.directExecutor
 import com.google.inject.Inject
 import com.mysql.cj.jdbc.JdbcStatement
+import io.airlift.log.Logger
+import io.trino.plugin.base.expression.ConnectorExpressionRewriter
 import io.trino.plugin.base.mapping.IdentifierMapping
 import io.trino.plugin.jdbc.BaseJdbcClient
 import io.trino.plugin.jdbc.BaseJdbcConfig
@@ -32,6 +34,8 @@ import io.trino.plugin.jdbc.JdbcTypeHandle
 import io.trino.plugin.jdbc.QueryBuilder
 import io.trino.plugin.jdbc.RemoteTableName
 import io.trino.plugin.jdbc.WriteMapping
+import io.trino.plugin.jdbc.expression.JdbcConnectorExpressionRewriterBuilder
+import io.trino.plugin.jdbc.expression.ParameterizedExpression
 import io.trino.plugin.jdbc.logging.RemoteQueryModifier
 import io.trino.spi.StandardErrorCode.NOT_SUPPORTED
 import io.trino.spi.TrinoException
@@ -40,6 +44,7 @@ import io.trino.spi.connector.ColumnHandle
 import io.trino.spi.connector.ConnectorSession
 import io.trino.spi.connector.SchemaTableName
 import io.trino.spi.connector.TableNotFoundException
+import io.trino.spi.expression.ConnectorExpression
 import io.trino.spi.type.Type
 import io.trino.spi.type.TypeManager
 import java.sql.Connection
@@ -84,6 +89,39 @@ class DorisClient @Inject constructor(
     false,
 ) {
     private val typeMapping = DorisTypeMapping(typeManager)
+
+    /**
+     * Typed ARRAY predicate rules (PLAN §6.1 layer 2, §6.2; P2b). Deliberately NO
+     * `addStandardRules` and NO boolean-composition rules ($not/$and/$or/$is_null): the
+     * `contains` rendering is predicate-level (not value-level) equivalent, so it must only
+     * ever surface as a top-level WHERE conjunct — which is exactly what
+     * `DefaultJdbcMetadata.applyFilter` + `convertPredicate` guarantee when no composition
+     * rules exist. Scalar expression families are P3. Evidence: [DorisPushdownEvidence].
+     */
+    private val connectorExpressionRewriter: ConnectorExpressionRewriter<ParameterizedExpression> = run {
+        val support = DorisArrayPushdownSupport(typeMapping, ::quoted)
+        JdbcConnectorExpressionRewriterBuilder.newBuilder()
+            .add(RewriteContains(support))
+            .add(RewriteArraysOverlap(support))
+            .add(RewriteArrayPositionComparison(support))
+            .build()
+    }
+
+    override fun convertPredicate(
+        session: ConnectorSession,
+        expression: ConnectorExpression,
+        assignments: Map<String, ColumnHandle>,
+    ): Optional<ParameterizedExpression> {
+        val rewritten = connectorExpressionRewriter.rewrite(session, expression, assignments)
+        if (log.isDebugEnabled) {
+            if (rewritten.isPresent) {
+                log.debug("pushdown accepted: %s -> %s", expression, rewritten.get().expression())
+            } else {
+                log.debug("pushdown rejected (unsupported shape): %s", expression)
+            }
+        }
+        return rewritten
+    }
 
     override fun listSchemas(connection: Connection): Collection<String> {
         // Doris exposes databases as JDBC catalogs; information_schema.schemata lists them
@@ -268,6 +306,8 @@ class DorisClient @Inject constructor(
     ): Boolean = false
 
     companion object {
+        private val log = Logger.get(DorisClient::class.java)
+
         private val HIDDEN_SCHEMAS = setOf("information_schema", "mysql", "__internal_schema")
 
         private const val COLUMNS_QUERY = """
