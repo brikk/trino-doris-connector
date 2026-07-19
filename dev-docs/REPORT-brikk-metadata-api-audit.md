@@ -64,7 +64,21 @@ Example measured from the JSON: source `json_extract_scalar` has **two** target 
 single `FunctionHazard` and cannot tell which Doris target it pins to. (For the other five 6.2 rules
 the source key maps to exactly one target, so only `json_extract_scalar` is currently ambiguous.)
 
-### A.3 Artifact coordinates and RELEASE status — **BLOCKING**
+### A.3 Artifact coordinates and RELEASE status — **BLOCKING** — CORRECTED 2026-07-19
+
+> **CORRECTION (2026-07-19, user-supplied + verified live):** the release-status claims below are
+> WRONG. `dev.brikk.house:brikk-sql-metadata-jvm:0.6.0` **is released on Maven Central**
+> (https://repo1.maven.org/maven2/dev/brikk/house/brikk-sql-metadata-jvm/0.6.0/) and its jar
+> **does contain** the hazard classes (`FunctionHazard`, `HazardVerdict`, `HazardRegistry`,
+> `GeneratedTrinoDorisHazardsKt`; classes dated 2026-07-15). The original audit checked only
+> `~/.m2` and the source tree's publish config — it never queried Maven Central.
+>
+> **What remains TRUE (verified against the 0.6.0 jar via javap):** `FunctionHazard` in 0.6.0
+> carries only `verdict, hazard, areas, provenance` — no `sourceName`/`targetName` — and
+> `HazardRegistry.lookup(source, target, name)` is single-valued and source-name-keyed. So the
+> D.1 additive-fields proposal and a follow-up release (0.7.0) are still required; only the
+> "no release has ever been cut" framing was wrong. D.3 shrinks to "cut the next release with
+> D.1 included."
 
 - **Coordinate:** `dev.brikk.house:brikk-sql-metadata-jvm` (module.yaml `artifactId: brikk-sql-metadata`; JVM publication suffix `-jvm`).
 - **Source-tree version today:** `0.7.0-SNAPSHOT` (in `publish.module-template.yaml`).
