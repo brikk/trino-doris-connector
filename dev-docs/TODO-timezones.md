@@ -27,19 +27,24 @@ the type boundary in v1, and no `TIMESTAMP WITH TIME ZONE` column is ever expose
 
 ### Open audit items (the actual TODO)
 
-1. **Parameter-binding zone safety (highest value).** Predicate pushdown binds datetime
-   literals through `StandardColumnMappings.timestampWriteFunction` /
-   `dateWriteFunctionUsingLocalDate` under Connector/J client-side prep emulation. Prove the
-   rendered literal is zone-independent with a matrix test: {Trino session zone} ×
-   {`doris.time-zone`} × {JVM default zone} × {DST-boundary dates, incl. a nonexistent and an
-   ambiguous local time}. Expect zoneless passthrough; pin it.
-2. **Session-zone variation suite.** All current differentials run in one fixed zone. Re-run
-   the key datetime differentials (domain pushdown, ARRAY<DATETIME>, min/max/TopN on
-   datetime) under 2–3 Trino session zones and a non-UTC `doris.time-zone` — results must be
-   byte-identical (zoneless types ⇒ zone changes must be a no-op; any diff is a bug).
-3. **`doris.time-zone` canary.** One test asserting that changing `doris.time-zone` does NOT
-   change any currently-pushed query's results (it should only matter for zone-sensitive
-   Doris functions we deliberately don't push). Guards future rule additions.
+1. **DONE 2026-07-19** (`TestDorisTimezoneAudit.testPushedTemporalLiteralsAreZoneIndependent`
+   + `testJvmDefaultZoneDoesNotLeakIntoBinding`). Matrix proven: {UTC, America/New_York,
+   Asia/Tokyo} Trino session zones × {default, Asia/Tokyo, America/New_York}
+   `doris.time-zone` (extra catalogs) × JVM default zone mutated to Pacific/Kiritimati (+14)
+   and America/New_York mid-test. DST-adversarial wall clocks (2026-03-08 02:30 nonexistent
+   in NY; 2026-11-01 01:30 ambiguous) and the 0000-01-01/9999-12-31 date edges: results
+   byte-identical everywhere AND the audit-log literal is the exact zoneless wall-clock text
+   (`'2026-03-08 02:30:00.123456'`, `'0000-01-01'`) in every zone. Zoneless passthrough PINNED.
+2. **DONE 2026-07-19** (`testDatetimePathsAreSessionZoneInvariant`). Domain pushdown,
+   ARRAY<DATETIME(6)> wire decode (UNNEST element compare), min/max(datetime) aggregate,
+   datetime TopN, and the scalar 0000/9999 edge reads — byte-identical under NY/Tokyo session
+   zones and through a Tokyo `doris.time-zone` catalog. No diffs.
+3. **DONE 2026-07-19** (`testDorisTimeZoneCanaryAcrossEveryPushedFamily`). One representative
+   per pushed family (domains, contains, array_position, cardinality, json, GUARDED
+   LIKE-prefix, aggregates, EAGER join) result-identical across `doris.time-zone` ∈
+   {default, Asia/Tokyo, America/New_York}. Guards future rule additions — re-run when a
+   family lands. NO surprises found in any of items 1–3; no zone-dependence exists in the
+   current pushed surface.
 4. **Future scalar rules must carry a zone proof.** If/when `date_trunc`, `year`/`month`,
    `unix_timestamp`/`from_unixtime`, or `str_to_date` pushdown lands (candidates list), each
    rule needs an explicit zone-semantics proof — several of these ARE zone-sensitive in Doris

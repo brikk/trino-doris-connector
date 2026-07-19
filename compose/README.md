@@ -64,6 +64,30 @@ wire but near-zero on disk), `p2_*`, `p3_*`, `p4_*`, and `p5_batch`. **No manual
 step exists anymore** — `./up.sh` + `./gradlew build` from zero is the supported path (this
 is what CI does).
 
+## Manual Trino smoke sandbox (`trino/`, user-facing)
+
+`trino/` is a **user-facing manual sandbox**: a single **Trino 483** coordinator with
+OUR `trino-doris` plugin installed and **dynamic catalog management** enabled, so you
+can log into the CLI and add your own Doris server at runtime via
+`CREATE CATALOG ... USING doris WITH (...)`. It is the **first production-shaped load
+of the plugin** — Trino's `PluginManager` `ServiceLoader`-scans the mounted plugin dir
+under `/usr/lib/trino/plugin/`, not the in-JVM test classpath.
+
+```sh
+./trino/up.sh          # assemble plugin (mise JDK 25), start Trino, wait healthy, print cheat sheet
+./trino/up.sh --rebuild
+./trino/down.sh
+docker exec -it trino-doris-manual trino    # get a CLI
+```
+
+Trino is on **http://localhost:18080**. It attaches to this cluster's
+`trino-doris-dev_doris-net` network so the bundled Doris at `172.30.81.10:9030` works
+with zero wiring for a first smoke; a template for an external Doris (with the
+SELECT-only `trino_ro` GRANT lines above) is in the printed cheat sheet. Full details,
+image-config gotchas, and a real end-to-end transcript (ServiceLoader plugin load +
+predicate-pushdown proof through a dynamically created catalog) are in
+[`trino/README.md`](trino/README.md).
+
 ## Multi-FE failover overlay (`multi-fe/`, OPTIONAL, manual/dev only)
 
 `multi-fe/` is a **separate, optional** overlay cluster used to produce the multi-FE

@@ -66,21 +66,17 @@ class TestDorisCancellation : AbstractTestQueryFramework() {
             // 1. The Trino query is running and its remote statement is live on the Doris FE.
             val trinoQueryId = awaitRunningTrinoQueryId(KILL_MARKER)
             val remoteMarker = DorisRemoteQueryModifier.marker(trinoQueryId)
-            await("Doris processlist entry for $remoteMarker", APPEAR_BOUND_MILLIS) {
-                DorisTestCluster.runningStatements().any { it.contains(remoteMarker) }
-            }
+            val dorisQueryId = awaitRemoteStatement(remoteMarker)
 
-            // 2. Kill the Trino query; the Doris query must leave the processlist promptly.
+            // 2. Kill the Trino query; the Doris-side work must be RELEASED promptly.
             val killStart = System.nanoTime()
             getQueryRunner().execute(
                 getSession(),
                 "CALL system.runtime.kill_query(query_id => '$trinoQueryId', message => 'p1b cancellation test')",
             )
-            await("Doris processlist clearance of $remoteMarker", CLEARANCE_BOUND_MILLIS) {
-                DorisTestCluster.runningStatements().none { it.contains(remoteMarker) }
-            }
+            awaitDorisRelease(remoteMarker, dorisQueryId, CLEARANCE_BOUND_MILLIS)
             val clearanceMillis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - killStart)
-            println("Doris processlist cleared ${clearanceMillis}ms after kill_query (ledger §D baseline ~1s, bound ${CLEARANCE_BOUND_MILLIS}ms)")
+            println("Doris work released ${clearanceMillis}ms after kill_query (ledger §D baseline ~1s, bound ${CLEARANCE_BOUND_MILLIS}ms)")
 
             // 3. The Trino side failed with the kill message.
             val result = queryFuture.get(30, TimeUnit.SECONDS)
@@ -97,11 +93,12 @@ class TestDorisCancellation : AbstractTestQueryFramework() {
         // SET SESSION doris.query_timeout applies `SET query_timeout` server-side on the scan
         // connection; the Doris timeout checker kills the still-running (send-blocked) query
         // ("query is timeout, killed by timeout checker" — P1b probe; PROBE §8/§9). The
-        // checker sweeps periodically, hence the generous release bound; measured ~9-11s for
-        // a 2s timeout. The timeout is 10s (not 2s) so the remote statement's observable
-        // lifetime comfortably exceeds polling latency on slow CI runners — with 2s the
-        // processlist entry could appear AND be killed between polls (CI flake 2026-07-19,
-        // run 29693604486). The contract under test is release-by-timeout, not the duration.
+        // 10s timeout keeps the statement observable on slow runners (first CI flake, run
+        // 29693604486). The RELEASE is asserted via the shared contract below — CI run
+        // 29694687854 proved the killed query's PROCESSLIST row can linger for minutes when
+        // the client side is too slow to touch the socket (the FE result receiver re-logs
+        // the cancel once per second until "Broken pipe"), so processlist emptiness alone is
+        // NOT the release signal; the timeout-checker kill in fe.log is.
         val session: Session = Session.builder(getSession())
             .setCatalogSessionProperty(DorisQueryRunner.CATALOG, DorisSessionProperties.QUERY_TIMEOUT, "10.00s")
             .build()
@@ -110,17 +107,13 @@ class TestDorisCancellation : AbstractTestQueryFramework() {
             val trinoQueryId = awaitRunningTrinoQueryId(TIMEOUT_MARKER)
             val remoteMarker = DorisRemoteQueryModifier.marker(trinoQueryId)
             val start = System.nanoTime()
-            await("Doris processlist entry for $remoteMarker", APPEAR_BOUND_MILLIS) {
-                DorisTestCluster.runningStatements().any { it.contains(remoteMarker) }
-            }
+            val dorisQueryId = awaitRemoteStatement(remoteMarker)
             // The Doris-side work must be RELEASED by the server-side timeout — that is the
             // contract; the Trino-side failure propagates later, whenever the stalled scan
             // next reads from the killed connection.
-            await("Doris-side release by the timeout checker", TIMEOUT_RELEASE_BOUND_MILLIS) {
-                DorisTestCluster.runningStatements().none { it.contains(remoteMarker) }
-            }
+            awaitDorisRelease(remoteMarker, dorisQueryId, TIMEOUT_RELEASE_BOUND_MILLIS)
             val releaseMillis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - start)
-            println("doris.query_timeout=2s released the Doris work after ${releaseMillis}ms (bound ${TIMEOUT_RELEASE_BOUND_MILLIS}ms)")
+            println("doris.query_timeout=10s released the Doris work after ${releaseMillis}ms (bound ${TIMEOUT_RELEASE_BOUND_MILLIS}ms)")
 
             val result = queryFuture.get(TRINO_FAILURE_BOUND_MILLIS, TimeUnit.MILLISECONDS)
             assertThat(result.isFailure).isTrue()
@@ -158,6 +151,43 @@ class TestDorisCancellation : AbstractTestQueryFramework() {
             queryId != null
         }
         return queryId!!
+    }
+
+    /** Waits for the remote statement to be live and returns its Doris QueryId. */
+    private fun awaitRemoteStatement(remoteMarker: String): String {
+        var dorisQueryId: String? = null
+        await("Doris processlist entry for $remoteMarker", APPEAR_BOUND_MILLIS) {
+            dorisQueryId = DorisTestCluster.runningDorisQueryId(remoteMarker)
+            dorisQueryId != null
+        }
+        return dorisQueryId!!
+    }
+
+    /**
+     * The release contract, structurally CI-safe: the Doris work is released when EITHER
+     * (a) no processlist row carries the marker any more (connection torn down — the strong,
+     * locally-typical signal), OR (b) fe.log carries the persistent cancellation evidence
+     * for the Doris query id (timeout-checker kill / cancel lines). (b) is required because
+     * a send-blocked connection whose CLIENT is stalled keeps its processlist row alive for
+     * minutes AFTER the query is killed (CI run 29694687854: checker killed at ~10s, row
+     * lingered until "Broken pipe" ~90s+ later) — the work is released, the socket is not.
+     */
+    private fun awaitDorisRelease(remoteMarker: String, dorisQueryId: String, boundMillis: Long) {
+        var releasedVia: String? = null
+        await("Doris-side release of $remoteMarker (query $dorisQueryId)", boundMillis) {
+            when {
+                DorisTestCluster.runningStatements().none { it.contains(remoteMarker) } -> {
+                    releasedVia = "processlist clearance"
+                    true
+                }
+                DorisTestCluster.feLogShowsCancellation(dorisQueryId) -> {
+                    releasedVia = "fe.log cancellation evidence (client socket still draining)"
+                    true
+                }
+                else -> false
+            }
+        }
+        println("release observed via: $releasedVia")
     }
 
     private fun await(what: String, boundMillis: Long, condition: () -> Boolean) {

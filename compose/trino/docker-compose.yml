@@ -1,0 +1,62 @@
+name: trino-doris-manual
+
+# User-facing MANUAL smoke sandbox: a single Trino 483 coordinator with OUR
+# trino-doris plugin installed and DYNAMIC CATALOG MANAGEMENT enabled, so the
+# user can log into the CLI and add THEIR OWN external Doris server at runtime
+# with `CREATE CATALOG ... USING doris WITH (...)` — no rebuild, no restart.
+#
+# Bring up / tear down with the sibling ./up.sh and ./down.sh (NOT `docker
+# compose up` directly — up.sh assembles the plugin dir, stages config, waits
+# for health, and prints the copy-paste cheat sheet).
+
+services:
+  trino:
+    image: trinodb/trino:483
+    container_name: trino-doris-manual
+    ports:
+      # Host 18080 -> container 8080 (Trino HTTP + CLI). 18080 avoids colliding
+      # with anything already bound to 8080 on the dev box.
+      - "18080:8080"
+    volumes:
+      # (a) OUR assembled plugin dir, mounted READ-ONLY into the standard Trino
+      #     plugin path. This is the FIRST production-shaped load of the plugin:
+      #     Trino's PluginManager ServiceLoader-scans /usr/lib/trino/plugin/*,
+      #     exactly as a real install — not the in-JVM test classpath. up.sh runs
+      #     `./gradlew pluginAssemble` to (re)create this dir if it is missing or
+      #     --rebuild is passed.
+      - ${TRINO_DORIS_PLUGIN_DIR:?run ./up.sh, which assembles the plugin and exports this}:/usr/lib/trino/plugin/trino-doris:ro
+      # (b) Config override enabling dynamic catalogs. See etc/config.properties
+      #     for why we replace the file instead of using the image's
+      #     ${ENV:CATALOG_MANAGEMENT} indirection.
+      - ./etc/config.properties:/etc/trino/config.properties:ro
+    # host.docker.internal lets the user reach a Doris server running on the DOCKER
+    # HOST (e.g. `jdbc:mysql://host.docker.internal:9030`) from inside the container.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      # Default bridge for this project — the user's external Doris (LAN IP /
+      # host.docker.internal) is reachable through normal outbound routing.
+      manual-net:
+      # ALSO attach to the LOCAL compose Doris network so the bundled cluster at
+      # 172.30.81.10:9030 works for a first smoke WITHOUT any manual wiring.
+      # Declared `external` below: if that network does not exist (the local
+      # cluster was never brought up), `docker compose up` FAILS FAST with a clear
+      # "network not found" error. In that case either start the local cluster
+      # (`../up.sh`) or comment out this attachment and use `docker network
+      # connect` after the fact — see the README "Optional local-Doris network".
+      doris-net:
+    healthcheck:
+      test: ["CMD", "trino", "--execute", "SELECT 1"]
+      interval: 5s
+      timeout: 10s
+      retries: 40
+      start_period: 30s
+
+networks:
+  manual-net:
+    driver: bridge
+  # The LOCAL compose Doris cluster's network (project `trino-doris-dev`). External
+  # so we attach to the already-running cluster rather than recreating it.
+  doris-net:
+    external: true
+    name: trino-doris-dev_doris-net

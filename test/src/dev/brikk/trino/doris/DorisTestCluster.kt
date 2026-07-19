@@ -62,6 +62,46 @@ object DorisTestCluster {
             .filterNotNull()
             .filterNot { it.contains("information_schema.processlist") }
 
+    /** The Doris QueryId of the processlist row whose statement contains [marker], if live. */
+    fun runningDorisQueryId(marker: String): String? =
+        queryRows("SELECT QueryId, Info FROM information_schema.processlist")
+            .firstOrNull { (_, info) -> info?.contains(marker) == true }
+            ?.first
+
+    private fun queryRows(sql: String): List<Pair<String?, String?>> {
+        openRootConnection().use { connection ->
+            connection.createStatement().use { statement ->
+                statement.executeQuery(sql).use { resultSet ->
+                    val rows = ArrayList<Pair<String?, String?>>()
+                    while (resultSet.next()) {
+                        rows.add(resultSet.getString(1) to resultSet.getString(2))
+                    }
+                    return rows
+                }
+            }
+        }
+    }
+
+    /**
+     * PERSISTENT cancellation evidence in fe.log for a Doris query id: the timeout checker
+     * logs "query is timeout, killed by timeout checker" and every cancellation path logs
+     * "cancel" lines carrying the query id. This is the CI-proof release signal: on a slow
+     * client the killed query's PROCESSLIST row can linger for minutes (the FE result
+     * receiver stays stuck on the stalled socket, re-logging the cancel once per second —
+     * CI run 29694687854 evidence), while the fe.log line lands the moment the checker
+     * fires. Same docker-exec substrate as the audit-log helper.
+     */
+    fun feLogShowsCancellation(dorisQueryId: String): Boolean {
+        val process = ProcessBuilder(
+            "docker", "exec", FE_CONTAINER,
+            "sh", "-c",
+            "grep -a -F -- ${shellQuote(dorisQueryId)} /opt/apache-doris/fe/log/fe.log | grep -a -i -E 'killed by timeout checker|cancel' | head -1 || true",
+        ).redirectErrorStream(true).start()
+        val output = process.inputStream.bufferedReader().readText()
+        check(process.waitFor(30, TimeUnit.SECONDS)) { "docker exec grep timed out" }
+        return output.isNotBlank()
+    }
+
     /**
      * Audit-log lines containing [marker] (e.g. the `trino_query_id=<id>` comment rendered by
      * [DorisRemoteQueryModifier]). The FE audit logger flushes asynchronously (~5s lag

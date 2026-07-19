@@ -104,6 +104,11 @@ class DorisClientModule : AbstractConfigurationAwareModule() {
         credentialProvider: CredentialProvider,
         openTelemetry: OpenTelemetry,
     ): ConnectionFactory {
+        // TODO(adbc): this is the seam for the future optional Arrow Flight SQL / ADBC data
+        // plane (`doris.data-plane=jdbc|adbc`) — columnar result transport for large scans,
+        // opt-in because Flight needs direct BE reachability (hard behind k8s/NAT). Metadata,
+        // pushdown, and SQL generation stay on this JDBC plane either way. NOT scheduled;
+        // see dev-docs/TODO-adbc-arrow-flight.md for the gate.
         return DriverConnectionFactory.builder(Driver(), config.connectionUrl, credentialProvider)
             .setConnectionProperties(connectionProperties(dorisConfig))
             .setOpenTelemetry(openTelemetry)

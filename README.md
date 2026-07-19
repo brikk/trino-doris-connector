@@ -191,6 +191,23 @@ CREATE USER 'trino_ro' IDENTIFIED BY '***';
 GRANT SELECT_PRIV ON *.* TO 'trino_ro';
 ```
 
+## Try it: manual Trino smoke sandbox
+
+[`compose/trino/`](./compose/trino) is a one-command **manual sandbox** — a single Trino 483
+coordinator with this plugin installed and dynamic catalog management enabled, so you can log
+in and add your own Doris server at runtime:
+
+```sh
+compose/trino/up.sh                          # assemble plugin (mise JDK 25), start Trino, print a cheat sheet
+docker exec -it trino-doris-manual trino     # get a CLI, then CREATE CATALOG ... USING doris
+compose/trino/down.sh                        # tear down
+```
+
+The plugin is mounted into `/usr/lib/trino/plugin/` and loaded via Trino's real
+`ServiceLoader` plugin path (not the test classpath). See
+[`compose/trino/README.md`](./compose/trino/README.md) for the cheat sheet, image-config
+notes, and a worked end-to-end transcript (plugin load + predicate-pushdown proof).
+
 ## Development
 
 Design notes, live-probe evidence reports, and the capability ledger behind every mapping and
