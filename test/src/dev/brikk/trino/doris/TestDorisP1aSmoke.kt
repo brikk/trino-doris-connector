@@ -269,15 +269,24 @@ class TestDorisP1aSmoke : AbstractTestQueryFramework() {
     }
 
     @Test
-    fun testStringPredicatesAreNotPushedDown() {
-        // G5: no string equality/range pushdown until collation is proven; the Trino filter
-        // must remain. Null-ness pushdown is exact and allowed.
+    fun testStringPredicateContractUnderDefaultGuardedMode() {
+        // G5 RESOLVED by the byte-exactness probe -> evidence-tiered GUARDED default
+        // (REPORT-string-comparison-probe-4.1.3.md; P6 tiering): proven-exact shapes push
+        // FULLY, genuine supersets keep the Trino filter, hazards stay entirely local.
+        // Fully pushed: varchar/string equality + ranges (and null-ness, exact as always).
         assertThat(query("SELECT id FROM doris.p1_smoke.scalars WHERE c_varchar100 = 'héllo 中文 🦆'"))
-            .isNotFullyPushedDown(FilterNode::class.java)
-        assertThat(query("SELECT id FROM doris.p1_smoke.scalars WHERE c_string LIKE 'a p%'"))
-            .isNotFullyPushedDown(FilterNode::class.java)
+            .isFullyPushedDown()
+        assertThat(query("SELECT id FROM doris.p1_smoke.scalars WHERE c_string > 'a'")).isFullyPushedDown()
         assertThat(query("SELECT id FROM doris.p1_smoke.scalars WHERE c_varchar100 IS NULL")).isFullyPushedDown()
         assertThat(query("SELECT id FROM doris.p1_smoke.scalars WHERE c_varchar100 IS NOT NULL")).isFullyPushedDown()
+        // Superset pre-filter: LIKE ships its prefix range but the exact LIKE stays local.
+        assertThat(query("SELECT id FROM doris.p1_smoke.scalars WHERE c_string LIKE 'a p%'"))
+            .isNotFullyPushedDown(FilterNode::class.java)
+        // Hazards stay local: CHAR (trailing-space divergence) and 0x00-bearing literals.
+        assertThat(query("SELECT id FROM doris.p1_smoke.scalars WHERE c_char10 = 'char10'"))
+            .isNotFullyPushedDown(FilterNode::class.java)
+        assertThat(query("SELECT id FROM doris.p1_smoke.scalars WHERE c_varchar100 = U&'a\\0000b'"))
+            .isNotFullyPushedDown(FilterNode::class.java)
     }
 
     @Test
