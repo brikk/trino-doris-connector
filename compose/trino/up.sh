@@ -84,7 +84,11 @@ if ! docker network inspect trino-doris-dev_doris-net >/dev/null 2>&1; then
 fi
 
 log "Starting Trino 483 with the plugin dir mounted read-only…"
-docker compose -f "${COMPOSE}" up -d
+# --force-recreate: compose does NOT recreate on unchanged config, and the plugin
+# snapshot content changing is invisible to it — without this flag a --rebuild
+# silently leaves the OLD plugin running in the live JVM (bitten 2026-07-19; the
+# tell was an in-memory catalog surviving a supposed refresh).
+docker compose -f "${COMPOSE}" up -d --force-recreate
 
 # --- Wait for health -------------------------------------------------------------
 log "Waiting for Trino to answer SELECT 1…"
