@@ -4,7 +4,8 @@ Status: P1a complete. `./gradlew :trino-doris:build` green (compile + detekt + 3
 pluginAssemble + verifyPluginAssembly). Coded against
 `LEDGER-p0-type-and-capability.md` (authoritative) and PLAN §3/§4/§5/§10-P1.
 
-Module: `jvm/trino-doris`, package `dev.brikk.doris.trino.plugin`, Kotlin only, Trino 483 BOM,
+Module: `jvm/trino-doris` (monorepo origin; now the root of this standalone repo),
+package `dev.brikk.trino.doris`, Kotlin only, Trino 483 BOM,
 Connector/J 9.7.0. Classes: `DorisPlugin`, `DorisClientModule`, `DorisJdbcConfig`, `DorisConfig`,
 `DorisClient`, `DorisTypeMapping`, `DorisColumnType`. Tests: `DorisQueryRunner`,
 `TestDorisP1aSmoke` (23 live tests vs compose 4.1.3 @9130), `TestDorisTypeMapping`,
