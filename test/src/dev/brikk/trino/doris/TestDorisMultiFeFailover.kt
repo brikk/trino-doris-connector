@@ -56,6 +56,7 @@ import java.util.concurrent.TimeUnit
  * API and pointed at the overlay purely via a `CREATE CATALOG ... USING doris` statement.
  */
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
+@org.junit.jupiter.api.TestMethodOrder(org.junit.jupiter.api.MethodOrderer.OrderAnnotation::class)
 @EnabledIf("dev.brikk.trino.doris.TestDorisMultiFeFailover#overlayIsUp")
 class TestDorisMultiFeFailover : AbstractTestQueryFramework() {
     /** Container stopped by a failover test, to be restarted in @AfterEach. Null when none. */
@@ -80,6 +81,7 @@ class TestDorisMultiFeFailover : AbstractTestQueryFramework() {
     }
 
     @Test
+    @org.junit.jupiter.api.Order(1)
     fun testConnectorConnectsAndQueriesThroughMultiHostUrl() {
         createOverlayCatalog()
         try {
@@ -94,6 +96,7 @@ class TestDorisMultiFeFailover : AbstractTestQueryFramework() {
     }
 
     @Test
+    @org.junit.jupiter.api.Order(4)
     fun testNewConnectionFailoverAfterFollowerStops() {
         // Sanity: raw multi-host connect works before we perturb anything.
         assertThat(multiHostSelectOne()).isEqualTo(1)
@@ -118,6 +121,137 @@ class TestDorisMultiFeFailover : AbstractTestQueryFramework() {
                 .contains("information_schema")
         } finally {
             dropOverlayCatalog()
+        }
+    }
+
+    /**
+     * THE test this whole fix exists for, deterministic form: a query OWNED by fe2 killed
+     * through a helper connected to fe3 — the FE forwards `KILL QUERY "<QueryId>"` to the
+     * owner. This is the cross-FE leg the connector's cluster-scoped cancel relies on
+     * ([DorisClusterScopedCancel]); the driver-level `KILL QUERY <connection-id>` this
+     * replaces is a silent no-op / wrong-kill in exactly this topology.
+     */
+    @Test
+    @org.junit.jupiter.api.Order(2)
+    fun testCrossFeKillByQueryIdReleasesForeignFeQuery() {
+        val marker = "trino_query_id=mfe_xfe_${System.nanoTime()}"
+        val pool = java.util.concurrent.Executors.newSingleThreadExecutor()
+        val victim = pool.submit<String> {
+            runCatching {
+                DriverManager.getConnection("jdbc:mysql://$HOST:9132/", props()).use {
+                    it.createStatement().execute("SELECT sleep(60) /*$marker*/")
+                }
+            }.exceptionOrNull()?.message ?: "completed"
+        }
+        try {
+            DriverManager.getConnection("jdbc:mysql://$HOST:9133/", props()).use { helper ->
+                helper.createStatement().use { statement ->
+                    runCatching { statement.execute("SET fetch_all_fe_for_system_table = true") }
+                    var queryId: String? = null
+                    var ownerFe: String? = null
+                    awaitCondition("fe2-owned statement visible from fe3") {
+                        statement.executeQuery("SHOW FULL PROCESSLIST").use { rs ->
+                            while (rs.next()) {
+                                val info = rs.getString("Info") ?: continue
+                                if (info.contains(marker) && !info.contains("PROCESSLIST")) {
+                                    queryId = rs.getString("QueryId")
+                                    ownerFe = rs.getString("FE")
+                                }
+                            }
+                        }
+                        queryId != null
+                    }
+                    // the query is genuinely FOREIGN to the helper's FE
+                    assertThat(ownerFe).isEqualTo("172.30.82.11") // fe2
+                    statement.execute("""KILL QUERY "$queryId"""")
+                    // the blocked victim read unblocks with the server's kill error
+                    assertThat(victim.get(20, TimeUnit.SECONDS)).contains("cancel query by user")
+                }
+            }
+        } finally {
+            pool.shutdownNow()
+        }
+    }
+
+    /**
+     * End-to-end: the CONNECTOR cancels a query running against the multi-FE overlay through
+     * the comma-list URL — the cluster-scoped kill dispatch fires (same-JVM counter) and the
+     * Doris-side work is released cluster-wide.
+     */
+    @Test
+    @org.junit.jupiter.api.Order(3)
+    fun testConnectorCancellationReleasesOverlayQuery() {
+        provisionCancelFixture()
+        createOverlayCatalog()
+        val pool = java.util.concurrent.Executors.newSingleThreadExecutor()
+        try {
+            val slow = "SELECT count(*) AS mfe_cancel_probe FROM $OVERLAY_CATALOG.mfe_cancel.big a " +
+                "CROSS JOIN $OVERLAY_CATALOG.mfe_cancel.big b WHERE a.pad = b.pad AND a.id + b.id = -1"
+            val future = pool.submit<Any> { runCatching { queryRunner.execute(slow) } }
+            var trinoQueryId: String? = null
+            awaitCondition("running Trino query") {
+                if (future.isDone) {
+                    val outcome = future.get()
+                    error("slow overlay query ended before cancel: " + outcome)
+                }
+                trinoQueryId = computeActual(
+                    "SELECT query_id FROM system.runtime.queries WHERE state = 'RUNNING' " +
+                        "AND query LIKE '%mfe_cancel_probe%' AND query NOT LIKE '%system.runtime%'",
+                ).onlyColumnAsSet.map { it.toString() }.firstOrNull()
+                trinoQueryId != null
+            }
+            val remoteMarker = DorisRemoteQueryModifier.marker(trinoQueryId!!)
+            awaitCondition("overlay processlist entry") { overlayHasRunningStatement(remoteMarker) }
+
+            val dispatchedBefore = DorisClusterScopedCancel.killsDispatched.get()
+            queryRunner.execute("CALL system.runtime.kill_query(query_id => '$trinoQueryId', message => 'mfe cancel test')")
+            // the primary cluster-scoped dispatch fired...
+            awaitCondition("cluster-scoped dispatch") { DorisClusterScopedCancel.killsDispatched.get() > dispatchedBefore }
+            // ...and the overlay's work is released (cluster-wide view)
+            awaitCondition("overlay release") { !overlayHasRunningStatement(remoteMarker) }
+            future.cancel(true)
+        } finally {
+            pool.shutdownNow()
+            dropOverlayCatalog()
+        }
+    }
+
+    private fun overlayHasRunningStatement(marker: String): Boolean =
+        openOverlayConnection().use { connection ->
+            connection.createStatement().use { statement ->
+                runCatching { statement.execute("SET fetch_all_fe_for_system_table = true") }
+                statement.executeQuery("SHOW FULL PROCESSLIST").use { rs ->
+                    generateSequence { if (rs.next()) (rs.getString("Info") ?: "") else null }
+                        .any { it.contains(marker) && !it.contains("PROCESSLIST") }
+                }
+            }
+        }
+
+    private fun awaitCondition(what: String, condition: () -> Boolean) {
+        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(60)
+        while (!condition()) {
+            check(System.nanoTime() < deadline) { "timed out waiting for: " + what }
+            Thread.sleep(500)
+        }
+    }
+
+    private fun provisionCancelFixture() {
+        openOverlayConnection().use { connection ->
+            connection.createStatement().use { statement ->
+                val count = runCatching {
+                    statement.executeQuery("SELECT COUNT(*) FROM mfe_cancel.big").use { rs -> rs.next(); rs.getLong(1) }
+                }.getOrNull()
+                if (count == 200_000L) {
+                    return
+                }
+                statement.execute("CREATE DATABASE IF NOT EXISTS mfe_cancel")
+                statement.execute("DROP TABLE IF EXISTS mfe_cancel.big")
+                statement.execute(
+                    "CREATE TABLE mfe_cancel.big (id BIGINT NOT NULL, pad VARCHAR(400)) " +
+                        "DUPLICATE KEY(id) DISTRIBUTED BY HASH(id) BUCKETS 1 PROPERTIES (\"replication_num\" = \"1\")",
+                )
+                statement.execute("INSERT INTO mfe_cancel.big SELECT number, repeat('x', 300) FROM numbers('number' = '200000')")
+            }
         }
     }
 

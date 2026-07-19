@@ -300,4 +300,17 @@ compose/multi-fe/down.sh
 
 ---
 
+## Addendum 2026-07-19: the cancellation gap — CLOSED
+
+This report originally covered connect/read failover only; QUERY CANCELLATION against a
+multi-FE / load-balanced cluster was a real gap (user-reported from production: the
+driver-level `KILL QUERY <connection-id>` targets an arbitrary FE — silent no-op or
+wrong-session kill). Closed by the cluster-scoped cancel
+(`DorisClusterScopedCancel`; `NOTES-cancel-cluster-scoped.md`): marker -> cluster-wide
+`SHOW FULL PROCESSLIST` -> `QueryId` -> `KILL QUERY` forwarded FE-to-FE (probed: fe2-owned
+query killed via fe3 helper in 22ms). The overlay suite now carries the deterministic
+cross-FE kill test and a connector end-to-end overlay cancel.
+
+---
+
 *End of report. Closes LEDGER §F "Confirm FE failover".*

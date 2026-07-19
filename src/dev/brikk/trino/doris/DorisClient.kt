@@ -91,6 +91,7 @@ import java.util.function.BiFunction
  */
 class DorisClient @Inject constructor(
     config: BaseJdbcConfig,
+    dorisConfig: DorisConfig,
     connectionFactory: ConnectionFactory,
     queryBuilder: QueryBuilder,
     typeManager: TypeManager,
@@ -109,6 +110,9 @@ class DorisClient @Inject constructor(
     false,
 ) {
     private val typeMapping = DorisTypeMapping(typeManager)
+
+    /** Cluster-scoped cancellation (multi-FE/LB correct) — see [DorisClusterScopedCancel]. */
+    private val clusterScopedCancel = DorisClusterScopedCancel(connectionFactory, dorisConfig.isClusterScopedCancel())
 
     /**
      * Typed ARRAY predicate rules (PLAN §6.1 layer 2, §6.2; P2b/P3) in two tiers:
@@ -418,6 +422,9 @@ class DorisClient @Inject constructor(
             val seconds = maxOf(1L, timeout.roundTo(java.util.concurrent.TimeUnit.SECONDS))
             connection.createStatement().use { it.execute("SET query_timeout = $seconds") }
         }
+        // cluster-scoped cancel bookkeeping: marker+session for this scan connection, read
+        // back at abort time (the busy connection itself is never touched at cancel)
+        clusterScopedCancel.register(connection, session)
         return super.buildSql(session, connection, split, table, columns)
     }
 
@@ -432,9 +439,14 @@ class DorisClient @Inject constructor(
     }
 
     override fun abortReadConnection(connection: Connection, resultSet: ResultSet) {
-        // SR K11: abort instead of draining a streaming result on cancellation; Statement.cancel()
-        // KILLs the Doris query in ~200ms (PROBE §8; ledger §D).
         if (!resultSet.isAfterLast) {
+            // PRIMARY: async cluster-scoped kill (marker -> cluster-wide processlist ->
+            // QueryId -> KILL QUERY, forwarded cross-FE) — correct behind LB/multi-FE where
+            // driver-level kills target an arbitrary FE ([DorisClusterScopedCancel]).
+            clusterScopedCancel.onAbort(connection)
+            // BELT (stock, SR K11): abort the socket instead of draining the streaming
+            // result. On the owning FE this alone releases the query; behind an LB it may
+            // not — hence the primary above.
             connection.abort(directExecutor())
         }
     }

@@ -69,12 +69,18 @@ class TestDorisCancellation : AbstractTestQueryFramework() {
             val dorisQueryId = awaitRemoteStatement(remoteMarker)
 
             // 2. Kill the Trino query; the Doris-side work must be RELEASED promptly.
+            val dispatchedBefore = DorisClusterScopedCancel.killsDispatched.get()
             val killStart = System.nanoTime()
             getQueryRunner().execute(
                 getSession(),
                 "CALL system.runtime.kill_query(query_id => '$trinoQueryId', message => 'p1b cancellation test')",
             )
             awaitDorisRelease(remoteMarker, dorisQueryId, CLEARANCE_BOUND_MILLIS)
+            // the PRIMARY cluster-scoped kill path fired (the runner shares this JVM);
+            // the release evidence above is satisfied by whichever path won the race
+            await("cluster-scoped kill dispatch", CLEARANCE_BOUND_MILLIS) {
+                DorisClusterScopedCancel.killsDispatched.get() > dispatchedBefore
+            }
             val clearanceMillis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - killStart)
             println("Doris work released ${clearanceMillis}ms after kill_query (ledger §D baseline ~1s, bound ${CLEARANCE_BOUND_MILLIS}ms)")
 

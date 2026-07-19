@@ -31,6 +31,7 @@ class DorisConfig {
     private var connectTimeout: Duration = Duration(10.0, TimeUnit.SECONDS)
     private var stringPushdownMode: DorisStringPushdownMode = DorisStringPushdownMode.GUARDED
     private var statisticsEnabled: Boolean = true
+    private var clusterScopedCancel: Boolean = true
 
     fun getQueryTimeout(): Duration? = queryTimeout
 
@@ -81,6 +82,20 @@ class DorisConfig {
     )
     fun setStatisticsEnabled(statisticsEnabled: Boolean): DorisConfig {
         this.statisticsEnabled = statisticsEnabled
+        return this
+    }
+
+    fun isClusterScopedCancel(): Boolean = clusterScopedCancel
+
+    @Config("doris.cluster-scoped-cancel")
+    @ConfigDescription(
+        "Cancel queries cluster-wide: an async helper connection resolves the running query's " +
+            "QueryId from the cluster-wide processlist and issues KILL QUERY — correct behind " +
+            "load balancers / multi-FE where the driver-level kill targets an arbitrary FE. " +
+            "The stock socket abort is retained as a fallback either way.",
+    )
+    fun setClusterScopedCancel(clusterScopedCancel: Boolean): DorisConfig {
+        this.clusterScopedCancel = clusterScopedCancel
         return this
     }
 

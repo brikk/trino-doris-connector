@@ -24,8 +24,11 @@ Built and tested against **Apache Doris 4.1.3**, **Trino 483**, and MySQL Connec
 
 - One Doris statement per table scan — Doris runs its own distributed execution and streams
   results back; large results are streamed, not buffered in the Trino worker.
-- Trino query cancellation kills the corresponding Doris query (verified sub-second), and each
-  remote query is tagged with the Trino query id for easy correlation in Doris logs.
+- Trino query cancellation kills the corresponding Doris query CLUSTER-WIDE (verified
+  sub-second, including load-balanced / multi-FE deployments: the query is resolved by its
+  id-comment in the cluster-wide processlist and killed by QueryId, which Doris forwards to
+  the owning FE — `doris.cluster-scoped-cancel`, default on). Each remote query is tagged
+  with the Trino query id for easy correlation in Doris logs.
 - Dynamic catalogs: `CREATE CATALOG` / `DROP CATALOG` at runtime, with configuration validated
   loudly at create time.
 - Doris session controls per catalog: `doris.query-timeout`, `doris.exec-mem-limit`,
