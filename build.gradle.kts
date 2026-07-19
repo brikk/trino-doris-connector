@@ -1,3 +1,5 @@
+import java.util.zip.ZipFile
+
 plugins {
     id("buildlogic.kotlin.library")
     java
@@ -146,7 +148,22 @@ val verifyPluginAssembly by tasks.registering {
             "expected exactly one guice jar with the 'classes' classifier, got: $guiceJars"
         }
 
-        logger.lifecycle("verifyPluginAssembly OK: ${jars.size} jars, no provided/parent-first SPI jars")
+        // A real Trino server discovers plugins from the plugin dir via ServiceLoader; the
+        // programmatic installPlugin(...) used by tests bypasses it, so a missing registration
+        // is invisible to every suite. Guard the jar entry + FQCN here (found missing 2026-07-19).
+        val connectorJar = pluginDir.get().asFile.listFiles().orEmpty()
+            .single { it.name.startsWith("trino-doris-connector-") }
+        val serviceEntry = "META-INF/services/io.trino.spi.Plugin"
+        val registered = ZipFile(connectorJar).use { zip ->
+            zip.getEntry(serviceEntry)?.let { entry ->
+                zip.getInputStream(entry).bufferedReader().readText().trim()
+            }
+        }
+        check(registered == "dev.brikk.trino.doris.DorisPlugin") {
+            "connector jar must register DorisPlugin via $serviceEntry; found: $registered"
+        }
+
+        logger.lifecycle("verifyPluginAssembly OK: ${jars.size} jars, no provided/parent-first SPI jars, ServiceLoader registration present")
     }
 }
 
