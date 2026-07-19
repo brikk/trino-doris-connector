@@ -32,6 +32,7 @@ class DorisConfig {
     private var stringPushdownMode: DorisStringPushdownMode = DorisStringPushdownMode.GUARDED
     private var statisticsEnabled: Boolean = true
     private var clusterScopedCancel: Boolean = true
+    private var approximatePushdown: Boolean = false
 
     fun getQueryTimeout(): Duration? = queryTimeout
 
@@ -82,6 +83,19 @@ class DorisConfig {
     )
     fun setStatisticsEnabled(statisticsEnabled: Boolean): DorisConfig {
         this.statisticsEnabled = statisticsEnabled
+        return this
+    }
+
+    fun isApproximatePushdown(): Boolean = approximatePushdown
+
+    @Config("doris.approximate-pushdown")
+    @ConfigDescription(
+        "Push approximate aggregates (approx_distinct -> approx_count_distinct) to Doris. " +
+            "OFF by default: both engines return HyperLogLog ESTIMATES but with different " +
+            "sketches, so pushed and local answers legitimately differ for the same data.",
+    )
+    fun setApproximatePushdown(approximatePushdown: Boolean): DorisConfig {
+        this.approximatePushdown = approximatePushdown
         return this
     }
 

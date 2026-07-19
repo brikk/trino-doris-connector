@@ -64,6 +64,10 @@ Predicates and query shapes the connector pushes into Doris:
 | `count(*)` / `count(col)` / `count(DISTINCT col)` | `count(...)` | any column type for plain counts; DISTINCT on non-text exact types only |
 | `min` / `max` | `min(col)` / `max(col)` | numeric, decimal (incl. LARGEINT), date, datetime, boolean — not text (collation), not FLOAT/DOUBLE (Doris ranks NaN largest, Trino doesn't) |
 | `sum([DISTINCT] col)` | `sum(...)` | DECIMAL(p≤18) only — every other sum type overflows *silently* in Doris where Trino raises an error, so those stay in Trino |
+| `min_by(a, b)` / `max_by(a, b)` | same-named | exact-type keys; value column must be NOT NULL (Doris skips NULL-value rows where Trino keeps them — verified) |
+| `any_value(x)` | `any_value(x)` | nondeterministic on both engines; NULL-handling verified identical |
+| `approx_distinct(x)` | `approx_count_distinct(x)` | **opt-in** (`doris.approximate-pushdown`, default off): the HLL sketches differ, so estimates won't match local results |
+| `avg(x)` | *not pushed* | Doris avg semantics diverge (scale truncation / lossy accumulation); write `sum(x)/count(x)` instead — both push and the division stays Trino-exact |
 | `GROUP BY` (with the above) | `GROUP BY ...` | grouping keys restricted to the same non-text exact types; NULL grouping verified identical |
 
 Deliberately **not** pushed (kept in Trino to guarantee correct results):

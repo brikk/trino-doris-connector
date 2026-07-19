@@ -556,6 +556,9 @@ class DorisClient @Inject constructor(
             DorisImplementCountDistinct(),
             DorisImplementMinMax(),
             DorisImplementSum(),
+            DorisImplementMinMaxBy(),
+            DorisImplementAnyValue(),
+            DorisImplementApproxDistinct(),
         ),
     )
 

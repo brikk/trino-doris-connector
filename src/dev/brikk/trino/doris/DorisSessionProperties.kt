@@ -46,6 +46,12 @@ class DorisSessionProperties @Inject constructor(dorisConfig: DorisConfig) : Ses
             false,
         ),
         PropertyMetadata.booleanProperty(
+            APPROXIMATE_PUSHDOWN,
+            "Push approximate aggregates (estimates differ between engines) — per-query override of doris.approximate-pushdown",
+            dorisConfig.isApproximatePushdown(),
+            false,
+        ),
+        PropertyMetadata.booleanProperty(
             STATISTICS_ENABLED,
             "Expose Doris table/column statistics to the optimizer — per-query override of doris.statistics.enabled",
             dorisConfig.isStatisticsEnabled(),
@@ -59,6 +65,7 @@ class DorisSessionProperties @Inject constructor(dorisConfig: DorisConfig) : Ses
         const val QUERY_TIMEOUT = "query_timeout"
         const val STRING_PUSHDOWN_MODE = "string_pushdown_mode"
         const val STATISTICS_ENABLED = "statistics_enabled"
+        const val APPROXIMATE_PUSHDOWN = "approximate_pushdown"
 
         fun getQueryTimeout(session: ConnectorSession): Duration? =
             session.getProperty(QUERY_TIMEOUT, Duration::class.java)
@@ -68,5 +75,8 @@ class DorisSessionProperties @Inject constructor(dorisConfig: DorisConfig) : Ses
 
         fun isStatisticsEnabled(session: ConnectorSession): Boolean =
             session.getProperty(STATISTICS_ENABLED, Boolean::class.javaObjectType)
+
+        fun isApproximatePushdownEnabled(session: ConnectorSession): Boolean =
+            session.getProperty(APPROXIMATE_PUSHDOWN, Boolean::class.javaObjectType)
     }
 }

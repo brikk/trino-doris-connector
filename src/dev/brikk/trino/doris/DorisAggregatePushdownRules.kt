@@ -257,3 +257,161 @@ internal class DorisImplementCountDistinct : AggregateFunctionRule<JdbcExpressio
         private val ARGUMENT: Capture<Variable> = newCapture()
     }
 }
+
+/**
+ * `min_by(a, b)` / `max_by(a, b)` -> same-named Doris aggregates (READ-ONLY-MAX batch 2).
+ *
+ * Live truth table (2026-07-19, `b2_doris` probes + `TestDorisB2Aggregates` differentials):
+ * - rows whose KEY (b) is NULL are IGNORED on both engines; all-NULL-key/empty groups
+ *   return NULL on both;
+ * - **NULL-VALUE divergence**: for a group holding {(a=NULL, b=1), (a=60, b=2)} Doris
+ *   min_by SKIPS the NULL-value row (returns 60) while Trino keeps the payload of the
+ *   minimal key (returns NULL). The divergence lives in DATA -> the rule requires the
+ *   VALUE column to be declared NOT NULL (metadata guard: the divergent cell is then
+ *   unreachable); NULLABLE value columns stay local.
+ * - ties are nondeterministic on BOTH engines (no tie-break contract to preserve).
+ *
+ * Key types: the exact-ordering set ([DorisAggregatePushdown.isExactPushableKeyType] — the
+ * key is what gets compared). Value types: the same set plus VARCHAR (payload passthrough,
+ * byte fidelity proven; CHAR/REAL/DOUBLE excluded — trailing-space and wire-Infinity read
+ * hazards). Result reuses the VALUE column's type handle (same proven read path).
+ */
+internal class DorisImplementMinMaxBy : AggregateFunctionRule<JdbcExpression, ParameterizedExpression> {
+    override fun getPattern(): Pattern<AggregateFunction> = basicAggregation()
+        .with(functionName().matching { it in MIN_MAX_BY })
+
+    override fun rewrite(
+        aggregateFunction: AggregateFunction,
+        captures: Captures,
+        context: RewriteContext<ParameterizedExpression>,
+    ): Optional<JdbcExpression> {
+        if (aggregateFunction.arguments.size != 2) {
+            return Optional.empty()
+        }
+        val value = aggregateFunction.arguments[0] as? Variable ?: return Optional.empty()
+        val key = aggregateFunction.arguments[1] as? Variable ?: return Optional.empty()
+        val valueColumn = context.getAssignment(value.name) as JdbcColumnHandle
+        val keyColumn = context.getAssignment(key.name) as JdbcColumnHandle
+        verify(valueColumn.columnType == aggregateFunction.outputType)
+        if (!DorisAggregatePushdown.isExactPushableKeyType(keyColumn.columnType)) {
+            return DorisAggregatePushdown.rejected(
+                "min_by/max_by KEY type not exact-pushable: ${keyColumn.columnType}",
+                aggregateFunction,
+            )
+        }
+        if (!isPushableValueType(valueColumn.columnType)) {
+            return DorisAggregatePushdown.rejected(
+                "min_by/max_by VALUE type not pushable: ${valueColumn.columnType}",
+                aggregateFunction,
+            )
+        }
+        if (valueColumn.isNullable) {
+            return DorisAggregatePushdown.rejected(
+                "min_by/max_by VALUE column is NULLABLE (Doris skips NULL-value rows, Trino keeps them): ${valueColumn.columnName}",
+                aggregateFunction,
+            )
+        }
+        val function = aggregateFunction.functionName
+        return Optional.of(
+            JdbcExpression(
+                "$function(${context.rewriteExpression(value).orElseThrow().expression()}, " +
+                    "${context.rewriteExpression(key).orElseThrow().expression()})",
+                listOf(),
+                valueColumn.jdbcTypeHandle,
+            ),
+        )
+    }
+
+    companion object {
+        private val MIN_MAX_BY = setOf("min_by", "max_by")
+
+        private fun isPushableValueType(type: Type): Boolean =
+            DorisAggregatePushdown.isExactPushableKeyType(type) || type is io.trino.spi.type.VarcharType
+    }
+}
+
+/**
+ * `any_value(x)` -> Doris `any_value(x)` (READ-ONLY-MAX batch 2). Both engines are
+ * NONDETERMINISTIC by contract, so only TYPE and NULL soundness are provable (and pinned):
+ * both ignore NULL inputs (a group holding {NULL, 7} answers a NON-NULL value on both —
+ * probed), and an all-NULL/empty group answers NULL on both. Differentials assert the
+ * result is an element of the group, not a specific value. Argument types: the exact set
+ * plus VARCHAR (payload passthrough), same exclusions as min_by values.
+ */
+internal class DorisImplementAnyValue : AggregateFunctionRule<JdbcExpression, ParameterizedExpression> {
+    override fun getPattern(): Pattern<AggregateFunction> = basicAggregation()
+        .with(functionName().matching { it == "any_value" })
+        .with(singleArgument().matching(variable().capturedAs(ANY_ARGUMENT)))
+
+    override fun rewrite(
+        aggregateFunction: AggregateFunction,
+        captures: Captures,
+        context: RewriteContext<ParameterizedExpression>,
+    ): Optional<JdbcExpression> {
+        val argument = captures.get(ANY_ARGUMENT)
+        val column = context.getAssignment(argument.name) as JdbcColumnHandle
+        verify(column.columnType == aggregateFunction.outputType)
+        val pushable = DorisAggregatePushdown.isExactPushableKeyType(column.columnType) ||
+            column.columnType is io.trino.spi.type.VarcharType
+        if (!pushable) {
+            return DorisAggregatePushdown.rejected("any_value argument type not pushable: ${column.columnType}", aggregateFunction)
+        }
+        return Optional.of(
+            JdbcExpression(
+                "any_value(${context.rewriteExpression(argument).orElseThrow().expression()})",
+                listOf(),
+                column.jdbcTypeHandle,
+            ),
+        )
+    }
+
+    companion object {
+        private val ANY_ARGUMENT: Capture<Variable> = newCapture()
+    }
+}
+
+/**
+ * `approx_distinct(x)` -> Doris `approx_count_distinct(x)` — OPT-IN ONLY
+ * (`doris.approximate-pushdown` / session `approximate_pushdown`, default FALSE): both are
+ * HyperLogLog ESTIMATES but the sketches differ (different implementations, different
+ * error profiles), so pushed and local answers are legitimately DIFFERENT numbers for the
+ * same data. Off by default per the exactness discipline; when enabled the caller accepts
+ * estimate divergence. Type soundness: BIGINT result on both; empty input -> 0 on both
+ * (probed). Argument: any exact-set or varchar column.
+ */
+internal class DorisImplementApproxDistinct : AggregateFunctionRule<JdbcExpression, ParameterizedExpression> {
+    override fun getPattern(): Pattern<AggregateFunction> = basicAggregation()
+        .with(functionName().matching { it == "approx_distinct" })
+        .with(singleArgument().matching(variable().capturedAs(APPROX_ARGUMENT)))
+
+    override fun rewrite(
+        aggregateFunction: AggregateFunction,
+        captures: Captures,
+        context: RewriteContext<ParameterizedExpression>,
+    ): Optional<JdbcExpression> {
+        if (!DorisSessionProperties.isApproximatePushdownEnabled(context.session)) {
+            return DorisAggregatePushdown.rejected("approximate pushdown disabled (doris.approximate-pushdown)", aggregateFunction)
+        }
+        val argument = captures.get(APPROX_ARGUMENT)
+        val column = context.getAssignment(argument.name) as JdbcColumnHandle
+        if (aggregateFunction.outputType != BIGINT) {
+            return DorisAggregatePushdown.rejected("approx_distinct output type: ${aggregateFunction.outputType}", aggregateFunction)
+        }
+        val pushable = DorisAggregatePushdown.isExactPushableKeyType(column.columnType) ||
+            column.columnType is io.trino.spi.type.VarcharType
+        if (!pushable) {
+            return DorisAggregatePushdown.rejected("approx_distinct argument type not pushable: ${column.columnType}", aggregateFunction)
+        }
+        return Optional.of(
+            JdbcExpression(
+                "approx_count_distinct(${context.rewriteExpression(argument).orElseThrow().expression()})",
+                listOf(),
+                DorisTypeMapping.toTypeHandle("bigint"),
+            ),
+        )
+    }
+
+    companion object {
+        private val APPROX_ARGUMENT: Capture<Variable> = newCapture()
+    }
+}
