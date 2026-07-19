@@ -64,7 +64,16 @@ if [[ -z "${PLUGIN_DIR}" || "${REBUILD}" -eq 1 ]]; then
 fi
 log "Plugin dir: ${PLUGIN_DIR}"
 log "  ServiceLoader SPI: $(unzip -p "$(find "${PLUGIN_DIR}" -name 'trino-doris-connector-*.jar' | head -n1)" META-INF/services/io.trino.spi.Plugin 2>/dev/null || echo '??')"
-export TRINO_DORIS_PLUGIN_DIR="${PLUGIN_DIR}"
+
+# SNAPSHOT the plugin dir instead of mounting Gradle's live output: a later
+# `./gradlew build` rewrites those jars underneath the running JVM and the server
+# starts throwing `ZipException: invalid LOC header` on lazy class loads
+# (bitten live 2026-07-19). The gitignored copy is immutable until the next up.sh.
+SNAPSHOT_DIR="${HERE}/.plugin-snapshot"
+rm -rf "${SNAPSHOT_DIR}"
+cp -r "${PLUGIN_DIR}" "${SNAPSHOT_DIR}"
+log "Plugin snapshot: ${SNAPSHOT_DIR} (immune to concurrent gradle builds)"
+export TRINO_DORIS_PLUGIN_DIR="${SNAPSHOT_DIR}"
 
 # --- Up --------------------------------------------------------------------------
 if ! docker network inspect trino-doris-dev_doris-net >/dev/null 2>&1; then
