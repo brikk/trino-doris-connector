@@ -43,6 +43,7 @@ import io.trino.spi.connector.AggregateFunction
 import io.trino.spi.connector.ColumnHandle
 import io.trino.spi.connector.ConnectorSession
 import io.trino.spi.connector.SchemaTableName
+import io.trino.spi.connector.SortOrder
 import io.trino.spi.connector.TableNotFoundException
 import io.trino.spi.expression.ConnectorExpression
 import io.trino.spi.type.Type
@@ -91,19 +92,37 @@ class DorisClient @Inject constructor(
     private val typeMapping = DorisTypeMapping(typeManager)
 
     /**
-     * Typed ARRAY predicate rules (PLAN §6.1 layer 2, §6.2; P2b). Deliberately NO
-     * `addStandardRules` and NO boolean-composition rules ($not/$and/$or/$is_null): the
-     * `contains` rendering is predicate-level (not value-level) equivalent, so it must only
-     * ever surface as a top-level WHERE conjunct — which is exactly what
-     * `DefaultJdbcMetadata.applyFilter` + `convertPredicate` guarantee when no composition
-     * rules exist. Scalar expression families are P3. Evidence: [DorisPushdownEvidence].
+     * Typed ARRAY predicate rules (PLAN §6.1 layer 2, §6.2; P2b/P3) in two tiers:
+     *
+     * - VALUE-SAFE tier: `array_position` comparisons (value-identical on both engines,
+     *   [DorisPushdownEvidence.ARRAY_POSITION]) plus NOT/AND/OR composition over that tier
+     *   only — safe because Doris's three-valued logic is live-proven identical to Trino's
+     *   (see [DorisValueSafeRewriter] and the P3 composition pins).
+     * - PREDICATE-LEVEL tier: `contains` / `arrays_overlap`, whose NULL cells differ at
+     *   value level (Trino NULL vs Doris 0/1). They may ONLY surface as top-level WHERE
+     *   conjuncts and are structurally excluded from composition: the composition rules
+     *   rewrite children through the value-safe rewriter, which does not contain them.
+     *
+     * Deliberately NO `addStandardRules`: scalar column-vs-literal comparisons and
+     * IS [NOT] NULL are already covered exactly by domain pushdown (P1a controllers);
+     * column-to-column scalar comparison rules would be new unproven surface (P3 remainder).
+     * Evidence citations: [DorisPushdownEvidence].
      */
     private val connectorExpressionRewriter: ConnectorExpressionRewriter<ParameterizedExpression> = run {
         val support = DorisArrayPushdownSupport(typeMapping, ::quoted)
+        val valueSafe = DorisValueSafeRewriter()
+        val valueSafeRules = listOf(
+            RewriteArrayPositionComparison(support),
+            RewriteValueSafeNot(valueSafe),
+            RewriteValueSafeLogical(valueSafe),
+        )
+        valueSafe.rewriter = JdbcConnectorExpressionRewriterBuilder.newBuilder()
+            .apply { valueSafeRules.forEach { add(it) } }
+            .build()
         JdbcConnectorExpressionRewriterBuilder.newBuilder()
+            .apply { valueSafeRules.forEach { add(it) } }
             .add(RewriteContains(support))
             .add(RewriteArraysOverlap(support))
-            .add(RewriteArrayPositionComparison(support))
             .build()
     }
 
@@ -293,9 +312,34 @@ class DorisClient @Inject constructor(
 
     override fun isLimitGuaranteed(session: ConnectorSession): Boolean = true
 
-    // P1a scope: no TopN (NULL-ordering rendering on 4.1.3 not yet decided, SR K6), no
-    // aggregate pushdown (P4), no expression pushdown beyond exact domains (PLAN §10 P1).
-    override fun supportsTopN(session: ConnectorSession, handle: JdbcTableHandle, sortOrder: List<JdbcSortItem>): Boolean = false
+    /**
+     * Safe TopN (PLAN §6.5; P3): pushed only when EVERY sort key is a non-text exact type.
+     * Excluded with evidence: CHAR/VARCHAR (G5 — Doris collation unproven; SR K7 posture),
+     * REAL/DOUBLE (approximate; Trino orders NaN largest — Doris NaN placement unproven),
+     * everything else unproven. Doris 4.1.3 supports the native `NULLS FIRST/LAST` syntax
+     * for all four Trino orderings (live-probed 2026-07-19 — SR K6's ISNULL-prefix trick is
+     * unnecessary; "keep the pattern, re-decide the rendering" resolved to native). A TopN is
+     * always rendered WITH its LIMIT (bare ORDER BY is never emitted; probed anyway:
+     * `default_order_by_limit=-1`, no 65535 truncation, LIMIT 70000 returns exactly 70000
+     * ordered rows).
+     */
+    override fun supportsTopN(session: ConnectorSession, handle: JdbcTableHandle, sortOrder: List<JdbcSortItem>): Boolean =
+        sortOrder.all { isPushableSortKey(it.column().columnType) }
+
+    override fun topNFunction(): Optional<BaseJdbcClient.TopNFunction> {
+        return Optional.of(
+            BaseJdbcClient.TopNFunction { query, sortItems, limit ->
+                val orderBy = sortItems.joinToString(", ") { sortItem ->
+                    "${quoted(sortItem.column().columnName)} ${ORDERINGS.getValue(sortItem.sortOrder())}"
+                }
+                "$query ORDER BY $orderBy LIMIT $limit"
+            },
+        )
+    }
+
+    // Doris ORDER BY + LIMIT is exact (full sort, exact limit incl. >65535 — live-probed),
+    // so the engine may drop its local TopN entirely.
+    override fun isTopNGuaranteed(session: ConnectorSession): Boolean = true
 
     override fun supportsAggregationPushdown(
         session: ConnectorSession,
@@ -309,6 +353,28 @@ class DorisClient @Inject constructor(
         private val log = Logger.get(DorisClient::class.java)
 
         private val HIDDEN_SCHEMAS = setOf("information_schema", "mysql", "__internal_schema")
+
+        /** Native Doris NULLS placement for all four Trino orderings (live-proven identical). */
+        private val ORDERINGS: Map<SortOrder, String> = mapOf(
+            SortOrder.ASC_NULLS_FIRST to "ASC NULLS FIRST",
+            SortOrder.ASC_NULLS_LAST to "ASC NULLS LAST",
+            SortOrder.DESC_NULLS_FIRST to "DESC NULLS FIRST",
+            SortOrder.DESC_NULLS_LAST to "DESC NULLS LAST",
+        )
+
+        /** Non-text exact types only (KDoc on [supportsTopN] carries the exclusion evidence). */
+        private fun isPushableSortKey(type: Type): Boolean = when (type) {
+            is io.trino.spi.type.TinyintType,
+            is io.trino.spi.type.SmallintType,
+            is io.trino.spi.type.IntegerType,
+            is io.trino.spi.type.BigintType,
+            is io.trino.spi.type.DecimalType,
+            is io.trino.spi.type.DateType,
+            is io.trino.spi.type.TimestampType,
+            is io.trino.spi.type.BooleanType,
+            -> true
+            else -> false
+        }
 
         private const val COLUMNS_QUERY = """
             SELECT COLUMN_NAME, COLUMN_TYPE, IS_NULLABLE, COLUMN_COMMENT
