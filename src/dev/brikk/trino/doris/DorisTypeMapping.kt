@@ -24,6 +24,7 @@ import io.trino.plugin.jdbc.LongReadFunction
 import io.trino.plugin.jdbc.ObjectReadFunction
 import io.trino.plugin.jdbc.ObjectWriteFunction
 import io.trino.plugin.jdbc.PredicatePushdownController
+import io.trino.plugin.jdbc.SliceWriteFunction
 import io.trino.plugin.jdbc.PredicatePushdownController.DISABLE_PUSHDOWN
 import io.trino.plugin.jdbc.PredicatePushdownController.DomainPushdownResult
 import io.trino.plugin.jdbc.PredicatePushdownController.FULL_PUSHDOWN
@@ -72,6 +73,7 @@ import java.math.BigInteger
 import java.net.Inet4Address
 import java.net.Inet6Address
 import java.net.InetAddress
+import java.sql.PreparedStatement
 import java.sql.ResultSet
 import java.sql.Types
 import java.time.LocalDate
@@ -116,8 +118,8 @@ internal class DorisTypeMapping(typeManager: TypeManager) {
         put("text") { _ -> Optional.of(unboundedVarcharMapping()) }
         put("json") { _ -> Optional.of(jsonMapping()) }
         put("variant") { _ -> Optional.of(jsonMapping()) }
-        put("ipv4") { _ -> Optional.of(ipAddressMapping()) }
-        put("ipv6") { _ -> Optional.of(ipAddressMapping()) }
+        put("ipv4") { _ -> Optional.of(ipAddressMapping(isV4 = true)) }
+        put("ipv6") { _ -> Optional.of(ipAddressMapping(isV4 = false)) }
         put("array") { parsed -> arrayColumnMapping(parsed) }
     }
 
@@ -143,8 +145,8 @@ internal class DorisTypeMapping(typeManager: TypeManager) {
         put("decimalv3") { parsed -> decimalArrayElement(parsed) }
         put("date") { _ -> DorisArrayElement.DateElement }
         put("datetime") { parsed -> DorisArrayElement.TimestampElement(timestampType(parsed)) }
-        put("ipv4") { _ -> DorisArrayElement.IpAddressElement(ipAddressType) }
-        put("ipv6") { _ -> DorisArrayElement.IpAddressElement(ipAddressType) }
+        put("ipv4") { _ -> DorisArrayElement.IpAddressElement(ipAddressType, isV4 = true) }
+        put("ipv6") { _ -> DorisArrayElement.IpAddressElement(ipAddressType, isV4 = false) }
         put("array") { parsed ->
             resolveArrayElement(arrayElementColumnType(parsed.raw))?.let { DorisArrayElement.NestedArrayElement(it) }
         }
@@ -195,6 +197,9 @@ internal class DorisTypeMapping(typeManager: TypeManager) {
             ),
         )
     }
+
+    /** True for the Trino IPADDRESS type (both Doris IPV4 and IPV6 map to it). */
+    fun isIpAddress(type: Type): Boolean = type == ipAddressType
 
     internal fun resolveArrayElement(columnType: String): DorisArrayElement? {
         val parsed = DorisColumnType.parse(columnType)
@@ -272,15 +277,26 @@ internal class DorisTypeMapping(typeManager: TypeManager) {
     /**
      * IPV4/IPV6 arrive as canonical text (`192.168.1.1`, `2001:db8::ff00:42:8329`, `::`,
      * `fe80::1` — PROBE §3, Impl #4) and map to Trino IPADDRESS; unparseable text fails loud.
-     * Pushdown stays disabled in P1a (only exact numeric/date/boolean domains are pushed);
-     * IPADDRESS equality domains are a P1b/P2 item per ledger §A PPD column.
+     *
+     * Pushdown is TYPE-AWARE (live-probed 2026-07-19, `REPORT-ip-pushdown-probe-4.1.3.md`):
+     * Trino IPADDRESS is a single 16-byte (IPv4-mapped) type, but Doris has DISTINCT IPV4 and
+     * IPV6 types that reject each other's textual forms — IPV4 wants dotted-quad `a.b.c.d`,
+     * IPV6 wants a colon-hex form and REJECTS dotted-quad. Byte ordering is identical on both
+     * engines (unsigned big-endian 16 bytes — [IpAddressType.comparisonOperator] vs Doris
+     * IPV4/IPV6 order), so equality/range/IN domains and TopN are exact once rendered in the
+     * TARGET dialect. Bound parameters render via [ipAddressWriteFunction]:
+     * - IPV4 columns: [IPV4_PUSHDOWN] pushes ONLY when every domain value is an IPv4-mapped
+     *   address (a real IPv6 literal can never equal an IPV4 column value; kept local — still
+     *   correct) so the write function can always emit dotted-quad.
+     * - IPV6 columns: FULL_PUSHDOWN — every 16-byte value renders as a fully-expanded 8-group
+     *   colon-hex literal Doris accepts (incl. `0:0:0:0:0:ffff:c0a8:101` for mapped v4).
      */
-    private fun ipAddressMapping(): ColumnMapping {
+    private fun ipAddressMapping(isV4: Boolean): ColumnMapping {
         return ColumnMapping.sliceMapping(
             ipAddressType,
             { resultSet, columnIndex -> readIpAddress(resultSet, columnIndex) },
-            varcharWriteFunction(),
-            DISABLE_PUSHDOWN,
+            ipAddressWriteFunction(isV4),
+            if (isV4) IPV4_PUSHDOWN else FULL_PUSHDOWN,
         )
     }
 
@@ -509,6 +525,77 @@ internal class DorisTypeMapping(typeManager: TypeManager) {
 
         private fun readIpAddress(resultSet: ResultSet, columnIndex: Int): Slice =
             ipAddressSlice(resultSet.getString(columnIndex))
+
+        private const val IP_SLICE_BYTES = 16
+
+        /**
+         * Push an IPV4 domain ONLY when every value is an IPv4-mapped address ([isV4MappedIpSlice]);
+         * a real IPv6 literal can never equal an IPV4 column value, so keeping such a domain local
+         * is both correct and lets [ipAddressWriteFunction] always emit a dotted-quad literal.
+         */
+        internal val IPV4_PUSHDOWN = PredicatePushdownController { session, domain ->
+            if (collectDomainSlices(domain).all(::isV4MappedIpSlice)) {
+                FULL_PUSHDOWN.apply(session, domain)
+            } else {
+                DISABLE_PUSHDOWN.apply(session, domain)
+            }
+        }
+
+        /** Gathers every Slice in a domain (discrete values and range bounds). */
+        internal fun collectDomainSlices(domain: Domain): List<Slice> {
+            val slices = ArrayList<Slice>()
+            domain.values.valuesProcessor.consume(
+                { ranges ->
+                    ranges.orderedRanges.forEach { range ->
+                        range.lowValue.ifPresent { slices.add(it as Slice) }
+                        range.highValue.ifPresent { slices.add(it as Slice) }
+                    }
+                },
+                { discrete -> discrete.values.forEach { slices.add(it as Slice) } },
+                { /* all-or-none carries no values */ },
+            )
+            return slices
+        }
+
+        /** True when a 16-byte Trino IPADDRESS slice is IPv4-mapped (`::ffff:a.b.c.d`). */
+        internal fun isV4MappedIpSlice(slice: Slice): Boolean {
+            if (slice.length() != IP_SLICE_BYTES) {
+                return false
+            }
+            for (i in 0 until 10) {
+                if (slice.getByte(i).toInt() != 0) {
+                    return false
+                }
+            }
+            return slice.getByte(10) == 0xFF.toByte() && slice.getByte(11) == 0xFF.toByte()
+        }
+
+        /**
+         * Renders a Trino IPADDRESS (16-byte big-endian slice) into the TARGET Doris dialect:
+         * IPV4 -> dotted-quad of the last 4 bytes (caller guarantees v4-mapped via [IPV4_PUSHDOWN]
+         * / the array-rule guard); IPV6 -> fully-expanded 8-group lowercase colon-hex (built from
+         * bytes, never via Guava, which collapses mapped addresses to a dotted form IPV6 rejects).
+         */
+        internal fun renderIpLiteral(slice: Slice, isV4: Boolean): String {
+            val bytes = slice.getBytes()
+            require(bytes.size == IP_SLICE_BYTES) { "IPADDRESS slice must be 16 bytes, was ${bytes.size}" }
+            if (isV4) {
+                require(isV4MappedIpSlice(slice)) { "non-IPv4-mapped IPADDRESS cannot render as a Doris IPV4 literal" }
+                return "${bytes[12].toInt() and 0xFF}.${bytes[13].toInt() and 0xFF}." +
+                    "${bytes[14].toInt() and 0xFF}.${bytes[15].toInt() and 0xFF}"
+            }
+            return (0 until 8).joinToString(":") { group ->
+                val hi = bytes[group * 2].toInt() and 0xFF
+                val lo = bytes[group * 2 + 1].toInt() and 0xFF
+                Integer.toHexString((hi shl 8) or lo)
+            }
+        }
+
+        /** Binds an IPADDRESS parameter as its target-dialect text ([renderIpLiteral]); Doris coerces. */
+        internal fun ipAddressWriteFunction(isV4: Boolean): SliceWriteFunction =
+            SliceWriteFunction { statement: PreparedStatement, index: Int, value: Slice ->
+                statement.setString(index, renderIpLiteral(value, isV4))
+            }
 
         /** Canonical Doris IPV4/IPV6 text -> Trino IPADDRESS slice; unparseable text fails loud. */
         internal fun ipAddressSlice(text: String): Slice {

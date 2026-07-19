@@ -45,8 +45,10 @@ Predicates and query shapes the connector pushes into Doris:
 | Trino | Pushed to Doris as | Notes |
 |---|---|---|
 | Column comparisons and ranges (`=`, `<`, `BETWEEN`, `IN`, `IS NULL`) | native predicates | numeric, boolean, date, datetime, and decimal columns (incl. LARGEINT) |
+| IP comparisons and ranges (`=`, `IN`, `<`, `IS NULL`) | native `IPV4`/`IPV6` predicates | rendered in the target Doris dialect (IPV4 dotted-quad, IPV6 colon-hex); byte ordering identical on both engines; IPV4 columns push only IPv4-mapped literals (a real IPv6 literal can't equal an IPV4 value — stays in Trino) |
+| `contains(ip_array, ip)` / `arrays_overlap(ip_array, ...)` | `array_contains` / `arrays_overlap` | `ARRAY<IPV4>` / `ARRAY<IPV6>`; overlap casts the literal elements to the IP type |
 | `contains(array_col, value)` | `array_contains(col, ?)` | rendered bare so the Doris **inverted index** can fire; numeric/decimal/date/datetime/boolean elements |
-| `arrays_overlap(a, b)` | `arrays_overlap(...)` with a NULL-element guard | guard preserves Trino NULL semantics exactly |
+| `arrays_overlap(a, b)` / `arrays_overlap(col, ARRAY[...])` | `arrays_overlap(...)` with a NULL-element guard | column×column and column×constant-literal (either orientation); guard preserves Trino NULL semantics exactly; empty/all-NULL literal stays in Trino |
 | `array_position(a, x) <op> n` | `array_position(...)` comparisons | all six comparison operators, either orientation |
 | `cardinality(array_col) <op> n` | `array_size(col)` comparisons | all six operators, `BETWEEN`, either orientation; NULL/empty/NULL-element semantics verified identical |
 | `json_extract_scalar(json_col, '$.path') = 'text'` | `json_unquote(json_extract(col, '$.path')) = ?` | equality only, simple constant paths (`$.a.b`, `$.a[0]`); literals that could collide with Doris's non-scalar/number text renderings stay in Trino (see dev-docs/NOTES-p5-batch.md) |
@@ -59,7 +61,7 @@ Predicates and query shapes the connector pushes into Doris:
 | `NOT` / `AND` / `OR` | composed remote predicates | over value-identical operands (e.g. `array_position` / `cardinality` comparisons) |
 | `JOIN` (opt-in: `join-pushdown.enabled=true`) | `INNER/LEFT/RIGHT JOIN` as one remote statement | **off by default**; equality, `IS NOT DISTINCT FROM` (Doris `<=>`), and range conditions on non-text exact keys (numerics, decimal incl. LARGEINT, date, datetime, boolean); FULL OUTER and text/float keys stay in Trino; `join-pushdown.strategy=AUTOMATIC` (default) decides by table statistics, `EAGER` always pushes |
 | `LIMIT n` | `LIMIT n` | |
-| `ORDER BY ... LIMIT n` (TopN) | `ORDER BY ... NULLS FIRST/LAST LIMIT n` | non-text sort keys (plus VARCHAR keys in `BINARY`/`FULL` string modes); all four NULL orderings render natively |
+| `ORDER BY ... LIMIT n` (TopN) | `ORDER BY ... NULLS FIRST/LAST LIMIT n` | non-text sort keys, incl. IPADDRESS (byte-order identical) (plus VARCHAR keys in `BINARY`/`FULL` string modes); all four NULL orderings render natively |
 | String predicates and `LIKE` | mode-dependent | see [String pushdown modes](#string-pushdown-modes) |
 | `count(*)` / `count(col)` / `count(DISTINCT col)` | `count(...)` | any column type for plain counts; DISTINCT on non-text exact types only |
 | `min` / `max` | `min(col)` / `max(col)` | numeric, decimal (incl. LARGEINT), date, datetime, boolean — not text (collation), not FLOAT/DOUBLE (Doris ranks NaN largest, Trino doesn't) |

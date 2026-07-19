@@ -23,7 +23,7 @@ import org.junit.jupiter.api.TestInstance
 import java.util.TimeZone
 
 /**
- * Timezone audit (TODO-timezones items 1-3, test-only): Doris DATETIME/DATE are ZONELESS and
+ * Timezone audit (TODO-timezones items 1-3 + item 6, test-only): Doris DATETIME/DATE are ZONELESS and
  * map to zoneless Trino types, so every zone knob must be a NO-OP for pushed queries —
  * {Trino session zone} x {doris.time-zone} x {JVM default zone} must never change results
  * or the pushed literal bytes. DST-adversarial wall-clock values (nonexistent and ambiguous
@@ -135,6 +135,16 @@ class TestDorisTimezoneAudit : AbstractTestQueryFramework() {
             "SELECT dt FROM doris.p5_tz.t ORDER BY dt ASC NULLS LAST LIMIT 3",
             // plain datetime projection (scalar read path incl. the 0000/9999 edges)
             "SELECT id, CAST(d AS varchar), CAST(dt6 AS varchar) FROM doris.p5_tz.t",
+            // --- item 6: DATE 0000-01-01 / 9999-12-31 edges folded into the zone matrix (where
+            // driver-side epoch-day/zone-conversion bugs bite first) across every DATE path ---
+            // DATE domain pushdown AT the edges
+            "SELECT id FROM doris.p5_tz.t WHERE d = DATE '0000-01-01' OR d = DATE '9999-12-31'",
+            // DATE range pushdown SPANNING both edges (whole-domain scan)
+            "SELECT id FROM doris.p5_tz.t WHERE d BETWEEN DATE '0000-01-01' AND DATE '9999-12-31'",
+            // DATE TopN — the min edge (0000-01-01) must sort first, max edge last
+            "SELECT CAST(d AS varchar) FROM doris.p5_tz.t ORDER BY d ASC NULLS LAST LIMIT 5",
+            // min/max(DATE) aggregate pushdown returns the exact edges
+            "SELECT CAST(min(d) AS varchar), CAST(max(d) AS varchar) FROM doris.p5_tz.t",
         )
         for (sql in paths) {
             val reference = computeActual(sessionInZone("UTC"), sql).materializedRows.map { it.toString() }.sorted()

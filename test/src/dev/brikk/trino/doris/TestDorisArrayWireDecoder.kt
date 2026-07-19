@@ -166,7 +166,7 @@ class TestDorisArrayWireDecoder {
 
     @Test
     fun testIpAddressElements() {
-        val element = IpAddressElement(ipAddressType)
+        val element = IpAddressElement(ipAddressType, isV4 = true)
         val values = DorisArrayWireDecoder.decode("""["192.168.1.1", "0.0.0.0", "255.255.255.255"]""", element)
         assertThat(values).containsExactly(
             DorisTypeMapping.ipAddressSlice("192.168.1.1"),

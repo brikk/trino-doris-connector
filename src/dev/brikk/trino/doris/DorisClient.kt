@@ -505,8 +505,11 @@ class DorisClient @Inject constructor(
      * stored bytes, divergent for trailing-space data and undetectable from the query
      * (REPORT-string-comparison-probe-4.1.3.md "ORDER BY").
      */
-    private fun isPushableSortKey(session: ConnectorSession, type: Type): Boolean = when (type) {
-        is io.trino.spi.type.VarcharType -> DorisSessionProperties.getStringPushdownMode(session).allowsFullStringPushdown
+    private fun isPushableSortKey(session: ConnectorSession, type: Type): Boolean = when {
+        type is io.trino.spi.type.VarcharType -> DorisSessionProperties.getStringPushdownMode(session).allowsFullStringPushdown
+        // IPADDRESS: Doris IPV4/IPV6 order == Trino's unsigned big-endian 16-byte order
+        // (IpAddressType.comparisonOperator), live-proven byte-exact; NULLS FIRST/LAST native.
+        typeMapping.isIpAddress(type) -> true
         else -> isPushableSortKey(type)
     }
 

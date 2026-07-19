@@ -138,7 +138,10 @@ class TestDorisMultiFeFailover : AbstractTestQueryFramework() {
         val pool = java.util.concurrent.Executors.newSingleThreadExecutor()
         val victim = pool.submit<String> {
             runCatching {
-                DriverManager.getConnection("jdbc:mysql://$HOST:9132/", props()).use {
+                // victimProps() uses a socketTimeout LONGER than the 20s kill-wait window below
+                // (props()'s 8s would race the kill and mask the server message with a client-side
+                // "Communications link failure"); sleep(60) can only be unblocked by the KILL.
+                DriverManager.getConnection("jdbc:mysql://$HOST:9132/", victimProps()).use {
                     it.createStatement().execute("SELECT sleep(60) /*$marker*/")
                 }
             }.exceptionOrNull()?.message ?: "completed"
@@ -342,6 +345,18 @@ class TestDorisMultiFeFailover : AbstractTestQueryFramework() {
             setProperty("user", USER)
             setProperty("connectTimeout", "3000")
             setProperty("socketTimeout", "8000")
+        }
+
+        /**
+         * For the cross-FE-kill victim: a socketTimeout comfortably longer than the 20s window
+         * the test waits for the kill, and shorter than the query's own sleep(60). This makes the
+         * KILL the ONLY thing that can unblock the victim inside the window, so the assertion sees
+         * the server's "cancel query by user" message rather than a racing client-side timeout.
+         */
+        private fun victimProps(): Properties = Properties().apply {
+            setProperty("user", USER)
+            setProperty("connectTimeout", "3000")
+            setProperty("socketTimeout", "40000")
         }
 
         private fun openOverlayConnection(): Connection =

@@ -164,6 +164,42 @@ class TestDorisP2bPushdown : AbstractTestQueryFramework() {
     }
 
     @Test
+    fun testArraysOverlapConstantLiteralPushdownDifferential() {
+        // Rows: 1=[1,2,3], 2=[4,5], 3=[1,NULL], 4=NULL, 5=[], 6=[7,NULL] (a_int)
+        assertPushedAndEquivalent("arrays_overlap(a_int, ARRAY[1, 9])") // matches row 1 and 3
+        assertPushedAndEquivalent("arrays_overlap(a_int, ARRAY[7])") // matches row 6 (has NULL)
+        assertPushedAndEquivalent("arrays_overlap(a_int, ARRAY[100, 200])") // matches nothing
+        // NULL literal elements are stripped: the over-return trap (row 3 = [1,NULL] vs a
+        // NULL-bearing literal) must still be equivalent to Trino (which returns NULL -> drop
+        // unless a real non-null element overlaps).
+        assertPushedAndEquivalent("arrays_overlap(a_int, ARRAY[9, NULL])") // no real overlap -> none
+        assertPushedAndEquivalent("arrays_overlap(a_int, ARRAY[1, NULL])") // real overlap on 1
+        // flipped orientation (arrays_overlap is symmetric)
+        assertPushedAndEquivalent("arrays_overlap(ARRAY[7], a_int)")
+        // other element families
+        assertPushedAndEquivalent("arrays_overlap(a_bigint, ARRAY[BIGINT '9223372036854775807'])")
+        assertPushedAndEquivalent("arrays_overlap(a_date, ARRAY[DATE '0000-01-01'])")
+        assertPushedAndEquivalent("arrays_overlap(a_dt6, ARRAY[TIMESTAMP '2021-06-15 12:34:56.789012'])")
+        assertPushedAndEquivalent("arrays_overlap(a_bool, ARRAY[true])")
+        assertPushedAndEquivalent("arrays_overlap(a_li, ARRAY[DECIMAL '99999999999999999999999999999999999999'])")
+        // direct Doris oracle triangulation on the NULL-trap row
+        assertThat(
+            computeActual("SELECT id FROM doris.p2b_pushdown.t WHERE arrays_overlap(a_int, ARRAY[1, 9]) ORDER BY id").onlyColumn.toList(),
+        ).isEqualTo(listOf(1, 3))
+    }
+
+    @Test
+    fun testArraysOverlapEmptyOrAllNullConstantStaysLocal() {
+        // empty / all-NULL literals never qualify a row; kept local (still correct)
+        assertLocalAndEquivalent("arrays_overlap(a_int, ARRAY[NULL])")
+        assertLocalAndEquivalent("arrays_overlap(a_int, CAST(ARRAY[] AS array(integer)))")
+        // approximate element family stays local (spike §7.5)
+        assertLocalAndEquivalent("arrays_overlap(a_double, ARRAY[DOUBLE '2.5'])")
+        // element-type mismatch (bigint literal array vs int column) stays local
+        assertLocalAndEquivalent("arrays_overlap(a_int, ARRAY[BIGINT '1'])")
+    }
+
+    @Test
     fun testArrayPositionComparisonPushdownDifferential() {
         assertPushedAndEquivalent("array_position(a_int, 1) = 1")
         assertPushedAndEquivalent("array_position(a_int, 5) = 0") // absent -> 0 on both engines
@@ -216,6 +252,10 @@ class TestDorisP2bPushdown : AbstractTestQueryFramework() {
         assertRemoteSqlContains(
             "SELECT id FROM doris.p2b_pushdown.t WHERE arrays_overlap(a_int, b_int)",
             "(arrays_overlap(array_filter(x -> x IS NOT NULL, `a_int`), `b_int`))",
+        )
+        assertRemoteSqlContains(
+            "SELECT id FROM doris.p2b_pushdown.t WHERE arrays_overlap(a_int, ARRAY[1, 2])",
+            "(arrays_overlap(array_filter(x -> x IS NOT NULL, `a_int`), ARRAY(1, 2)))",
         )
         assertRemoteSqlContains(
             "SELECT id FROM doris.p2b_pushdown.t WHERE array_position(a_int, 1) = 1",

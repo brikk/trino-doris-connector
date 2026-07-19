@@ -106,16 +106,18 @@ internal object DorisPushdownEvidence {
      * shapes — G3's "requires a connector rule with explicit guards or wrappers".
      */
     val ARRAYS_OVERLAP = Evidence(
-        trinoFunction = "arrays_overlap(array(T), array(T))",
+        trinoFunction = "arrays_overlap(array(T), array(T))  [column×column and column×constant-literal]",
         registrySource = "arrays_overlap",
         expectedTarget = "arrays_overlap",
         expectedVerdict = HazardVerdict.CONDITIONALLY_EQUIVALENT,
         expectedProvenance = DIFFERENTIAL_PROBE_PROVENANCE,
-        dorisRendering = "(arrays_overlap(array_filter(x -> x IS NOT NULL, `left`), `right`))",
+        dorisRendering = "(arrays_overlap(array_filter(x -> x IS NOT NULL, `left`), `right`)) | " +
+            "(arrays_overlap(array_filter(x -> x IS NOT NULL, `col`), ARRAY(?, ...)))  -- constant literal: NULLs stripped",
         treatment = Treatment.GUARDED_WRAPPER,
         guard = "array_filter(x -> x IS NOT NULL",
         hazard = "Doris matches NULL elements to each other (returns 1) where Trino returns NULL -> " +
-            "unguarded pushdown OVER-RETURNS; fixed by stripping NULL elements from one side",
+            "unguarded pushdown OVER-RETURNS; fixed by stripping NULL elements (column side via " +
+            "array_filter, constant side by dropping NULL literals)",
         liveProof = "TestDorisP2bPushdown",
     )
 

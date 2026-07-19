@@ -53,9 +53,13 @@ the type boundary in v1, and no `TIMESTAMP WITH TIME ZONE` column is ever expose
    mapping needs: pinned connection zone, instant-vs-wall-clock contract, DST/offset boundary
    fixtures, and a decision on `TIMESTAMP WITH TIME ZONE` precision. Do not expose before
    that contract exists (plan §5 stance).
-6. **DATE boundary sanity under zones.** `0000-01-01` / `9999-12-31` edges are proven in one
-   zone; include them in the item-2 matrix (they're where driver-side zone conversion bugs
-   typically bite first).
+6. **DONE 2026-07-19** (`testDatetimePathsAreSessionZoneInvariant`, DATE-edge paths). The
+   `0000-01-01` / `9999-12-31` edges are now folded into the item-2 session-zone-invariance
+   matrix across every DATE path — domain pushdown AT the edges, range pushdown SPANNING both
+   edges, DATE TopN (min edge sorts first / max edge last), and min/max(DATE) aggregate —
+   each run under {UTC, America/New_York, Asia/Tokyo} sessions and the Asia/Tokyo
+   `doris.time-zone` catalog. Byte-identical everywhere: no epoch-day/zone-conversion leak at
+   the DATE boundaries. Zoneless DATE passthrough PINNED at the edges.
 
 ## Where the prior art lives
 

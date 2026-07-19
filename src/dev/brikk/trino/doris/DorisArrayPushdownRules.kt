@@ -37,12 +37,15 @@ import io.trino.spi.expression.StandardFunctions.GREATER_THAN_OR_EQUAL_OPERATOR_
 import io.trino.spi.expression.StandardFunctions.LESS_THAN_OPERATOR_FUNCTION_NAME
 import io.trino.spi.expression.StandardFunctions.LESS_THAN_OR_EQUAL_OPERATOR_FUNCTION_NAME
 import io.trino.spi.expression.StandardFunctions.NOT_EQUAL_OPERATOR_FUNCTION_NAME
+import io.airlift.slice.Slice
 import io.trino.spi.expression.Variable
+import io.trino.spi.block.Block
 import io.trino.spi.type.ArrayType
 import io.trino.spi.type.BigintType.BIGINT
 import io.trino.spi.type.BooleanType.BOOLEAN
 import io.trino.spi.type.IntegerType.INTEGER
 import io.trino.spi.type.Type
+import io.trino.spi.type.TypeUtils.readNativeValue
 import java.util.Optional
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.LongAdder
@@ -64,6 +67,8 @@ internal class DorisArrayPushdownSupport(
         val quotedName: String,
         val elementType: Type,
         val elementTypeHandle: JdbcTypeHandle,
+        /** null when the element is not IPADDRESS; true=Doris IPV4, false=IPV6 (dialect rendering). */
+        val ipV4: Boolean? = null,
     )
 
     /**
@@ -96,24 +101,83 @@ internal class DorisArrayPushdownSupport(
             quotedName = quote(column.columnName),
             elementType = element.trinoType,
             elementTypeHandle = DorisTypeMapping.toTypeHandle(elementColumnType),
+            ipV4 = (element as? DorisArrayElement.IpAddressElement)?.isV4,
         )
     }
 
     /** A needle must be a NON-NULL constant of exactly the element type (NULL semantics diverge; see evidence). */
-    fun literalNeedle(expression: ConnectorExpression, elementType: Type): Optional<Any>? {
+    fun literalNeedle(expression: ConnectorExpression, column: PushableArrayColumn): Optional<Any>? {
         if (expression !is Constant) {
             rejected("non-literal needle", expression.toString())
             return null
         }
-        if (expression.type != elementType) {
-            rejected("needle type ${expression.type} != element type $elementType", expression.toString())
+        if (expression.type != column.elementType) {
+            rejected("needle type ${expression.type} != element type ${column.elementType}", expression.toString())
             return null
         }
         val value = expression.value ?: run {
             rejected("NULL needle", expression.toString())
             return null
         }
+        if (!ipNeedleRenderable(value, column.ipV4)) {
+            rejected("IPADDRESS needle not renderable for a Doris IPV4 column (non-v4-mapped)", expression.toString())
+            return null
+        }
         return Optional.of(value)
+    }
+
+    /**
+     * A Doris IPV4 column can only be compared against IPv4-mapped literals (a real IPv6 value
+     * can never equal an IPV4 value); such needles are kept local. IPV6 and non-IP elements
+     * accept any value.
+     */
+    private fun ipNeedleRenderable(value: Any, ipV4: Boolean?): Boolean {
+        if (ipV4 != true) {
+            return true
+        }
+        val slice = value as? Slice ?: return false
+        return DorisTypeMapping.isV4MappedIpSlice(slice)
+    }
+
+    /**
+     * A constant `ARRAY(T)` needle: returns its NON-NULL elements as bound query parameters
+     * (the constant's type must be exactly `array(elementType)`), or null when the expression
+     * is not such a constant array. NULL array elements are DROPPED: after the column side is
+     * NULL-stripped by [RewriteArraysOverlap]'s guard, a NULL on the literal side can never
+     * match a value (Doris only matches NULL-to-NULL), so dropping it is semantics-preserving
+     * and removes the over-return hazard by construction. A whole-array NULL constant is never
+     * pushable (Trino `arrays_overlap(x, NULL)` -> NULL -> row dropped; caller keeps it local).
+     */
+    fun literalArrayNonNullParameters(
+        expression: ConnectorExpression,
+        column: PushableArrayColumn,
+    ): List<QueryParameter>? {
+        if (expression !is Constant) {
+            rejected("non-literal array needle", expression.toString())
+            return null
+        }
+        if (expression.type != ArrayType(column.elementType)) {
+            rejected("array needle type ${expression.type} != array(${column.elementType})", expression.toString())
+            return null
+        }
+        val block = expression.value as? Block ?: run {
+            rejected("NULL array needle", expression.toString())
+            return null
+        }
+        val parameters = ArrayList<QueryParameter>(block.positionCount)
+        for (i in 0 until block.positionCount) {
+            if (block.isNull(i)) {
+                continue
+            }
+            val value = readNativeValue(column.elementType, block, i)
+            if (!ipNeedleRenderable(value, column.ipV4)) {
+                // non-v4-mapped element against a Doris IPV4 column: can never match -> keep local
+                rejected("IPADDRESS array element not renderable for a Doris IPV4 column", expression.toString())
+                return null
+            }
+            parameters.add(QueryParameter(column.elementTypeHandle, column.elementType, Optional.of(value)))
+        }
+        return parameters
     }
 
     private fun rejected(reason: String, subject: String): PushableArrayColumn? {
@@ -139,6 +203,7 @@ internal class DorisArrayPushdownSupport(
             is DorisArrayElement.DecimalElement,
             is DorisArrayElement.DateElement,
             is DorisArrayElement.TimestampElement,
+            is DorisArrayElement.IpAddressElement,
             -> true
             else -> false
         }
@@ -159,7 +224,7 @@ internal class RewriteContains(
     override fun rewrite(expression: Call, captures: Captures, context: RewriteContext<ParameterizedExpression>): Optional<ParameterizedExpression> {
         val arrayArgument = expression.arguments[0] as? Variable ?: return Optional.empty()
         val column = support.pushableArrayColumn(context, arrayArgument) ?: return Optional.empty()
-        val needle = support.literalNeedle(expression.arguments[1], column.elementType) ?: return Optional.empty()
+        val needle = support.literalNeedle(expression.arguments[1], column) ?: return Optional.empty()
         return Optional.of(
             ParameterizedExpression(
                 "(array_contains(${column.quotedName}, ?))",
@@ -177,10 +242,18 @@ internal class RewriteContains(
 }
 
 /**
- * `arrays_overlap(array(T), array(T))` -> `(arrays_overlap(array_filter(x -> x IS NOT NULL,
- * `l`), `r`))` — the null-strip wrapper is MANDATORY: without it Doris matches NULL elements
- * to each other and over-returns (evidence in [DorisPushdownEvidence.ARRAYS_OVERLAP]).
- * Column-to-column shape only; constant-array arguments are a P2b open item.
+ * `arrays_overlap(array(T), array(T))` in two shapes, both null-strip-GUARDED (the wrapper is
+ * MANDATORY: without it Doris matches NULL elements to each other and over-returns — evidence
+ * in [DorisPushdownEvidence.ARRAYS_OVERLAP]):
+ *
+ * - column × column -> `(arrays_overlap(array_filter(x -> x IS NOT NULL, `l`), `r`))`
+ * - column × constant `ARRAY(T)` literal (either orientation; `arrays_overlap` is symmetric)
+ *   -> `(arrays_overlap(array_filter(x -> x IS NOT NULL, `col`), ARRAY(?, ?, ...)))` where the
+ *   bound parameters are the literal's NON-NULL elements ([DorisArrayPushdownSupport.literalArrayNonNullParameters]).
+ *
+ * An empty (or all-NULL) constant array stays LOCAL: the predicate can never qualify a row and
+ * pushing an empty `ARRAY()` literal would need element-type inference we do not rely on. Still
+ * correct (the engine evaluates it locally).
  */
 internal class RewriteArraysOverlap(
     private val support: DorisArrayPushdownSupport,
@@ -188,17 +261,67 @@ internal class RewriteArraysOverlap(
     override fun getPattern(): Pattern<Call> = PATTERN
 
     override fun rewrite(expression: Call, captures: Captures, context: RewriteContext<ParameterizedExpression>): Optional<ParameterizedExpression> {
-        val leftArgument = expression.arguments[0] as? Variable ?: return Optional.empty()
-        val rightArgument = expression.arguments[1] as? Variable ?: return Optional.empty()
+        val arg0 = expression.arguments[0]
+        val arg1 = expression.arguments[1]
+        if (arg0 is Variable && arg1 is Variable) {
+            return rewriteColumnColumn(arg0, arg1, context)
+        }
+        // column × constant literal, either orientation (arrays_overlap is symmetric)
+        val (variable, constant) = when {
+            arg0 is Variable -> arg0 to arg1
+            arg1 is Variable -> arg1 to arg0
+            else -> return Optional.empty()
+        }
+        return rewriteColumnConstant(variable, constant, context)
+    }
+
+    private fun rewriteColumnColumn(
+        leftArgument: Variable,
+        rightArgument: Variable,
+        context: RewriteContext<ParameterizedExpression>,
+    ): Optional<ParameterizedExpression> {
         val left = support.pushableArrayColumn(context, leftArgument) ?: return Optional.empty()
         val right = support.pushableArrayColumn(context, rightArgument) ?: return Optional.empty()
-        if (left.elementType != right.elementType) {
+        if (left.elementType != right.elementType || left.ipV4 != right.ipV4) {
+            // ipV4 guard: Trino IPADDRESS erases v4/v6, but array<ipv4> vs array<ipv6> are
+            // distinct Doris types — never overlap them remotely.
             return Optional.empty()
         }
         return Optional.of(
             ParameterizedExpression(
                 "(arrays_overlap(array_filter(x -> x IS NOT NULL, ${left.quotedName}), ${right.quotedName}))",
                 listOf(),
+            ),
+        )
+    }
+
+    private fun rewriteColumnConstant(
+        variable: Variable,
+        constant: ConnectorExpression,
+        context: RewriteContext<ParameterizedExpression>,
+    ): Optional<ParameterizedExpression> {
+        val column = support.pushableArrayColumn(context, variable) ?: return Optional.empty()
+        val parameters = support.literalArrayNonNullParameters(constant, column)
+            ?: return Optional.empty()
+        if (parameters.isEmpty()) {
+            // empty / all-NULL constant array: never qualifies a row — keep it local (correct),
+            // avoiding an untyped empty ARRAY() literal.
+            return Optional.empty()
+        }
+        // IP literals bind as strings, and arrays_overlap (unlike array_contains) does NOT coerce
+        // a varchar array to IPV4/IPV6 — it compares text, which diverges from Doris's canonical
+        // form. An explicit per-element CAST forces the IP element type (live-proven). Numeric /
+        // date / datetime params already bind as their native JDBC type, so they need no cast.
+        val placeholder = when (column.ipV4) {
+            true -> "CAST(? AS IPV4)"
+            false -> "CAST(? AS IPV6)"
+            null -> "?"
+        }
+        val placeholders = parameters.joinToString(", ") { placeholder }
+        return Optional.of(
+            ParameterizedExpression(
+                "(arrays_overlap(array_filter(x -> x IS NOT NULL, ${column.quotedName}), ARRAY($placeholders)))",
+                parameters,
             ),
         )
     }
@@ -250,7 +373,7 @@ internal class RewriteArrayPositionComparison(
         val boundValue = bound.value as? Long ?: return Optional.empty()
         val arrayArgument = positionCall.arguments[0] as? Variable ?: return Optional.empty()
         val column = support.pushableArrayColumn(context, arrayArgument) ?: return Optional.empty()
-        val needle = support.literalNeedle(positionCall.arguments[1], column.elementType) ?: return Optional.empty()
+        val needle = support.literalNeedle(positionCall.arguments[1], column) ?: return Optional.empty()
         return Optional.of(
             ParameterizedExpression(
                 "(array_position(${column.quotedName}, ?) $operator $boundValue)",
