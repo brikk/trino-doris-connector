@@ -68,7 +68,9 @@ Predicates and query shapes the connector pushes into Doris:
 | `any_value(x)` | `any_value(x)` | nondeterministic on both engines; NULL-handling verified identical |
 | `approx_distinct(x)` | `approx_count_distinct(x)` | **opt-in** (`doris.approximate-pushdown`, default off): the HLL sketches differ, so estimates won't match local results |
 | `avg(x)` | *not pushed* | Doris avg semantics diverge (scale truncation / lossy accumulation); write `sum(x)/count(x)` instead — both push and the division stays Trino-exact |
-| `GROUP BY` (with the above) | `GROUP BY ...` | grouping keys restricted to the same non-text exact types; NULL grouping verified identical |
+| `GROUP BY` (with the above) | `GROUP BY ...` | exact-type AND varchar keys (byte-exact grouping verified; CHAR and FLOAT/DOUBLE keys stay local); NULL grouping verified identical |
+| `SELECT DISTINCT ...` | remote `GROUP BY` | same key rules as GROUP BY; composes with WHERE and LIMIT |
+| `HAVING` | outer `WHERE` over the pushed GROUP BY subquery | verified end-to-end |
 
 Deliberately **not** pushed (kept in Trino to guarantee correct results):
 
@@ -103,6 +105,24 @@ patterns have backslashes doubled (Doris's default escape is `\`, Trino's no-esc
 treats `\` literally), and explicit `ESCAPE` clauses pass through; `GUARDED` additionally
 keeps predicates whose values contain a 0x00 byte local as defense-in-depth. `BINARY` is
 the mode whose contract is probe-verified byte semantics; `FULL` is caller-asserted.
+
+### Pushdown coverage at a glance
+
+Pushes (with live-proof evidence, see dev-docs): predicates/domains over exact types and
+strings (tiered GUARDED), IN lists up to `domain-compaction-threshold` (default 256,
+per-query `domain_compaction_threshold`; larger lists ship as ranges with the exact filter
+retained), LIKE-prefix/`starts_with`, JSON equality, array predicates (`contains`,
+`arrays_overlap`, `array_position`, `cardinality`), scalar expressions
+(`coalesce`/`nullif`/temporal extraction/`lower`/`upper`/`length`/date projections),
+aggregates (`count`/`min`/`max`/`sum(DECIMAL≤18)`/`count DISTINCT`/`min_by`/`max_by`/
+`any_value`), GROUP BY / DISTINCT / HAVING / LIMIT / TopN, and opt-in cost-aware JOINs.
+Dynamic filters from local joins also reach the remote scans.
+
+Engine-limited at Trino 483 (cannot reach any connector): `CASE`/`IF` expressions and
+conditional aggregation (`count_if`, `FILTER (WHERE ...)`, `sum(CASE ...)`) — these stay in
+Trino by engine design, over a pushed scan. Deliberately not pushed: `avg` (Doris semantics
+diverge — write `sum(x)/count(x)`, which pushes and stays exact), FLOAT/DOUBLE
+equality/ordering, `approx_distinct` unless `doris.approximate-pushdown` is opted in.
 
 ### Type mapping
 

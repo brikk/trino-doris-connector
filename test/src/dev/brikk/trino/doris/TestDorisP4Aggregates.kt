@@ -66,19 +66,22 @@ class TestDorisP4Aggregates : AbstractTestQueryFramework() {
     }
 
     @Test
-    fun testCountDistinctExactTypesPushTextStaysLocal() {
+    fun testCountDistinctPushesForExactAndTextTypes() {
         val pushedSql = "SELECT count(DISTINCT c_int) FROM doris.p4_agg.t"
         assertThat(query(pushedSql)).isFullyPushedDown()
         assertSameAsLocal(pushedSql)
         assertThat(computeActual(pushedSql).onlyValue)
             .isEqualTo(DorisTestCluster.queryScalar("SELECT count(DISTINCT c_int) FROM p4_agg.t")!!.toLong())
 
-        // text distinctness is collation/case-hazardous -> local, still correct
-        val localSql = "SELECT count(DISTINCT c_vc) FROM doris.p4_agg.t"
-        assertThat(query(localSql)).isNotFullyPushedDown(AggregationNode::class.java)
-        assertSameAsLocal(localSql)
+        // RO-MAX batch 3: text count-distinct now pushes VIA THE ENGINE'S DECOMPOSITION —
+        // count(DISTINCT c_vc) lowers to count(c_vc) over GROUP BY c_vc, and varchar
+        // grouping keys are pushable (byte-exact equality) -> one remote statement.
+        // Distinctness stays Trino-exact: byte-distinct values remain distinct.
+        val textDistinct = "SELECT count(DISTINCT c_vc) FROM doris.p4_agg.t"
+        assertThat(query(textDistinct)).isFullyPushedDown()
+        assertSameAsLocal(textDistinct)
         // 'apple'/'Apple'/'banana'/'BANANA'/'straße' are 5 distinct values under Trino semantics
-        assertThat(computeActual(localSql).onlyValue).isEqualTo(5L)
+        assertThat(computeActual(textDistinct).onlyValue).isEqualTo(5L)
     }
 
     @Test
@@ -209,21 +212,24 @@ class TestDorisP4Aggregates : AbstractTestQueryFramework() {
     }
 
     @Test
-    fun testGroupByTextOrDoubleKeysStayLocal() {
-        // unicode text keys (ü/U/ß/ss/straße) group under TRINO semantics — retained
-        // AggregationNode, values preserved exactly
+    fun testGroupingKeyGateTextPushesDoubleStaysLocal() {
+        // RO-MAX batch 3 widened the grouping-key gate to VARCHAR (grouping is
+        // EQUALITY-only; string equality is byte-exact per the P4 probe): unicode text
+        // keys now PUSH and group as distinct byte sequences on both engines.
         val textKey = "SELECT g_vc, count(*) FROM doris.p4_agg.t GROUP BY g_vc"
-        assertThat(query(textKey)).isNotFullyPushedDown(AggregationNode::class.java)
+        assertThat(query(textKey)).isFullyPushedDown()
         assertSameAsLocal(textKey)
         assertThat(computeActual(textKey).materializedRows.map { it.getField(0) })
             .containsExactlyInAnyOrder("ü", "U", "ß", "ss", "straße", null)
+        assertThat(query("SELECT g_int, g_vc, count(*) FROM doris.p4_agg.t GROUP BY g_int, g_vc"))
+            .isFullyPushedDown()
 
+        // REAL/DOUBLE keys remain local (NaN/±0.0 grouping hazard), and one hazardous key
+        // still poisons the whole grouping set
         val doubleKey = "SELECT g_double, count(*) FROM doris.p4_agg.t GROUP BY g_double"
         assertThat(query(doubleKey)).isNotFullyPushedDown(AggregationNode::class.java)
         assertSameAsLocal(doubleKey)
-
-        // one hazardous key poisons the whole grouping set even if other keys are exact
-        assertThat(query("SELECT g_int, g_vc, count(*) FROM doris.p4_agg.t GROUP BY g_int, g_vc"))
+        assertThat(query("SELECT g_int, g_double, count(*) FROM doris.p4_agg.t GROUP BY g_int, g_double"))
             .isNotFullyPushedDown(AggregationNode::class.java)
     }
 

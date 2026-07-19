@@ -614,11 +614,18 @@ class DorisClient @Inject constructor(
     }
 
     /**
-     * GROUP BY comes with aggregate pushdown, so every grouping key must be an exact-pushable
-     * type ([DorisAggregatePushdown.isExactPushableKeyType]) — a STRICTER form of base-jdbc's
-     * `preventTextualTypeAggregationPushdown` (text keys are a collation hazard, REAL/DOUBLE
-     * keys a NaN/±0.0 grouping hazard, everything else unproven). NULL grouping semantics are
-     * live-proven identical (NULL keys form one group; multi-key NULL combinations likewise).
+     * GROUP BY comes with aggregate pushdown, so every grouping key must be either an
+     * exact-pushable type ([DorisAggregatePushdown.isExactPushableKeyType]) or — since
+     * READ-ONLY-MAX batch 3 — VARCHAR/STRING: grouping is EQUALITY-only, and string
+     * equality is byte-exact on both engines (P4 probe; the tiered-GUARDED evidence),
+     * with wire fidelity proven for the key values that come back. This also makes
+     * SELECT DISTINCT over text columns push (DISTINCT lowers to an aggregation with no
+     * aggregate functions). CHAR keys stay excluded (Doris groups stored bytes, Trino
+     * groups trimmed values — the standing trailing-space divergence); REAL/DOUBLE stay
+     * excluded (NaN/±0.0 grouping hazard). Ordering-dependent surfaces (min/max args,
+     * count DISTINCT args, TopN sort keys) deliberately do NOT inherit this widening —
+     * those remain governed by their own gates and the string-mode design.
+     * NULL grouping semantics are live-proven identical (NULL keys form one group).
      */
     override fun supportsAggregationPushdown(
         session: ConnectorSession,
@@ -629,7 +636,10 @@ class DorisClient @Inject constructor(
     ): Boolean {
         val unsupportedKey = groupingSets.flatten()
             .map { it as JdbcColumnHandle }
-            .firstOrNull { !DorisAggregatePushdown.isExactPushableKeyType(it.columnType) }
+            .firstOrNull {
+                !DorisAggregatePushdown.isExactPushableKeyType(it.columnType) &&
+                    it.columnType !is io.trino.spi.type.VarcharType
+            }
         if (unsupportedKey != null) {
             log.debug(
                 "aggregate pushdown rejected (grouping key type not exact-pushable: %s %s)",
