@@ -523,6 +523,40 @@ class DorisClient @Inject constructor(
         ),
     )
 
+    /**
+     * P6 typed scalar PROJECTION pushdown ([RewriteCastDatetimeToDate], [RewriteDateTrunc]):
+     * a converted projection becomes a synthetic derived column, which the aggregate
+     * machinery can then GROUP BY remotely — `GROUP BY date(event_at)` collapses into one
+     * Doris statement (proven end-to-end in TestDorisP6DateProjection). The inner rewriter
+     * only needs [RewriteVariable]; rules own their type/shape guards.
+     */
+    private val projectFunctionRewriter = io.trino.plugin.base.projection.ProjectFunctionRewriter(
+        JdbcConnectorExpressionRewriterBuilder.newBuilder()
+            .add(RewriteVariable { name -> quoted(name) })
+            .build(),
+        com.google.common.collect.ImmutableSet.of<io.trino.plugin.base.projection.ProjectFunctionRule<JdbcExpression, ParameterizedExpression>>(
+            RewriteCastDatetimeToDate(::quoted),
+            RewriteDateTrunc(::quoted),
+        ),
+    )
+
+    override fun convertProjection(
+        session: ConnectorSession,
+        handle: JdbcTableHandle,
+        expression: ConnectorExpression,
+        assignments: Map<String, ColumnHandle>,
+    ): Optional<JdbcExpression> {
+        val rewritten = projectFunctionRewriter.rewrite(session, handle, expression, assignments)
+        if (log.isDebugEnabled) {
+            if (rewritten.isPresent) {
+                log.debug("projection pushdown accepted: %s -> %s", expression, rewritten.get().expression)
+            } else {
+                log.debug("projection pushdown rejected (unsupported shape): %s", expression)
+            }
+        }
+        return rewritten
+    }
+
     override fun implementAggregation(
         session: ConnectorSession,
         aggregate: AggregateFunction,

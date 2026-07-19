@@ -27,7 +27,6 @@ import io.trino.plugin.jdbc.PredicatePushdownController
 import io.trino.plugin.jdbc.PredicatePushdownController.DISABLE_PUSHDOWN
 import io.trino.plugin.jdbc.PredicatePushdownController.DomainPushdownResult
 import io.trino.plugin.jdbc.PredicatePushdownController.FULL_PUSHDOWN
-import io.trino.plugin.jdbc.JdbcMetadataSessionProperties.getDomainCompactionThreshold
 import io.trino.plugin.jdbc.StandardColumnMappings.bigintColumnMapping
 import io.trino.plugin.jdbc.StandardColumnMappings.booleanColumnMapping
 import io.trino.plugin.jdbc.StandardColumnMappings.charReadFunction
@@ -301,12 +300,19 @@ internal class DorisTypeMapping(typeManager: TypeManager) {
          * `REPORT-string-comparison-probe-4.1.3.md` — Doris 4.1.3 string comparison is pure
          * byte semantics, `utf8mb4_0900_bin`):
          * - NULL_ONLY: null-ness only (exact; no collation hazard).
-         * - GUARDED (default): value domains push as SUPERSET pre-filters with the exact
-         *   Trino filter RETAINED; domains whose values contain a 0x00 byte are skipped
-         *   (defense-in-depth: a NUL-literal comparison once returned wrong-empty under
-         *   host memory pressure; reproductions are byte-exact — skipping is always correct).
-         * - BINARY/FULL: full pushdown, no retained filter (byte-exactness probe-verified;
-         *   the known documented divergence is CHAR trailing-space data).
+         * - GUARDED (default), EVIDENCE-TIERED: domain shapes (`=`, `<>`, `IN`, ranges) over
+         *   non-hazardous literals push FULLY — each shape is byte-exactness-proven by the
+         *   probe report (equality/case/padding/NFC-vs-NFD rows; `<`/`BETWEEN`/`IN` rows;
+         *   byte order == codepoint order), so a retained local re-check is pure overhead
+         *   and blocks LIMIT/TopN collapse. Genuine SUPERSET pre-filters keep their local
+         *   check STRUCTURALLY: the LIKE-prefix range works because the engine derives the
+         *   range domain and retains the un-convertible LIKE expression ITSELF — the
+         *   superset relationship lives between the domain and the LIKE, not inside the
+         *   domain, so full domain pushdown preserves it. Hazards stay fully local:
+         *   0x00-bearing values (defense-in-depth: one transient wrong-empty observation,
+         *   probe report) and CHAR columns (see [CHAR_PUSHDOWN]).
+         * - BINARY/FULL: full pushdown incl. TopN keys and the LIKE rule (byte-exactness
+         *   probe-verified; the known documented divergence is CHAR trailing-space data).
          */
         internal val VARCHAR_PUSHDOWN = PredicatePushdownController { session, domain ->
             when (DorisSessionProperties.getStringPushdownMode(session)) {
@@ -340,17 +346,15 @@ internal class DorisTypeMapping(typeManager: TypeManager) {
         }
 
         private fun guardedResult(session: ConnectorSession, domain: Domain): DomainPushdownResult {
-            if (domain.isOnlyNull || domain.values.isAll) {
-                return DomainPushdownResult(domain, Domain.all(domain.type))
-            }
             if (domainValuesContainNulByte(domain)) {
-                // defense-in-depth skip: a retained filter cannot resurrect rows a remote
-                // pre-filter dropped, and a NUL-literal miss was observed once (transient,
-                // probe report) — keeping these local is always correct
+                // hazard skip: a NUL-literal miss was observed once (transient, probe
+                // report) — keeping these fully local is always correct
                 return DISABLE_PUSHDOWN.apply(session, domain)
             }
-            // superset pre-filter remotely + the EXACT Trino predicate retained locally
-            return DomainPushdownResult(domain.simplify(getDomainCompactionThreshold(session)), domain)
+            // evidence-tiered: every remaining domain shape is byte-exactness-proven, so it
+            // pushes FULLY (FULL_PUSHDOWN also handles compaction correctly: an over-wide
+            // simplified domain keeps the original as the remaining filter)
+            return FULL_PUSHDOWN.apply(session, domain)
         }
 
         /** Scans every domain value (discrete values and range bounds) for a 0x00 byte. */

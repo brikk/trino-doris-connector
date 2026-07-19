@@ -183,8 +183,50 @@ internal object DorisPushdownEvidence {
         liveProof = "TestDorisP5Batch",
     )
 
+    /**
+     * `date(datetime)` (Trino spells it `CAST(x AS DATE)` after desugaring) — registry
+     * IDENTICAL; connector probe re-verified both Doris renderings (`date(col)` and
+     * `CAST(col AS DATE)`) identical on every precision incl. the 0000/9999 edges.
+     * PROJECTION-position rule ([RewriteCastDatetimeToDate]).
+     */
+    val DATE_OF_DATETIME = Evidence(
+        trinoFunction = "CAST(timestamp(0..6) AS DATE)  [date(x) desugars to this]",
+        registrySource = "date",
+        expectedTarget = "date",
+        expectedVerdict = HazardVerdict.IDENTICAL,
+        expectedProvenance = "REPORT-doris-differential-probe-2026-07-13.md#batch6-datetime",
+        dorisRendering = "CAST(`col` AS DATE)  -- probe-identical to Doris date(`col`)",
+        treatment = Treatment.DIRECT,
+        hazard = "none observed: date part extraction is byte-identical on 0000-01-01/9999-12-31 " +
+            "edges and all datetime precisions",
+        liveProof = "TestDorisP6DateProjection",
+    )
+
+    /**
+     * The CONDITIONALLY_EQUIVALENT condition: the ARGUMENT ORDER SWAPS (Trino
+     * `date_trunc(unit, x)` vs Doris `date_trunc(x, unit)`) and the unit vocabulary
+     * differs — Doris rejects millisecond/microsecond. The rule renders the swapped order
+     * and pushes only the live-proven unit allowlist ([RewriteDateTrunc]).
+     */
+    val DATE_TRUNC = Evidence(
+        trinoFunction = "date_trunc('second..year', timestamp(0..6))",
+        registrySource = "date_trunc",
+        expectedTarget = "date_trunc",
+        expectedVerdict = HazardVerdict.CONDITIONALLY_EQUIVALENT,
+        expectedProvenance = "REPORT-doris-differential-probe-2026-07-13.md#batch6-datetime",
+        dorisRendering = "date_trunc(`col`, 'unit')  -- argument order swapped vs Trino",
+        treatment = Treatment.GUARDED_WRAPPER,
+        guard = "date_trunc(`col`, 'unit')",
+        hazard = "argument order swaps; Doris rejects millisecond (stays local); WEEK denied: " +
+            "Monday-start on both engines but Doris clamps year-0 week starts to 0000-01-01 " +
+            "where Trino truncates into year -1 — data-dependent divergence",
+        liveProof = "TestDorisP6DateProjection",
+    )
+
     /** Every rule the connector registers — one Evidence entry per pushdown rule, no more, no fewer. */
-    val ALL: List<Evidence> = listOf(CONTAINS, ARRAYS_OVERLAP, ARRAY_POSITION, JSON_EXTRACT_SCALAR, CARDINALITY)
+    val ALL: List<Evidence> = listOf(
+        CONTAINS, ARRAYS_OVERLAP, ARRAY_POSITION, JSON_EXTRACT_SCALAR, CARDINALITY, DATE_OF_DATETIME, DATE_TRUNC,
+    )
 
     /**
      * Fail-loud registry cross-check, run at connector construction (from

@@ -75,7 +75,7 @@ class TestDorisP4StringPushdown : AbstractTestQueryFramework() {
             .containsExactly("1", "9")
     }
 
-    // --- GUARDED (the default): superset pre-filter + retained filter, hazard skips ---
+    // --- GUARDED (the default): evidence-tiered — proven shapes push fully, hazards skip ---
 
     @Test
     fun testGuardedIsResultIdenticalToNullOnlyOverTheHazardMatrix() {
@@ -109,14 +109,31 @@ class TestDorisP4StringPushdown : AbstractTestQueryFramework() {
     }
 
     @Test
-    fun testGuardedRetainsTheTrinoFilterAndShipsTheSupersetPreFilter() {
+    fun testGuardedPushesProvenShapesFully() {
+        // evidence-tiered GUARDED: byte-exactness-proven domain shapes push with NO
+        // retained filter (probe report: equality/range/IN rows) — the plan collapses
         val guarded = modeSession(DorisStringPushdownMode.GUARDED)
-        // retained filter -> FilterNode stays in the plan
-        assertThat(query(guarded, "SELECT id FROM doris.p4_strings.t WHERE v = 'a'"))
-            .isNotFullyPushedDown(FilterNode::class.java)
-        // ... but the superset pre-filter IS in the remote SQL
+        for (predicate in listOf("v = 'a'", "v <> 'a'", "v < 'b'", "v BETWEEN 'A' AND 'b'", "v IN ('a', 'B')")) {
+            assertThat(query(guarded, "SELECT id FROM doris.p4_strings.t WHERE $predicate"))
+                .describedAs(predicate)
+                .isFullyPushedDown()
+        }
         assertThat(remoteSql(guarded, "SELECT id FROM doris.p4_strings.t WHERE v = 'a'"))
             .contains("`v` = 'a'")
+    }
+
+    @Test
+    fun testGuardedStringEqualityCollapsesWithLimit() {
+        // the motivating case: WHERE string = ... LIMIT n as ONE remote scan with remote LIMIT
+        val guarded = modeSession(DorisStringPushdownMode.GUARDED)
+        val sql = "SELECT id FROM doris.p4_strings.t WHERE v = 'a' LIMIT 100"
+        assertThat(query(guarded, sql)).isFullyPushedDown()
+        assertThat(remoteSql(guarded, sql)).contains("`v` = 'a'").contains("LIMIT 100")
+        // genuine superset pre-filters do NOT collapse: LIKE-prefix keeps the local LIKE
+        // (and therefore a local limit) — the engine retains the LIKE expression itself
+        val like = "SELECT id FROM doris.p4_strings.t WHERE v LIKE 'a%' LIMIT 100"
+        assertThat(query(guarded, like)).isNotFullyPushedDown(FilterNode::class.java)
+        assertThat(remoteSql(guarded, like)).contains("`v` >= 'a'").doesNotContain("LIMIT 100")
     }
 
     @Test

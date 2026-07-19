@@ -47,6 +47,7 @@ Predicates and query shapes the connector pushes into Doris:
 | `array_position(a, x) <op> n` | `array_position(...)` comparisons | all six comparison operators, either orientation |
 | `cardinality(array_col) <op> n` | `array_size(col)` comparisons | all six operators, `BETWEEN`, either orientation; NULL/empty/NULL-element semantics verified identical |
 | `json_extract_scalar(json_col, '$.path') = 'text'` | `json_unquote(json_extract(col, '$.path')) = ?` | equality only, simple constant paths (`$.a.b`, `$.a[0]`); literals that could collide with Doris's non-scalar/number text renderings stay in Trino (see dev-docs/NOTES-p5-batch.md) |
+| `date(dt_col)` / `CAST(dt_col AS DATE)` / `date_trunc('unit', dt_col)` | `CAST(col AS DATE)` / `date_trunc(col, 'unit')` | projection position, composes with GROUP BY + aggregates into one remote statement; units second/minute/hour/day/month/quarter/year (`week` excluded: year-0 truncation differs) |
 | `NOT` / `AND` / `OR` | composed remote predicates | over value-identical operands (e.g. `array_position` / `cardinality` comparisons) |
 | `JOIN` (opt-in: `join-pushdown.enabled=true`) | `INNER/LEFT/RIGHT JOIN` as one remote statement | **off by default**; equality, `IS NOT DISTINCT FROM` (Doris `<=>`), and range conditions on non-text exact keys (numerics, decimal incl. LARGEINT, date, datetime, boolean); FULL OUTER and text/float keys stay in Trino; `join-pushdown.strategy=AUTOMATIC` (default) decides by table statistics, `EAGER` always pushes |
 | `LIMIT n` | `LIMIT n` | |
@@ -76,7 +77,7 @@ overrides catalog in either direction):
 | mode | VARCHAR/STRING predicates | CHAR predicates | string TopN | `LIKE` |
 |---|---|---|---|---|
 | `NULL_ONLY` | `IS [NOT] NULL` only | same | off | off |
-| `GUARDED` (default) | pushed as a remote **pre-filter** with the exact Trino filter retained locally — results always identical to `NULL_ONLY`, but Doris prunes rows early | not pushed | off | prefix patterns (`LIKE 'foo%'`) ship a byte-range pre-filter (`col >= 'foo' AND col < 'fop'`); the exact `LIKE` is retained locally |
+| `GUARDED` (default) | proven-exact shapes (`=`, `<>`, `IN`, ranges) push **fully** — a `WHERE col = '...' LIMIT n` collapses into one remote scan; literals containing a 0x00 byte stay local (known hazard) | not pushed | off | prefix patterns (`LIKE 'foo%'`) ship a byte-range pre-filter (`col >= 'foo' AND col < 'fop'`); the exact `LIKE` is retained locally |
 | `BINARY` | full pushdown, no retained filter | full pushdown | VARCHAR keys pushed | pushed |
 | `FULL` | same as `BINARY` | same | same | same |
 

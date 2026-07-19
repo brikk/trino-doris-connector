@@ -26,14 +26,18 @@ enum class DorisStringPushdownMode {
     NULL_ONLY,
 
     /**
-     * VARCHAR/STRING equality/inequality/range/IN domains push as SUPERSET pre-filters with
-     * the exact Trino filter RETAINED locally. Probe-flagged hazard shapes are skipped
-     * entirely: domains whose values contain a 0x00 byte (one probe run observed a
-     * NUL-literal comparison return wrong-empty under host memory pressure; reproductions
-     * are byte-exact, but a once-observed silent miss earns a permanent skip — skipping is
-     * always correct), and CHAR columns categorically (Doris compares stored bytes while
-     * Trino compares trimmed CHAR values — trailing-space data under-returns undetectably).
-     * Result-identical to NULL_ONLY by construction; the DEFAULT mode.
+     * EVIDENCE-TIERED (the DEFAULT mode): VARCHAR/STRING equality/inequality/range/IN
+     * domains with non-hazardous literals push FULLY — no retained filter — because each
+     * shape is byte-exactness-proven by the probe report; this lets LIMIT/TopN-adjacent
+     * plans collapse into a single remote scan. Genuine superset pre-filters (the
+     * LIKE-prefix range) keep their exactness structurally: the engine retains the LIKE
+     * expression itself. Probe-flagged hazards stay fully local: domains whose values
+     * contain a 0x00 byte (one probe run observed a NUL-literal comparison return
+     * wrong-empty under host memory pressure; reproductions are byte-exact, but a
+     * once-observed silent miss earns a permanent skip), and CHAR columns categorically
+     * (Doris compares stored bytes while Trino compares trimmed CHAR values —
+     * trailing-space data under-returns undetectably). String TopN keys and the LIKE
+     * rewrite remain BINARY/FULL-only.
      */
     GUARDED,
 
