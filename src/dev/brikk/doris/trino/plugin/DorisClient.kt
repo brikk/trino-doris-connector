@@ -26,6 +26,7 @@ import io.trino.plugin.jdbc.ConnectionFactory
 import io.trino.plugin.jdbc.JdbcColumnHandle
 import io.trino.plugin.jdbc.JdbcErrorCode.JDBC_ERROR
 import io.trino.plugin.jdbc.JdbcSortItem
+import io.trino.plugin.jdbc.JdbcSplit
 import io.trino.plugin.jdbc.JdbcTableHandle
 import io.trino.plugin.jdbc.JdbcTypeHandle
 import io.trino.plugin.jdbc.QueryBuilder
@@ -76,7 +77,10 @@ class DorisClient @Inject constructor(
     queryBuilder,
     config.jdbcTypesMappedToVarchar,
     identifierMapping,
-    queryModifier,
+    // execute()/insert paths apply BaseJdbcClient.queryModifier (both denied by the read-only
+    // guard); the scan path gets the query-id comment via DorisQueryBuilder. Wrapped here too
+    // so every conceivable remote statement carries the Trino query id (PLAN §8).
+    DorisRemoteQueryModifier(queryModifier),
     false,
 ) {
     private val typeMapping = DorisTypeMapping(typeManager)
@@ -140,7 +144,7 @@ class DorisClient @Inject constructor(
                     statement.setString(1, remoteSchema)
                     statement.setString(2, remoteTableName.tableName)
                     statement.executeQuery().use { resultSet ->
-                        return readColumns(schemaTableName, resultSet)
+                        return readColumns(session, schemaTableName, resultSet)
                     }
                 }
             }
@@ -149,7 +153,7 @@ class DorisClient @Inject constructor(
         }
     }
 
-    private fun readColumns(schemaTableName: SchemaTableName, resultSet: ResultSet): List<JdbcColumnHandle> {
+    private fun readColumns(session: ConnectorSession, schemaTableName: SchemaTableName, resultSet: ResultSet): List<JdbcColumnHandle> {
         val columns = ImmutableList.builder<JdbcColumnHandle>()
         var allColumns = 0
         var supportedColumns = 0
@@ -160,7 +164,7 @@ class DorisClient @Inject constructor(
             val nullable = resultSet.getString("IS_NULLABLE").equals("YES", ignoreCase = true)
             val comment = Optional.ofNullable(resultSet.getString("COLUMN_COMMENT")).filter { it.isNotEmpty() }
             val typeHandle = DorisTypeMapping.toTypeHandle(columnType)
-            val mapping = typeMapping.toColumnMapping(columnType)
+            val mapping = typeMapping.toColumnMapping(session, columnType)
             if (mapping.isPresent) {
                 supportedColumns++
                 columns.add(
@@ -195,7 +199,7 @@ class DorisClient @Inject constructor(
     ): Optional<ColumnMapping> {
         val columnType = typeHandle.jdbcTypeName()
             .orElseThrow { TrinoException(JDBC_ERROR, "Doris COLUMN_TYPE is missing from type handle: $typeHandle") }
-        return typeMapping.toColumnMapping(columnType)
+        return typeMapping.toColumnMapping(session, columnType)
     }
 
     override fun toWriteMapping(session: ConnectorSession, type: Type): WriteMapping {
@@ -203,6 +207,26 @@ class DorisClient @Inject constructor(
         // defense-in-depth read-only enforcement (ForwardingJdbcClient wrapper, access
         // control, system.execute denial) lands in P1b.
         throw TrinoException(NOT_SUPPORTED, "This connector does not support writes")
+    }
+
+    override fun buildSql(
+        session: ConnectorSession,
+        connection: Connection,
+        split: JdbcSplit,
+        table: JdbcTableHandle,
+        columns: List<JdbcColumnHandle>,
+    ): PreparedStatement {
+        // Per-query timeout applied SERVER-side at session scope on the scan connection.
+        // Live-probed on 4.1.3: the Doris timeout checker kills a still-running (including
+        // send-blocked/backpressured) query — "query is timeout, killed by timeout checker" —
+        // whereas Connector/J's client-side Statement.setQueryTimeout timer does NOT cover the
+        // streaming drain phase and never fires there (P1b probe; PROBE §8/§9 for the SET
+        // mechanism). Session scope only, never global (ledger §B).
+        DorisSessionProperties.getQueryTimeout(session)?.let { timeout ->
+            val seconds = maxOf(1L, timeout.roundTo(java.util.concurrent.TimeUnit.SECONDS))
+            connection.createStatement().use { it.execute("SET query_timeout = $seconds") }
+        }
+        return super.buildSql(session, connection, split, table, columns)
     }
 
     override fun getPreparedStatement(connection: Connection, sql: String, columnCount: Optional<Int>): PreparedStatement {

@@ -13,6 +13,7 @@
  */
 package dev.brikk.doris.trino.plugin
 
+import io.trino.Session
 import io.trino.sql.planner.plan.FilterNode
 import io.trino.testing.AbstractTestQueryFramework
 import io.trino.testing.QueryRunner
@@ -94,6 +95,25 @@ class TestDorisP1aSmoke : AbstractTestQueryFramework() {
         assertThat(describedColumnNames("doris.p0_probe.opaque")).isEqualTo(setOf<Any>("id"))
         // ... and scanning such a table still works on the visible columns.
         assertThat(query("SELECT count(*) FROM doris.p0_probe.opaque")).matches("VALUES BIGINT '2'")
+    }
+
+    @Test
+    fun testConvertToVarcharExposesComplexWireTextButNeverOpaqueStates() {
+        // unsupported-type-handling=CONVERT_TO_VARCHAR is honored exactly where the ledger
+        // permits VARCHAR-of-wire-text (ARRAY/MAP/STRUCT); opaque engine states stay hidden.
+        val session: Session = Session.builder(getSession())
+            .setCatalogSessionProperty(DorisQueryRunner.CATALOG, "unsupported_type_handling", "CONVERT_TO_VARCHAR")
+            .build()
+        val arrayColumns = computeActual(session, "DESCRIBE doris.p0_probe.arrays").materializedRows
+            .associate { it.getField(0) as String to it.getField(1) as String }
+        assertThat(arrayColumns["a_int"]).isEqualTo("varchar")
+        assertThat(arrayColumns["a_varchar50"]).isEqualTo("varchar")
+        assertThat(computeActual(session, "SELECT a_int FROM doris.p0_probe.arrays WHERE id = 1").onlyValue)
+            .isEqualTo("[1, 2, 3]")
+        assertThat(computeActual(session, "SELECT m_si FROM doris.p0_probe.mapstruct WHERE id = 1").rowCount).isEqualTo(1)
+        // BITMAP/HLL/AGG_STATE remain hidden under every policy (ledger §A; PROBE Impl #9).
+        assertThat(computeActual(session, "DESCRIBE doris.p0_probe.opaque").materializedRows.map { it.getField(0) })
+            .containsExactly("id")
     }
 
     @Test

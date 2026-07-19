@@ -36,6 +36,28 @@ mysql -h127.0.0.1 -P9130 -uroot     # no password
 
 JDBC: `jdbc:mysql://127.0.0.1:9130/` (user `root`, empty password).
 
+## SELECT-only fixture account (`trino_ro`)
+
+The P1 read-only suites (`TestDorisTrinoRoAccount`) provision a SELECT-only account so
+Doris itself denies writes even if connector code regressed (PLAN G7.1 — the stock-connector
+DELETE incident proved code-only enforcement is insufficient). The test setup recreates it
+idempotently; to create it by hand:
+
+```sql
+DROP USER IF EXISTS 'trino_ro'@'%';
+CREATE USER 'trino_ro'@'%' IDENTIFIED BY '';
+GRANT SELECT_PRIV ON internal.*.* TO 'trino_ro'@'%';
+```
+
+Proven on 4.1.3: `SELECT`/`SHOW` work; `INSERT`/`DELETE`/`UPDATE` fail with
+`LOAD command denied`, DDL with `Access denied ... (CREATE) privilege(s)`.
+
+## Fixture databases
+
+`p0_probe` / `p0_array_spike` / `p0_*` are P0 evidence fixtures — never mutated by tests.
+The P1 suites own and recreate `p1_smoke`, `p1_readonly`, `p1_ro_smoke`, and `p1_cancel`
+(`p1_cancel.big` is ~500 MB on the wire but near-zero on disk; kept across runs).
+
 ## Lessons baked in
 
 - **`priority_networks = 172.30.81.0/24`** is written into both `fe.conf` and

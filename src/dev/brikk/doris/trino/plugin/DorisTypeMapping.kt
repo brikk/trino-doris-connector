@@ -42,9 +42,12 @@ import io.trino.plugin.jdbc.StandardColumnMappings.tinyintColumnMapping
 import io.trino.plugin.jdbc.StandardColumnMappings.toTrinoTimestamp
 import io.trino.plugin.jdbc.StandardColumnMappings.varcharReadFunction
 import io.trino.plugin.jdbc.StandardColumnMappings.varcharWriteFunction
+import io.trino.plugin.jdbc.TypeHandlingJdbcSessionProperties.getUnsupportedTypeHandling
+import io.trino.plugin.jdbc.UnsupportedTypeHandling.CONVERT_TO_VARCHAR
 import io.trino.spi.StandardErrorCode.GENERIC_INTERNAL_ERROR
 import io.trino.spi.StandardErrorCode.NUMERIC_VALUE_OUT_OF_RANGE
 import io.trino.spi.TrinoException
+import io.trino.spi.connector.ConnectorSession
 import io.trino.spi.predicate.Domain
 import io.trino.spi.type.CharType.createCharType
 import io.trino.spi.type.DateType.DATE
@@ -113,13 +116,36 @@ internal class DorisTypeMapping(typeManager: TypeManager) {
     }
 
     /**
-     * Returns the Trino column mapping for a Doris COLUMN_TYPE string, or empty when the
-     * type is not exposed in v1 (unsupported-type policy: column hidden).
+     * Returns the Trino column mapping for a Doris COLUMN_TYPE string, or empty when the type
+     * is not exposed (unsupported-type policy: column hidden).
+     *
+     * `unsupported-type-handling=CONVERT_TO_VARCHAR` is honored exactly where the ledger
+     * permits a VARCHAR-of-wire-text policy: ARRAY (ledger §A "unsupported column, or
+     * VARCHAR-of-whole-array-text") and MAP/STRUCT ("unsupported or VARCHAR-of-text"). The
+     * wire text of all three is a proven server-rendered grammar (PROBE §"wire-format").
+     * Opaque engine states (BITMAP/HLL/QUANTILE_STATE/AGG_STATE) stay hidden under EVERY
+     * policy — their "text" is NULL or raw state bytes, never meaningful (PROBE Impl #9).
      */
-    fun toColumnMapping(columnType: String): Optional<ColumnMapping> {
+    fun toColumnMapping(session: ConnectorSession, columnType: String): Optional<ColumnMapping> {
         val parsed = DorisColumnType.parse(columnType)
-        val mapper = mappers[parsed.baseName] ?: return Optional.empty()
-        return mapper(parsed)
+        val mapper = mappers[parsed.baseName]
+        if (mapper != null) {
+            return mapper(parsed)
+        }
+        if (parsed.baseName in TEXT_SAFE_COMPLEX_TYPES && getUnsupportedTypeHandling(session) == CONVERT_TO_VARCHAR) {
+            return Optional.of(unboundedVarcharTextMapping())
+        }
+        return Optional.empty()
+    }
+
+    /**
+     * Read-only VARCHAR view of a complex type's wire text (opt-in via
+     * `unsupported-type-handling=CONVERT_TO_VARCHAR`). No pushdown: the text is a rendering,
+     * not a comparable value.
+     */
+    private fun unboundedVarcharTextMapping(): ColumnMapping {
+        val varcharType = createUnboundedVarcharType()
+        return ColumnMapping.sliceMapping(varcharType, varcharReadFunction(varcharType), varcharWriteFunction(), DISABLE_PUSHDOWN)
     }
 
     /**
@@ -184,6 +210,9 @@ internal class DorisTypeMapping(typeManager: TypeManager) {
     }
 
     companion object {
+        /** Complex types whose wire text is a proven server-rendered grammar (PROBE §"wire-format"). */
+        private val TEXT_SAFE_COMPLEX_TYPES = setOf("array", "map", "struct")
+
         private const val MAX_TRINO_DECIMAL_PRECISION = 38
         private const val DORIS_MAX_DATETIME_PRECISION = 6
         private const val LARGEINT_DECIMAL_PRECISION = 38

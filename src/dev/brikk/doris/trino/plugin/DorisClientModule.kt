@@ -17,6 +17,7 @@ import com.google.inject.Binder
 import com.google.inject.Provides
 import com.google.inject.Scopes
 import com.google.inject.Singleton
+import com.google.inject.multibindings.OptionalBinder.newOptionalBinder
 import com.mysql.cj.jdbc.Driver
 import io.airlift.configuration.AbstractConfigurationAwareModule
 import io.airlift.configuration.ConfigBinder.configBinder
@@ -26,7 +27,10 @@ import io.trino.plugin.jdbc.DecimalModule
 import io.trino.plugin.jdbc.DriverConnectionFactory
 import io.trino.plugin.jdbc.ForBaseJdbc
 import io.trino.plugin.jdbc.JdbcClient
+import io.trino.plugin.jdbc.JdbcModule.bindSessionPropertiesProvider
+import io.trino.plugin.jdbc.QueryBuilder
 import io.trino.plugin.jdbc.credential.CredentialProvider
+import io.trino.spi.connector.ConnectorAccessControl
 import java.util.Properties
 
 /**
@@ -46,7 +50,21 @@ import java.util.Properties
  */
 class DorisClientModule : AbstractConfigurationAwareModule() {
     override fun setup(binder: Binder) {
-        binder.bind(JdbcClient::class.java).annotatedWith(ForBaseJdbc::class.java).to(DorisClient::class.java).`in`(Scopes.SINGLETON)
+        // G7 defense in depth, layer 2: the Base JDBC client stack sits BEHIND the read-only
+        // guard — every JdbcClient consumer (metadata, page source, procedures) reaches
+        // DorisClient only through ReadOnlyDorisClient.
+        binder.bind(DorisClient::class.java).`in`(Scopes.SINGLETON)
+        binder.bind(JdbcClient::class.java).annotatedWith(ForBaseJdbc::class.java)
+            .to(ReadOnlyDorisClient::class.java).`in`(Scopes.SINGLETON)
+        // G7 layer 1: connector access control denies writes/DDL/procedures at the engine
+        // boundary, before SQL generation (JdbcModule declares the optional binder).
+        newOptionalBinder(binder, ConnectorAccessControl::class.java)
+            .setBinding().to(DorisReadOnlyAccessControl::class.java).`in`(Scopes.SINGLETON)
+        // Scan-path remote SQL carries the Trino query id comment (PLAN §8; DorisQueryBuilder
+        // explains why the QueryBuilder seam is used instead of the RemoteQueryModifier key).
+        newOptionalBinder(binder, QueryBuilder::class.java)
+            .setBinding().to(DorisQueryBuilder::class.java).`in`(Scopes.SINGLETON)
+        bindSessionPropertiesProvider(binder, DorisSessionProperties::class.java)
         configBinder(binder).bindConfig(DorisJdbcConfig::class.java)
         configBinder(binder).bindConfig(DorisConfig::class.java)
         install(DecimalModule.withNumberMapping(DecimalModule.MappingToNumber.UNSUPPORTED))

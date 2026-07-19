@@ -59,7 +59,7 @@ object DorisQueryRunner {
                     .put("connection-url", JDBC_URL)
                     .put("connection-user", USER)
                     .putAll(connectorProperties.buildOrThrow())
-                    .buildOrThrow()
+                    .buildKeepingLast()
                 queryRunner.installPlugin(DorisPlugin())
                 queryRunner.createCatalog(CATALOG, "doris", properties)
                 return queryRunner

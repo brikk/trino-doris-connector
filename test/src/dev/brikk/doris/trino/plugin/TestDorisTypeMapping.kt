@@ -13,7 +13,11 @@
  */
 package dev.brikk.doris.trino.plugin
 
+import io.trino.plugin.jdbc.TypeHandlingJdbcConfig
+import io.trino.plugin.jdbc.TypeHandlingJdbcSessionProperties
+import io.trino.plugin.jdbc.UnsupportedTypeHandling
 import io.trino.spi.TrinoException
+import io.trino.spi.connector.ConnectorSession
 import io.trino.spi.type.BigintType.BIGINT
 import io.trino.spi.type.BooleanType.BOOLEAN
 import io.trino.spi.type.CharType.createCharType
@@ -27,6 +31,7 @@ import io.trino.spi.type.TinyintType.TINYINT
 import io.trino.spi.type.Type
 import io.trino.spi.type.VarcharType.createUnboundedVarcharType
 import io.trino.spi.type.VarcharType.createVarcharType
+import io.trino.testing.TestingConnectorSession
 import io.trino.type.InternalTypeManager.TESTING_TYPE_MANAGER
 import org.assertj.core.api.Assertions.assertThat
 import org.assertj.core.api.Assertions.assertThatThrownBy
@@ -36,6 +41,16 @@ import java.math.BigInteger
 /** Unit tests for the COLUMN_TYPE parser and the ledger §A scalar type contract. No cluster needed. */
 class TestDorisTypeMapping {
     private val mapping = DorisTypeMapping(TESTING_TYPE_MANAGER)
+
+    private val session: ConnectorSession = sessionWithTypeHandling(null)
+    private val convertToVarcharSession: ConnectorSession = sessionWithTypeHandling(UnsupportedTypeHandling.CONVERT_TO_VARCHAR)
+
+    private fun sessionWithTypeHandling(handling: UnsupportedTypeHandling?): ConnectorSession {
+        val builder = TestingConnectorSession.builder()
+            .setPropertyMetadata(TypeHandlingJdbcSessionProperties(TypeHandlingJdbcConfig()).sessionProperties)
+        handling?.let { builder.setPropertyValues(mapOf(TypeHandlingJdbcSessionProperties.UNSUPPORTED_TYPE_HANDLING to it.name)) }
+        return builder.build()
+    }
 
     // --- COLUMN_TYPE parsing ---
 
@@ -86,10 +101,10 @@ class TestDorisTypeMapping {
         assertMappedTo("char(10)", createCharType(10))
         assertMappedTo("varchar(100)", createVarcharType(100))
         assertMappedTo("string", createUnboundedVarcharType())
-        assertThat(mapping.toColumnMapping("json").orElseThrow().type.baseName).isEqualTo("json")
-        assertThat(mapping.toColumnMapping("variant").orElseThrow().type.baseName).isEqualTo("json")
-        assertThat(mapping.toColumnMapping("ipv4").orElseThrow().type.baseName).isEqualTo("ipaddress")
-        assertThat(mapping.toColumnMapping("ipv6").orElseThrow().type.baseName).isEqualTo("ipaddress")
+        assertThat(mapping.toColumnMapping(session, "json").orElseThrow().type.baseName).isEqualTo("json")
+        assertThat(mapping.toColumnMapping(session, "variant").orElseThrow().type.baseName).isEqualTo("json")
+        assertThat(mapping.toColumnMapping(session, "ipv4").orElseThrow().type.baseName).isEqualTo("ipaddress")
+        assertThat(mapping.toColumnMapping(session, "ipv6").orElseThrow().type.baseName).isEqualTo("ipaddress")
     }
 
     @Test
@@ -106,13 +121,27 @@ class TestDorisTypeMapping {
             "agg_state",
             "unknown",
         )) {
-            assertThat(mapping.toColumnMapping(columnType)).isEmpty()
+            assertThat(mapping.toColumnMapping(session, columnType)).isEmpty()
+        }
+    }
+
+    @Test
+    fun testConvertToVarcharExposesTextSafeComplexTypesOnly() {
+        // Ledger §A permits VARCHAR-of-wire-text for ARRAY/MAP/STRUCT; opaque engine states
+        // stay hidden under EVERY policy (their "text" is NULL or raw state bytes).
+        for (columnType in listOf("array<int(11)>", "array<varchar(50)>", "map<string,int(11)>", "struct<int(11),string>")) {
+            val columnMapping = mapping.toColumnMapping(convertToVarcharSession, columnType)
+            assertThat(columnMapping).describedAs(columnType).isPresent
+            assertThat(columnMapping.orElseThrow().type).describedAs(columnType).isEqualTo(createUnboundedVarcharType())
+        }
+        for (columnType in listOf("bitmap", "hll", "quantile_state", "agg_state", "unknown")) {
+            assertThat(mapping.toColumnMapping(convertToVarcharSession, columnType)).describedAs(columnType).isEmpty()
         }
     }
 
     @Test
     fun testDatetimePrecisionAboveSixFailsLoud() {
-        assertThatThrownBy { mapping.toColumnMapping("datetime(7)") }
+        assertThatThrownBy { mapping.toColumnMapping(session, "datetime(7)") }
             .isInstanceOf(TrinoException::class.java)
             .hasMessageContaining("max proven is 6")
     }
@@ -139,7 +168,7 @@ class TestDorisTypeMapping {
     }
 
     private fun assertMappedTo(columnType: String, expected: Type) {
-        val columnMapping = mapping.toColumnMapping(columnType)
+        val columnMapping = mapping.toColumnMapping(session, columnType)
         assertThat(columnMapping).describedAs(columnType).isPresent
         assertThat(columnMapping.orElseThrow().type).describedAs(columnType).isEqualTo(expected)
     }

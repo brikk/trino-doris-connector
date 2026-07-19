@@ -74,4 +74,17 @@ class TestDorisJdbcConfig {
         assertThat(properties.getProperty("sessionVariables"))
             .isEqualTo("query_timeout=123,exec_mem_limit=2147483648,time_zone='Etc/UTC'")
     }
+
+    @Test
+    fun testQueryTimeoutSessionPropertyDefaultsFromConfig() {
+        // Ledger §D: query_timeout re-homed as a first-class read-path session property
+        // (rejected StarRocks sourcing, SR R2); catalog config supplies the default.
+        val defaulted = DorisSessionProperties(DorisConfig().setQueryTimeout(Duration(42.0, TimeUnit.SECONDS)))
+            .sessionProperties.single { it.name == DorisSessionProperties.QUERY_TIMEOUT }
+        assertThat(defaulted.defaultValue).isEqualTo(Duration(42.0, TimeUnit.SECONDS))
+
+        val unset = DorisSessionProperties(DorisConfig())
+            .sessionProperties.single { it.name == DorisSessionProperties.QUERY_TIMEOUT }
+        assertThat(unset.defaultValue).isNull()
+    }
 }
