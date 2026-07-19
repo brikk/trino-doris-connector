@@ -98,9 +98,12 @@ class TestDorisCancellation : AbstractTestQueryFramework() {
         // connection; the Doris timeout checker kills the still-running (send-blocked) query
         // ("query is timeout, killed by timeout checker" — P1b probe; PROBE §8/§9). The
         // checker sweeps periodically, hence the generous release bound; measured ~9-11s for
-        // a 2s timeout.
+        // a 2s timeout. The timeout is 10s (not 2s) so the remote statement's observable
+        // lifetime comfortably exceeds polling latency on slow CI runners — with 2s the
+        // processlist entry could appear AND be killed between polls (CI flake 2026-07-19,
+        // run 29693604486). The contract under test is release-by-timeout, not the duration.
         val session: Session = Session.builder(getSession())
-            .setCatalogSessionProperty(DorisQueryRunner.CATALOG, DorisSessionProperties.QUERY_TIMEOUT, "2.00s")
+            .setCatalogSessionProperty(DorisQueryRunner.CATALOG, DorisSessionProperties.QUERY_TIMEOUT, "10.00s")
             .build()
         val queryFuture = submitSlowQuery(session, TIMEOUT_MARKER)
         try {
@@ -182,8 +185,8 @@ class TestDorisCancellation : AbstractTestQueryFramework() {
         private const val APPEAR_BOUND_MILLIS = 30_000L
         private const val CLEARANCE_BOUND_MILLIS = 15_000L
 
-        /** query_timeout=2s + timeout-checker sweep period + polling slack (measured 9-21s). */
-        private const val TIMEOUT_RELEASE_BOUND_MILLIS = 60_000L
+        /** query_timeout=10s + timeout-checker sweep period + polling slack (2s form measured 9-21s). */
+        private const val TIMEOUT_RELEASE_BOUND_MILLIS = 90_000L
         private const val TRINO_FAILURE_BOUND_MILLIS = 120_000L
         private const val POLL_INTERVAL_MILLIS = 250L
         private const val BIG_ROWS = 1_001_000L

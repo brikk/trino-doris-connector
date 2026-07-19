@@ -27,6 +27,9 @@ import io.trino.plugin.jdbc.DecimalModule
 import io.trino.plugin.jdbc.DriverConnectionFactory
 import io.trino.plugin.jdbc.ForBaseJdbc
 import io.trino.plugin.jdbc.JdbcClient
+import io.trino.plugin.jdbc.JdbcJoinPushdownConfig
+import io.trino.plugin.jdbc.JdbcJoinPushdownSessionProperties
+import io.trino.plugin.jdbc.JdbcMetadataConfig
 import io.trino.plugin.jdbc.JdbcModule.bindSessionPropertiesProvider
 import io.trino.plugin.jdbc.QueryBuilder
 import io.trino.plugin.jdbc.credential.CredentialProvider
@@ -40,7 +43,6 @@ import java.util.Properties
  * Deliberate omissions vs those upstream modules:
  * - The JDBC `query()` table function is NOT bound (PLAN G7.4; SR R8 must-not-port):
  *   arbitrary SQL passthrough can mutate Doris.
- * - `JdbcJoinPushdownSupportModule` is NOT installed (join pushdown is P5).
  * - `JdbcMetadataConfig.bulkListColumns` stays at its `false` default: bulk column listing
  *   goes through `DatabaseMetaData.getColumns`, which is proven lossy for Doris (PROBE §1,
  *   Impl #1); per-table listing routes through DorisClient's information_schema override.
@@ -75,6 +77,22 @@ class DorisClientModule : AbstractConfigurationAwareModule() {
         configBinder(binder).bindConfig(DorisJdbcConfig::class.java)
         configBinder(binder).bindConfig(DorisConfig::class.java)
         install(DecimalModule.withNumberMapping(DecimalModule.MappingToNumber.UNSUPPORTED))
+        // P5 join pushdown: OFF by default per plan (opt-in until a representative corpus
+        // exists). This is the upstream JdbcJoinPushdownSupportModule MINUS its
+        // bindConfigDefaults(joinPushdownEnabled = true) — installing the module as-is
+        // would silently flip `join-pushdown.enabled` ON (proven by the suite's
+        // off-by-default test). The strategy knobs remain (AUTOMATIC default — cost-aware
+        // via getTableStatistics — with EAGER available).
+        configBinder(binder).bindConfig(JdbcJoinPushdownConfig::class.java)
+        bindSessionPropertiesProvider(binder, JdbcJoinPushdownSessionProperties::class.java)
+        // Complex join pushdown (condition-as-expression) is forced OFF: our expression
+        // rewriter deliberately has no variable-to-variable comparison rules (unproven
+        // surface), and the complex path has NO legacy fallback at 483 — leaving it on
+        // would make joins silently unpushable. The legacy path gives the per-condition
+        // typed guard (DorisClient.isSupportedJoinCondition) instead.
+        configBinder(binder).bindConfigDefaults(JdbcMetadataConfig::class.java) { config ->
+            config.setComplexJoinPushdownEnabled(false)
+        }
     }
 
     @Provides

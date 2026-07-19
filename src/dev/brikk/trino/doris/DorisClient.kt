@@ -27,6 +27,8 @@ import io.trino.plugin.jdbc.BaseJdbcConfig
 import io.trino.plugin.jdbc.ColumnMapping
 import io.trino.plugin.jdbc.ConnectionFactory
 import io.trino.plugin.jdbc.JdbcColumnHandle
+import io.trino.plugin.jdbc.JdbcJoinCondition
+import io.trino.plugin.jdbc.JdbcJoinPushdownUtil
 import io.trino.plugin.jdbc.JdbcErrorCode.JDBC_ERROR
 import io.trino.plugin.jdbc.JdbcExpression
 import io.trino.plugin.jdbc.JdbcSortItem
@@ -34,6 +36,7 @@ import io.trino.plugin.jdbc.JdbcSplit
 import io.trino.plugin.jdbc.JdbcTableHandle
 import io.trino.plugin.jdbc.JdbcTypeHandle
 import io.trino.plugin.jdbc.QueryBuilder
+import io.trino.plugin.jdbc.PreparedQuery
 import io.trino.plugin.jdbc.RemoteTableName
 import io.trino.plugin.jdbc.WriteMapping
 import io.trino.plugin.jdbc.aggregation.ImplementCount
@@ -47,12 +50,22 @@ import io.trino.spi.TrinoException
 import io.trino.spi.connector.AggregateFunction
 import io.trino.spi.connector.ColumnHandle
 import io.trino.spi.connector.ConnectorSession
+import io.trino.spi.connector.JoinStatistics
+import io.trino.spi.connector.JoinType
 import io.trino.spi.connector.SchemaTableName
-import io.trino.spi.statistics.TableStatistics
 import io.trino.spi.connector.SortOrder
 import io.trino.spi.connector.TableNotFoundException
+import io.trino.spi.statistics.TableStatistics
 import io.trino.spi.expression.ConnectorExpression
 import io.trino.spi.type.Type
+import io.trino.spi.type.BigintType
+import io.trino.spi.type.BooleanType
+import io.trino.spi.type.DateType
+import io.trino.spi.type.DecimalType
+import io.trino.spi.type.IntegerType
+import io.trino.spi.type.SmallintType
+import io.trino.spi.type.TimestampType
+import io.trino.spi.type.TinyintType
 import io.trino.spi.type.TypeManager
 import java.sql.Connection
 import java.sql.DatabaseMetaData
@@ -202,6 +215,80 @@ class DorisClient @Inject constructor(
     override fun getTableRemoteSchemaName(resultSet: ResultSet): String = resultSet.getString("TABLE_CAT")
 
     private val statisticsReader = DorisTableStatisticsReader(::quoted)
+
+    /**
+     * P5 cost-aware join pushdown (PLAN §6.5; OFF by default via `join-pushdown.enabled`).
+     * Joins arrive on the LEGACY path only (complex join pushdown is force-disabled in
+     * [DorisClientModule] — no variable-comparison rewrite rules exist). Shape gates:
+     * - INNER / LEFT / RIGHT only; FULL OUTER excluded (unproven against Doris's nereids
+     *   planner for the subquery-join shape — conservative v1 per plan).
+     * - AUTOMATIC strategy consults [JdbcJoinPushdownUtil.shouldPushDownJoinCostAware],
+     *   which feeds on the engine estimates derived from [getTableStatistics] — tables
+     *   without statistics yield unknown sizes and stay LOCAL under AUTOMATIC (fail-soft
+     *   stats feeding a conservative cost decision); EAGER pushes any eligible shape.
+     * Condition gates are in [isSupportedJoinCondition].
+     */
+    override fun legacyImplementJoin(
+        session: ConnectorSession,
+        joinType: JoinType,
+        leftSource: PreparedQuery,
+        rightSource: PreparedQuery,
+        joinConditions: List<JdbcJoinCondition>,
+        rightAssignments: Map<JdbcColumnHandle, String>,
+        leftAssignments: Map<JdbcColumnHandle, String>,
+        statistics: JoinStatistics,
+    ): Optional<PreparedQuery> {
+        if (joinType == JoinType.FULL_OUTER) {
+            return Optional.empty()
+        }
+        return JdbcJoinPushdownUtil.implementJoinCostAware(session, joinType, leftSource, rightSource, statistics) {
+            super.legacyImplementJoin(session, joinType, leftSource, rightSource, joinConditions, rightAssignments, leftAssignments, statistics)
+        }
+    }
+
+    /**
+     * Complex (expression-based) join path: deliberately NOT implemented. It is force-off by
+     * default ([DorisClientModule]); if a user re-enables `complex_join_pushdown_enabled`,
+     * conditions still cannot convert (no variable-comparison rules), so joins simply stay
+     * local — this override just makes the posture explicit and future-proof.
+     */
+    override fun implementJoin(
+        session: ConnectorSession,
+        joinType: JoinType,
+        leftSource: PreparedQuery,
+        leftProjections: Map<JdbcColumnHandle, String>,
+        rightSource: PreparedQuery,
+        rightProjections: Map<JdbcColumnHandle, String>,
+        joinConditions: List<ParameterizedExpression>,
+        statistics: JoinStatistics,
+    ): Optional<PreparedQuery> = Optional.empty()
+
+    /**
+     * Per-condition typed guard (legacy path). Operators: `=` and IDENTICAL (Trino
+     * `IS NOT DISTINCT FROM` -> Doris `<=>`, truth-table live-proven identical incl.
+     * NULL-key matching in joins) plus the four range comparisons and `<>` — all probed
+     * NULL-drop-identical on both engines. Key types: the exact NON-TEXT set only —
+     * integers, DECIMAL (incl. the LARGEINT mapping), DATE, DATETIME, BOOLEAN.
+     * Excluded with reasons (NOTES-p5-joins.md):
+     * - CHAR/VARCHAR keys: collation posture is mode-gated for filters; join conditions
+     *   compare remote-stored bytes vs Trino-wire values — deferred even for BINARY/FULL
+     *   modes until proven (documented future extension; byte semantics themselves are
+     *   proven by the P4 probe).
+     * - FLOAT/DOUBLE keys: the wire text of extreme doubles reads "Infinity" (P0/P5-stats
+     *   evidence), so Trino-side and Doris-side comparisons can see DIFFERENT values —
+     *   a remote join could return different rows than the local join it replaces.
+     * - IPADDRESS/JSON/etc.: unproven or non-comparable.
+     */
+    override fun isSupportedJoinCondition(session: ConnectorSession, joinCondition: JdbcJoinCondition): Boolean =
+        isJoinKeyTypeSupported(joinCondition.leftColumn.columnType) &&
+            isJoinKeyTypeSupported(joinCondition.rightColumn.columnType)
+
+    private fun isJoinKeyTypeSupported(type: Type): Boolean = when (type) {
+        is TinyintType, is SmallintType, is IntegerType, is BigintType,
+        is DecimalType, is DateType, is TimestampType, is BooleanType,
+        -> true
+        else -> false
+    }
 
     /**
      * Remote statistics for the cost-based optimizer (PLAN P4 tail; probe verdicts in
