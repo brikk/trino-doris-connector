@@ -20,6 +20,7 @@ import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.AfterAll
 import org.junit.jupiter.api.MethodOrderer
 import org.junit.jupiter.api.Order
+import org.junit.jupiter.api.Tag
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.TestInstance
 import org.junit.jupiter.api.TestMethodOrder
@@ -43,6 +44,7 @@ import java.util.concurrent.TimeUnit
  * Tests are ordered and clean up their Trino query via kill_query even on failure, so a
  * failing test cannot leave a CPU-burning zombie query that starves the next one.
  */
+@Tag("cancellation")
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 @TestMethodOrder(MethodOrderer.OrderAnnotation::class)
 class TestDorisCancellation : AbstractTestQueryFramework() {
