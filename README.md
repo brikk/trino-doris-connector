@@ -51,6 +51,11 @@ Predicates and query shapes the connector pushes into Doris:
 | `cardinality(array_col) <op> n` | `array_size(col)` comparisons | all six operators, `BETWEEN`, either orientation; NULL/empty/NULL-element semantics verified identical |
 | `json_extract_scalar(json_col, '$.path') = 'text'` | `json_unquote(json_extract(col, '$.path')) = ?` | equality only, simple constant paths (`$.a.b`, `$.a[0]`); literals that could collide with Doris's non-scalar/number text renderings stay in Trino (see dev-docs/NOTES-p5-batch.md) |
 | `date(dt_col)` / `CAST(dt_col AS DATE)` / `date_trunc('unit', dt_col)` | `CAST(col AS DATE)` / `date_trunc(col, 'unit')` | projection position, composes with GROUP BY + aggregates into one remote statement; units second/minute/hour/day/month/quarter/year (`week` excluded: year-0 truncation differs) |
+| `coalesce` / `nullif` (exact types + varchar) | `coalesce(...)` / `nullif(...)` | projection, predicate, GROUP BY keys; compositions push as a unit |
+| `year/month/day/hour/minute/second(dt_col)` | same-named functions | projection/GROUP BY (comparisons already unwrap to ranges upstream) |
+| `lower(x)` / `upper(x)` | `lower(x)` / `upper(x)` | case mapping proven identical across a Unicode adversary battery |
+| `length(x)` | `char_length(x)` | character count on both engines — never Doris `length()` (bytes) |
+| `starts_with(col, 'p')` | `col LIKE 'p%'` (metacharacters escaped) | index-eligible prefix scan |
 | `NOT` / `AND` / `OR` | composed remote predicates | over value-identical operands (e.g. `array_position` / `cardinality` comparisons) |
 | `JOIN` (opt-in: `join-pushdown.enabled=true`) | `INNER/LEFT/RIGHT JOIN` as one remote statement | **off by default**; equality, `IS NOT DISTINCT FROM` (Doris `<=>`), and range conditions on non-text exact keys (numerics, decimal incl. LARGEINT, date, datetime, boolean); FULL OUTER and text/float keys stay in Trino; `join-pushdown.strategy=AUTOMATIC` (default) decides by table statistics, `EAGER` always pushes |
 | `LIMIT n` | `LIMIT n` | |

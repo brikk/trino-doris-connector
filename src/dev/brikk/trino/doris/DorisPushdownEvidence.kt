@@ -223,10 +223,120 @@ internal object DorisPushdownEvidence {
         liveProof = "TestDorisP6DateProjection",
     )
 
+    private const val BATCH2_PROVENANCE = "REPORT-doris-differential-probe-2026-07-13.md#batch2"
+    private const val BATCH6_PROVENANCE = "REPORT-doris-differential-probe-2026-07-13.md#batch6-datetime"
+
+    /**
+     * Batch-1 scalar tier, registry-IDENTICAL entries re-proven live (NULL propagation,
+     * `nullif(a,a)` = NULL, byte-exact case-SENSITIVE nullif on text; 0000/9999 temporal
+     * edges, fraction truncation) — `NOTES-readonly-max-batch1.md`.
+     */
+    val COALESCE = Evidence(
+        trinoFunction = "coalesce(a, b, ...) over the scalar value-type set",
+        registrySource = "coalesce",
+        expectedTarget = "coalesce",
+        expectedVerdict = HazardVerdict.IDENTICAL,
+        expectedProvenance = BATCH2_PROVENANCE,
+        dorisRendering = "coalesce(a, b, ...)",
+        treatment = Treatment.DIRECT,
+        hazard = "none observed over the closed value-type set (CHAR and REAL/DOUBLE never participate)",
+        liveProof = "TestDorisB1ScalarPushdown",
+    )
+
+    val NULLIF = Evidence(
+        trinoFunction = "nullif(a, b) over the scalar value-type set",
+        registrySource = "nullif",
+        expectedTarget = "nullif",
+        expectedVerdict = HazardVerdict.IDENTICAL,
+        expectedProvenance = BATCH2_PROVENANCE,
+        dorisRendering = "nullif(a, b)",
+        treatment = Treatment.DIRECT,
+        hazard = "nullif compares its operands: text comparison byte-exact (P4 probe); " +
+            "REAL/DOUBLE excluded (wire-Infinity comparison hazard)",
+        liveProof = "TestDorisB1ScalarPushdown",
+    )
+
+    private fun temporalExtract(name: String) = Evidence(
+        trinoFunction = "$name(timestamp(0..6))",
+        registrySource = name,
+        expectedTarget = name,
+        expectedVerdict = HazardVerdict.IDENTICAL,
+        expectedProvenance = BATCH6_PROVENANCE,
+        dorisRendering = "$name(`col`)",
+        treatment = Treatment.DIRECT,
+        hazard = "none observed: 0000-01-01/9999-12-31 edges and all precisions identical; " +
+            "comparisons are unwrapped to datetime domains UPSTREAM (never reach the connector)",
+        liveProof = "TestDorisB1ScalarPushdown",
+    )
+
+    val TEMPORAL_EXTRACTS: List<Evidence> =
+        listOf("year", "month", "day", "hour", "minute", "second").map(::temporalExtract)
+
+    /**
+     * Registry-IDENTICAL, and the connector's divergence hunt CONFIRMED it: the Unicode
+     * special-mapping adversary battery (µ->Μ, ß unchanged, ΑΣ->ασ no-final-sigma,
+     * Kelvin->k, Å->å, ſ->S, DZ digraphs, İ->i, roman numerals, fullwidth) maps IDENTICALLY
+     * on both engines — Doris matches Trino's simple+special mapping on every probed
+     * codepoint. Identity claimed on that battery basis (live agreement pins).
+     */
+    private fun caseFold(name: String, example: String) = Evidence(
+        trinoFunction = "$name(varchar) — BINARY/FULL string modes only",
+        registrySource = name,
+        expectedTarget = name,
+        expectedVerdict = HazardVerdict.IDENTICAL,
+        expectedProvenance = "REPORT-doris-differential-probe-2026-07-13.md#$name",
+        dorisRendering = "$name(x)",
+        treatment = Treatment.DIRECT,
+        hazard = "none found: special-mapping adversary battery agrees on both engines ($example); " +
+            "Doris matches Trino's simple+special mapping on every probed codepoint",
+        liveProof = "TestDorisB1ScalarPushdown",
+    )
+
+    val LOWER = caseFold("lower", "Kelvin/Å/roman-numeral/İ lower-direction adversaries agree")
+    val UPPER = caseFold("upper", "µ->Μ, ſ->S, digraph-titlecase, no-ß-expansion all agree")
+
+    /**
+     * The plan's canonical deny — Doris `length` counts BYTES — now carries its live proof:
+     * Trino `length` (characters) renders as Doris `char_length` (characters), NEVER as
+     * Doris `length`. Emoji=1, CJK=1/char, NFD sequences count per codepoint (live pins).
+     */
+    val LENGTH = Evidence(
+        trinoFunction = "length(varchar)  [characters]",
+        registrySource = "length",
+        expectedTarget = "length",
+        expectedVerdict = HazardVerdict.DIVERGENT,
+        expectedProvenance = BATCH2_PROVENANCE,
+        dorisRendering = "char_length(x)  -- NEVER Doris length() (bytes)",
+        treatment = Treatment.CONNECTOR_ORIGINAL_REWRITE,
+        hazard = "Doris length() = BYTES vs Trino length() = CHARACTERS -> the rewrite targets " +
+            "char_length, proven identical on emoji/CJK/NFD shapes",
+        liveProof = "TestDorisB1ScalarPushdown",
+    )
+
+    /**
+     * Doris has no `starts_with`; the CONDITIONALLY_EQUIVALENT condition is the rendering:
+     * an escaped LIKE-prefix (`%`->`\%`, `_`->`\_`, `\`->`\\`, then `%` appended) —
+     * byte-exact (P4 LIKE probe) AND zone-map/index-eligible, unlike left(x,n)=prefix.
+     */
+    val STARTS_WITH = Evidence(
+        trinoFunction = "starts_with(varchar_col, 'prefix') — GUARDED and above",
+        registrySource = "starts_with",
+        expectedTarget = "starts_with",
+        expectedVerdict = HazardVerdict.CONDITIONALLY_EQUIVALENT,
+        expectedProvenance = "REPORT-doris-differential-probe-2026-07-13.md#batch4-string",
+        dorisRendering = "(`col` LIKE '<metachar-escaped-prefix>%')  -- starts_with has no Doris equivalent",
+        treatment = Treatment.GUARDED_WRAPPER,
+        guard = "LIKE",
+        hazard = "no Doris starts_with; LIKE-prefix rendering requires metacharacter escaping " +
+            "(live-proven) and inherits the 0x00 skip policy",
+        liveProof = "TestDorisB1ScalarPushdown",
+    )
+
     /** Every rule the connector registers — one Evidence entry per pushdown rule, no more, no fewer. */
     val ALL: List<Evidence> = listOf(
         CONTAINS, ARRAYS_OVERLAP, ARRAY_POSITION, JSON_EXTRACT_SCALAR, CARDINALITY, DATE_OF_DATETIME, DATE_TRUNC,
-    )
+        COALESCE, NULLIF, LOWER, UPPER, LENGTH, STARTS_WITH,
+    ) + TEMPORAL_EXTRACTS
 
     /**
      * Fail-loud registry cross-check, run at connector construction (from

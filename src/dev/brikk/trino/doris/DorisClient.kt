@@ -131,6 +131,24 @@ class DorisClient @Inject constructor(
      * column-to-column scalar comparison rules would be new unproven surface (P3 remainder).
      * Evidence citations: [DorisPushdownEvidence].
      */
+    /**
+     * Batch-1 SCALAR VALUE tier ([DorisScalarPushdownRules]): typed, composable rewrites of
+     * coalesce/nullif/year..second/lower/upper/length over the closed value-type set.
+     * Shared by the predicate bridges below and the projection path.
+     */
+    private val scalarRewriterHolder = DorisScalarRewriterHolder().also { holder ->
+        holder.rewriter = JdbcConnectorExpressionRewriterBuilder.newBuilder()
+            .add(RewriteScalarVariable(::quoted))
+            .add(RewriteScalarConstant())
+            .add(RewriteScalarFunctionByName(io.trino.spi.expression.StandardFunctions.COALESCE_FUNCTION_NAME, "coalesce", 2..MAX_SCALAR_ARITY))
+            .add(RewriteScalarFunctionByName(io.trino.spi.expression.StandardFunctions.NULLIF_FUNCTION_NAME, "nullif", 2..2))
+            .apply { listOf("year", "month", "day", "hour", "minute", "second").forEach { add(RewriteTemporalExtract(it)) } }
+            .add(RewriteCaseFold("lower"))
+            .add(RewriteCaseFold("upper"))
+            .add(RewriteCharLength())
+            .build()
+    }
+
     private val connectorExpressionRewriter: ConnectorExpressionRewriter<ParameterizedExpression> = run {
         val support = DorisArrayPushdownSupport(typeMapping, ::quoted)
         val valueSafe = DorisValueSafeRewriter()
@@ -156,6 +174,12 @@ class DorisClient @Inject constructor(
             // top-level '='), so it too stays out of the value-safe tier —
             // [DorisPushdownEvidence.JSON_EXTRACT_SCALAR]
             .add(RewriteJsonExtractScalarEquality(::quoted))
+            // Batch-1 scalar bridges: comparisons / IS NULL over scalar-tier function shapes
+            // (plain column shapes stay domain territory) + starts_with -> escaped LIKE-prefix.
+            // Top-level-conjunct tier (not composable under NOT/AND/OR).
+            .add(RewriteScalarComparisonBridge(scalarRewriterHolder))
+            .add(RewriteScalarIsNullBridge(scalarRewriterHolder))
+            .add(RewriteStartsWith(::quoted))
             .build()
     }
 
@@ -543,12 +567,13 @@ class DorisClient @Inject constructor(
      * only needs [RewriteVariable]; rules own their type/shape guards.
      */
     private val projectFunctionRewriter = io.trino.plugin.base.projection.ProjectFunctionRewriter(
-        JdbcConnectorExpressionRewriterBuilder.newBuilder()
-            .add(RewriteVariable { name -> quoted(name) })
-            .build(),
+        // the scalar tier doubles as the projection expression rewriter, so every scalar
+        // shape (and composition) it accepts becomes a groupable synthetic column
+        scalarRewriterHolder.rewriter,
         com.google.common.collect.ImmutableSet.of<io.trino.plugin.base.projection.ProjectFunctionRule<JdbcExpression, ParameterizedExpression>>(
             RewriteCastDatetimeToDate(::quoted),
             RewriteDateTrunc(::quoted),
+            RewriteScalarProjection(scalarRewriterHolder),
         ),
     )
 
@@ -615,6 +640,8 @@ class DorisClient @Inject constructor(
 
     companion object {
         private val log = Logger.get(DorisClient::class.java)
+
+        private const val MAX_SCALAR_ARITY = 10
 
         private val HIDDEN_SCHEMAS = setOf("information_schema", "mysql", "__internal_schema")
 

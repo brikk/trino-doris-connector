@@ -289,7 +289,8 @@ internal class DorisTypeMapping(typeManager: TypeManager) {
         private val TEXT_SAFE_COMPLEX_TYPES = setOf("array", "map", "struct")
 
         private const val MAX_TRINO_DECIMAL_PRECISION = 38
-        private const val DORIS_MAX_DATETIME_PRECISION = 6
+        internal const val MAX_DATETIME_PRECISION = 6
+        private const val DORIS_MAX_DATETIME_PRECISION = MAX_DATETIME_PRECISION
         private const val LARGEINT_DECIMAL_PRECISION = 38
 
         /** Max unscaled value representable in DECIMAL(38,0): 10^38 - 1. */

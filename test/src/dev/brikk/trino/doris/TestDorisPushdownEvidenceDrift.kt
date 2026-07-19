@@ -39,8 +39,9 @@ class TestDorisPushdownEvidenceDrift {
     @Test
     fun testEveryRulePinMatchesTheRegistry() {
         // contains, arrays_overlap, array_position, json_extract_scalar, cardinality,
-        // date-of-datetime, date_trunc
-        assertThat(DorisPushdownEvidence.ALL).hasSize(7)
+        // date-of-datetime, date_trunc, coalesce, nullif, lower, upper, length(->char_length),
+        // starts_with, and the six temporal extracts
+        assertThat(DorisPushdownEvidence.ALL).hasSize(19)
         for (evidence in DorisPushdownEvidence.ALL) {
             val entry = DorisPushdownEvidence.lookup(evidence.registrySource)
             assertThat(entry).describedAs(evidence.registrySource).isNotNull
@@ -108,10 +109,11 @@ class TestDorisPushdownEvidenceDrift {
 
     @Test
     fun testDeliberatelyUnpushedFunctionsHaveNoRuleRegardlessOfRegistry() {
-        // Both exist in the registry (DIVERGENT: element_at NULL-vs-throw out-of-bounds;
-        // length bytes-vs-characters — the PLAN §6.2 explicit deny examples) and neither has,
-        // nor may gain, a rule without its own live proof.
-        for (denied in listOf("element_at", "length")) {
+        // element_at exists in the registry (DIVERGENT: NULL-vs-throw out-of-bounds — a PLAN
+        // §6.2 explicit deny example) and has, and may not gain, a rule without its own live
+        // proof. (`length` GRADUATED exactly per this canary's contract: batch 1 shipped it
+        // WITH a live proof, rendering char_length — see DorisPushdownEvidence.LENGTH.)
+        for (denied in listOf("element_at")) {
             val entry = HazardRegistry.lookup("trino", "doris", denied)
             assertThat(entry).describedAs(denied).isNotNull
             assertThat(entry!!.verdict).describedAs(denied).isEqualTo(HazardVerdict.DIVERGENT)
