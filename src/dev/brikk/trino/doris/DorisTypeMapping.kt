@@ -240,9 +240,15 @@ internal class DorisTypeMapping(typeManager: TypeManager) {
         }
         val (precision, scale) = parsed.arguments
         if (precision > MAX_TRINO_DECIMAL_PRECISION) {
-            return unboundedVarcharMapping()
+            return decimal256TextMapping()
         }
         return decimalColumnMapping(createDecimalType(precision, scale))
+    }
+
+    /** Decimal256 is exposed as exact wire text, so remote numeric operations are never valid. */
+    private fun decimal256TextMapping(): ColumnMapping {
+        val varcharType = createUnboundedVarcharType()
+        return ColumnMapping.sliceMapping(varcharType, varcharReadFunction(varcharType), varcharWriteFunction(), DISABLE_PUSHDOWN)
     }
 
     private fun charMapping(parsed: DorisColumnType): ColumnMapping {
@@ -678,6 +684,13 @@ internal class DorisTypeMapping(typeManager: TypeManager) {
                 Optional.empty(),
                 Optional.empty(),
             )
+        }
+
+        /** True when a Doris DECIMAL is exposed as VARCHAR because it exceeds Trino's precision ceiling. */
+        internal fun isDecimal256(columnType: String): Boolean {
+            val parsed = DorisColumnType.parse(columnType)
+            return (parsed.baseName == "decimal" || parsed.baseName == "decimalv3") &&
+                parsed.arguments.firstOrNull()?.let { it > MAX_TRINO_DECIMAL_PRECISION } == true
         }
     }
 }

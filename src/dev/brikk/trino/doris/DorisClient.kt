@@ -138,7 +138,7 @@ class DorisClient @Inject constructor(
      */
     private val scalarRewriterHolder = DorisScalarRewriterHolder().also { holder ->
         holder.rewriter = JdbcConnectorExpressionRewriterBuilder.newBuilder()
-            .add(RewriteScalarVariable(::quoted))
+            .add(RewriteScalarVariable(typeMapping, ::quoted))
             .add(RewriteScalarConstant())
             .add(RewriteScalarFunctionByName(io.trino.spi.expression.StandardFunctions.COALESCE_FUNCTION_NAME, "coalesce", 2..MAX_SCALAR_ARITY))
             .add(RewriteScalarFunctionByName(io.trino.spi.expression.StandardFunctions.NULLIF_FUNCTION_NAME, "nullif", 2..2))
@@ -495,7 +495,7 @@ class DorisClient @Inject constructor(
      * ordered rows).
      */
     override fun supportsTopN(session: ConnectorSession, handle: JdbcTableHandle, sortOrder: List<JdbcSortItem>): Boolean =
-        sortOrder.all { isPushableSortKey(session, it.column().columnType) }
+        sortOrder.all { !isDecimal256(it.column()) && isPushableSortKey(session, it.column().columnType) }
 
     /**
      * VARCHAR sort keys become TopN-eligible in BINARY/FULL string-pushdown mode: Doris
@@ -640,8 +640,9 @@ class DorisClient @Inject constructor(
         val unsupportedKey = groupingSets.flatten()
             .map { it as JdbcColumnHandle }
             .firstOrNull {
-                !DorisAggregatePushdown.isExactPushableKeyType(it.columnType) &&
-                    it.columnType !is io.trino.spi.type.VarcharType
+                isDecimal256(it) ||
+                    (!DorisAggregatePushdown.isExactPushableKeyType(it.columnType) &&
+                        it.columnType !is io.trino.spi.type.VarcharType)
             }
         if (unsupportedKey != null) {
             log.debug(
@@ -653,6 +654,11 @@ class DorisClient @Inject constructor(
         }
         return true
     }
+
+    private fun isDecimal256(column: JdbcColumnHandle): Boolean =
+        column.jdbcTypeHandle.jdbcTypeName()
+            .map(DorisTypeMapping::isDecimal256)
+            .orElse(false)
 
     companion object {
         private val log = Logger.get(DorisClient::class.java)

@@ -99,6 +99,7 @@ internal object DorisScalarValues {
 
 /** A column reference of a scalar value type (the leaf of every composition). */
 internal class RewriteScalarVariable(
+    private val typeMapping: DorisTypeMapping,
     private val quote: (String) -> String,
 ) : ConnectorExpressionRule<Variable, ParameterizedExpression> {
     override fun getPattern(): Pattern<Variable> =
@@ -109,8 +110,16 @@ internal class RewriteScalarVariable(
             return Optional.empty()
         }
         val column = context.getAssignment(expression.name) as? JdbcColumnHandle ?: return Optional.empty()
-        // CHAR columns map to CharType (excluded by isValueType); everything else that
-        // reached a Variable of a value type is a native readable column.
+        val remoteType = column.jdbcTypeHandle.jdbcTypeName().orElse(null) ?: return Optional.empty()
+        // Textualized DECIMAL/ARRAY/MAP/STRUCT values are not native strings in Doris.
+        if (expression.type is VarcharType && DorisColumnType.parse(remoteType).baseName !in setOf("varchar", "string", "text")) {
+            return Optional.empty()
+        }
+        val mappedType = typeMapping.toColumnMapping(context.session, remoteType).map { it.type }.orElse(null)
+        if (expression.type != column.columnType || expression.type != mappedType) {
+            return Optional.empty()
+        }
+        // Synthetic projections use the same mapper-compatible type handles as native columns.
         return Optional.of(ParameterizedExpression(quote(column.columnName), listOf()))
     }
 }

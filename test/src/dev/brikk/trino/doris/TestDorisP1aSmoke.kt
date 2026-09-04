@@ -14,7 +14,9 @@
 package dev.brikk.trino.doris
 
 import io.trino.Session
+import io.trino.sql.planner.plan.AggregationNode
 import io.trino.sql.planner.plan.FilterNode
+import io.trino.sql.planner.plan.TopNNode
 import io.trino.testing.AbstractTestQueryFramework
 import io.trino.testing.QueryRunner
 import org.assertj.core.api.Assertions.assertThat
@@ -166,6 +168,40 @@ class TestDorisP1aSmoke : AbstractTestQueryFramework() {
         // Decimal256 wire text is exact; the VARCHAR mapping preserves it verbatim (PROBE Impl #3).
         assertThat(query("SELECT c_dec76_10 FROM doris.p0_probe.scalars WHERE id = 1"))
                 .matches("VALUES VARCHAR '123456789012345678901234567890.1234567890'")
+    }
+
+    @Test
+    fun testDecimal256TextNeverUsesRemoteNumericSemantics() {
+        val binary = Session.builder(session)
+            .setCatalogSessionProperty(DorisQueryRunner.CATALOG, "string_pushdown_mode", "BINARY")
+            .build()
+
+        // Trino compares the exposed wire text lexicographically; Doris would compare the
+        // native DECIMAL numerically. These values are deliberately divergent under `> '5'`.
+        val range = "SELECT id FROM doris.p0_probe.scalars WHERE c_dec76_10 > '5'"
+        for (testSession in listOf(session, binary)) {
+            assertThat(computeActual(testSession, range).onlyColumn.toList()).containsExactly(3)
+            assertThat(query(testSession, range)).isNotFullyPushedDown(FilterNode::class.java)
+        }
+
+        // Different textual scale: unequal in Trino, numerically equal in Doris.
+        val equality = "SELECT id FROM doris.p0_probe.scalars " +
+            "WHERE c_dec76_10 = '123456789012345678901234567890.123456789'"
+        assertThat(computeActual(equality).rowCount).isZero()
+        assertThat(query(equality)).isNotFullyPushedDown(FilterNode::class.java)
+
+        // BINARY normally enables VARCHAR TopN, but Decimal256 is text only at the Trino seam.
+        val topN = "SELECT c_dec76_10 FROM doris.p0_probe.scalars " +
+            "ORDER BY c_dec76_10 ASC NULLS LAST LIMIT 3"
+        assertThat(query(binary, topN)).ordered().isNotFullyPushedDown(TopNNode::class.java)
+        assertThat(computeActual(binary, topN).onlyColumn.toList()).containsExactly(
+            "-99999999999999999999999999999999999999999999999999999999999999999.9999999999",
+            "123456789012345678901234567890.1234567890",
+            "99999999999999999999999999999999999999999999999999999999999999999.9999999999",
+        )
+
+        val groupBy = "SELECT c_dec76_10, count(*) FROM doris.p0_probe.scalars GROUP BY c_dec76_10"
+        assertThat(query(groupBy)).isNotFullyPushedDown(AggregationNode::class.java)
     }
 
     @Test

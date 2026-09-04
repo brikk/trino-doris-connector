@@ -248,6 +248,44 @@ class TestDorisB1ScalarPushdown : AbstractTestQueryFramework() {
         assertThat(query(nonConstant)).isNotFullyPushedDown(FilterNode::class.java)
     }
 
+    @Test
+    fun testScalarOperationsOnTextMappingsStayLocal() {
+        for (mode in DorisStringPushdownMode.entries) {
+            val textSession = Session.builder(modeSession(mode.name))
+                .setCatalogSessionProperty(DorisQueryRunner.CATALOG, "unsupported_type_handling", "CONVERT_TO_VARCHAR")
+                .build()
+            val localTextSession = Session.builder(textSession)
+                .setCatalogSessionProperty(DorisQueryRunner.CATALOG, "complex_expression_pushdown", "false")
+                .build()
+            for ((table, column) in listOf(
+                "arrays" to "a_varchar50",
+                "mapstruct" to "m_si",
+                "mapstruct" to "s_ab",
+                "scalars" to "c_dec76_10",
+            )) {
+                for (expression in listOf("length($column)", "upper(coalesce($column, 'absent'))")) {
+                    val sql = "SELECT id, $expression FROM doris.p0_probe.$table"
+                    assertThat(rows(textSession, sql)).describedAs("$mode $sql").isEqualTo(rows(localTextSession, sql))
+                    assertThat(query(textSession, sql)).describedAs("$mode $sql").isNotFullyPushedDown(ProjectNode::class.java)
+                }
+                for (predicate in listOf("length($column) > 5", "nullif($column, 'absent') IS NULL")) {
+                    val sql = "SELECT id FROM doris.p0_probe.$table WHERE $predicate"
+                    assertThat(rows(textSession, sql)).describedAs("$mode $sql").isEqualTo(rows(localTextSession, sql))
+                    assertThat(query(textSession, sql)).describedAs("$mode $sql").isNotFullyPushedDown(FilterNode::class.java)
+                }
+            }
+        }
+    }
+
+    @Test
+    fun testScalarOperationsOnSyntheticGroupingKeysStillPush() {
+        assertPushedAndIdentical(
+            "SELECT coalesce(g, 'absent'), c FROM " +
+                "(SELECT lower(v) AS g, count(*) AS c FROM doris.b1_scalar.t GROUP BY lower(v)) " +
+                "WHERE length(g) > 2",
+        )
+    }
+
     companion object {
         private fun provisionFixture() {
             DorisTestCluster.executeAsRoot(
