@@ -65,13 +65,60 @@ class TestDorisP5Batch : AbstractTestQueryFramework() {
         // '=' is symmetric: reversed orientation pushes too
         assertThat(query("SELECT id FROM doris.p5_batch.j WHERE 'x' = json_extract_scalar(doc, '$.a')"))
             .isFullyPushedDown()
-        // nested and array-index simple paths
+        // Nested dotted paths push; array subscripts stay local even for correctly shaped arrays.
         assertThat(query("SELECT id FROM doris.p5_batch.j WHERE json_extract_scalar(doc, '$.n.k') = 'deep'"))
             .isFullyPushedDown()
         assertThat(jsonIds("json_extract_scalar(doc, '$.n.k') = 'deep'")).isEqualTo(listOf(40))
         assertThat(query("SELECT id FROM doris.p5_batch.j WHERE json_extract_scalar(doc, '$.arr2[1]') = 'second'"))
-            .isFullyPushedDown()
+            .isNotFullyPushedDown(FilterNode::class.java)
         assertThat(jsonIds("json_extract_scalar(doc, '$.arr2[1]') = 'second'")).isEqualTo(listOf(41))
+    }
+
+    @Test
+    fun testJsonZeroSubscriptsPreserveRuntimeShapeSemantics() {
+        assertJsonSubscriptStaysLocal("$.a[0]", listOf(3, 4))
+        assertJsonSubscriptStaysLocal("$[0]", listOf(16, 17))
+        assertJsonSubscriptStaysLocal("$.a[0].b", listOf(13, 14))
+    }
+
+    @Test
+    fun testJsonNonzeroSubscriptsPreserveRuntimeShapeSemantics() {
+        assertJsonSubscriptStaysLocal("$.a[1]", listOf(2, 5, 11))
+        assertJsonSubscriptStaysLocal("$.a[0][1]", listOf(15))
+        assertJsonSubscriptStaysLocal("$.a[9]", emptyList())
+    }
+
+    private fun assertJsonSubscriptStaysLocal(path: String, expected: List<Int>) {
+        val local = Session.builder(session).setSystemProperty("allow_pushdown_into_connectors", "false").build()
+        val extract = "json_extract_scalar(doc, '$path')"
+        for (predicate in listOf("$extract = 'x'", "'x' = $extract")) {
+            val sql = "SELECT id FROM doris.p5_batch.json_paths WHERE $predicate"
+            val actual = computeActual("$sql ORDER BY id").onlyColumn.toList()
+            assertThat(actual).describedAs(predicate).isEqualTo(expected)
+            assertThat(actual).isEqualTo(computeActual(local, "$sql ORDER BY id").onlyColumn.toList())
+            assertThat(query(sql)).isNotFullyPushedDown(FilterNode::class.java)
+        }
+    }
+
+    @Test
+    fun testJsonDottedPathsRemainPushedAcrossRuntimeShapes() {
+        for ((path, expected) in mapOf("$.a" to listOf(1), "$.a.b" to listOf(12))) {
+            val extract = "json_extract_scalar(doc, '$path')"
+            for (predicate in listOf("$extract = 'x'", "'x' = $extract")) {
+                val sql = "SELECT id FROM doris.p5_batch.json_paths WHERE $predicate"
+                assertThat(query(sql)).isFullyPushedDown()
+                assertThat(computeActual("$sql ORDER BY id").onlyColumn.toList()).isEqualTo(expected)
+            }
+        }
+    }
+
+    @Test
+    fun testJsonSubscriptKeepsSafeConjunctsPushed() {
+        val sql = "SELECT id FROM doris.p5_batch.json_paths " +
+            "WHERE id >= 3 AND json_extract_scalar(doc, '$.a[1]') = 'x'"
+        assertThat(computeActual("$sql ORDER BY id").onlyColumn.toList()).isEqualTo(listOf(5, 11))
+        assertThat(query(sql)).isNotFullyPushedDown(FilterNode::class.java)
+        assertThat(remoteSql(sql)).contains("`id` >= 3").doesNotContain("json_extract", "json_unquote")
     }
 
     @Test
@@ -284,6 +331,10 @@ class TestDorisP5Batch : AbstractTestQueryFramework() {
                 DUPLICATE KEY(id) DISTRIBUTED BY HASH(id) BUCKETS 1 PROPERTIES ("replication_num" = "1")
                 """.trimIndent(),
                 """
+                CREATE TABLE p5_batch.json_paths (id INT NOT NULL, doc JSON)
+                DUPLICATE KEY(id) DISTRIBUTED BY HASH(id) BUCKETS 1 PROPERTIES ("replication_num" = "1")
+                """.trimIndent(),
+                """
                 CREATE TABLE p5_batch.arr (id INT NOT NULL, a ARRAY<INT>, d ARRAY<DOUBLE>)
                 DUPLICATE KEY(id) DISTRIBUTED BY HASH(id) BUCKETS 1 PROPERTIES ("replication_num" = "1")
                 """.trimIndent(),
@@ -293,6 +344,7 @@ class TestDorisP5Batch : AbstractTestQueryFramework() {
                 """.trimIndent(),
             )
             insertJsonRows()
+            insertJsonPathRows()
             insertArrayAndStringRows()
         }
 
@@ -329,6 +381,37 @@ class TestDorisP5Batch : AbstractTestQueryFramework() {
                     listOf(40, """{"n": {"k": "deep"}}"""), // nested path
                     listOf(41, """{"arr2": ["first", "second"]}"""), // array-index path
                     listOf(42, """{"a.b": "dotted"}"""), // dotted KEY (quoted-path syntax differs)
+                ),
+            )
+        }
+
+        private fun insertJsonPathRows() {
+            DorisTestCluster.executePreparedAsRoot(
+                "INSERT INTO p5_batch.json_paths VALUES (?, ?)",
+                listOf(
+                    listOf(1, """{"a":"x"}"""),
+                    listOf(2, """{"a":{"1":"x"}}"""),
+                    listOf(3, """{"a":{"0":"x"}}"""),
+                    listOf(4, """{"a":["x","other"]}"""),
+                    listOf(5, """{"a":["other","x"]}"""),
+                    listOf(6, """{"a":null}"""),
+                    listOf(7, "{}"),
+                    listOf(8, null),
+                    listOf(9, "null"),
+                    listOf(10, """{"a":[]}"""),
+                    listOf(11, """{"a":[null,"x"]}"""),
+                    listOf(12, """{"a":{"b":"x"}}"""),
+                    listOf(13, """{"a":[{"b":"x"}]}"""),
+                    listOf(14, """{"a":{"0":{"b":"x"}}}"""),
+                    listOf(15, """{"a":[["other","x"]]}"""),
+                    listOf(16, """["x","other"]"""),
+                    listOf(17, """{"0":"x","1":"other"}"""),
+                    listOf(18, "\"x\""),
+                    listOf(19, """{"a":{"b":null}}"""),
+                    listOf(20, """{"a":{"b":["x"]}}"""),
+                    listOf(21, """{"a":{"b":{"k":"x"}}}"""),
+                    listOf(22, """{"a":42}"""),
+                    listOf(23, """{"a":true}"""),
                 ),
             )
         }

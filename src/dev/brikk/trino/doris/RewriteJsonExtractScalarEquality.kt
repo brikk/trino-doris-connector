@@ -48,8 +48,9 @@ import java.util.Optional
  *   non-scalar path value (object/array) Trino returns SQL NULL while Doris returns the
  *   JSON text (`'{"b":1}'` / `'[1,2]'`) — a data-dependent divergence no literal guard can
  *   see. Under `=` with the literal guards below, both engines drop such rows identically.
- * - The PATH must be a constant varchar of "simple" shape (`$.key`, `$.a.b`, `$[0]`,
- *   `$.a[0].b`, ...): dotted/quoted-key syntaxes differ between the engines
+ * - The PATH must contain only simple dotted field names (`$.key`, `$.a.b`). All
+ *   subscripts stay local: Doris treats [0] on non-arrays as identity, while Trino can
+ *   interpret numeric tokens as object keys (R-02). Quoted-key syntaxes also differ
  *   (Trino `$["a.b"]` vs Doris `$."a.b"`) and stay local.
  * - The LITERAL must not start with `{`/`[` (could equal Doris's non-scalar text where
  *   Trino sees NULL — over-return), must not look like a JSON number (both engines
@@ -107,7 +108,7 @@ internal class RewriteJsonExtractScalarEquality(
         return if (DorisColumnType.parse(columnType).baseName == "json") column else null
     }
 
-    /** Constant varchar path of live-proven identically-interpreted shape. */
+    /** Constant dotted-field path only; runtime JSON shape makes subscript traversal unsafe. */
     private fun simplePath(argument: ConnectorExpression): Slice? {
         val constant = argument as? Constant ?: return null
         if (constant.type !is VarcharType) {
@@ -139,8 +140,8 @@ internal class RewriteJsonExtractScalarEquality(
     companion object {
         private val JSON_EXTRACT_SCALAR = FunctionName("json_extract_scalar")
 
-        /** `$.key`, `$.a.b`, `$[0]`, `$.a[0].b`, ... — the syntax subset both engines parse identically. */
-        private val SIMPLE_PATH = Regex("""\$(\.[A-Za-z_][A-Za-z0-9_]*|\[\d+])+""")
+        /** `$.key`, `$.a.b`, ...; never array subscripts, even when the stored values happen to be arrays. */
+        private val SIMPLE_PATH = Regex("""\$(\.[A-Za-z_][A-Za-z0-9_]*)+""")
 
         /** Broad "could be a number rendering on either engine" test — anything matching stays local. */
         private val NUMERIC_LOOKING = Regex("""[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?""")

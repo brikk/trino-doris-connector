@@ -149,6 +149,8 @@ internal object DorisPushdownEvidence {
      * non-scalar path values (Trino NULL vs Doris JSON text -> literals starting `{`/`[`
      * never push; `<>`/IS-NULL forms never push) and independent number canonicalization
      * (Doris `1e+30`/`-0` vs Trino `1E+30`/`0` -> numeric-looking literals never push).
+     * R-02 additionally restricts paths to dotted fields: subscript traversal differs on
+     * scalar/object intermediates, regardless of the output-literal guards.
      */
     val JSON_EXTRACT_SCALAR = Evidence(
         trinoFunction = "json_extract_scalar(json, varchar-path) = varchar-literal",
@@ -161,7 +163,8 @@ internal object DorisPushdownEvidence {
         treatment = Treatment.DIRECT,
         hazard = "non-scalar path values: Trino NULL vs Doris JSON text ('{...}'/'[...]') -> " +
             "equality-only with {/[-prefixed literals excluded; number text canonicalization " +
-            "diverges (1e+30 vs 1E+30, -0 vs 0) -> numeric-looking literals excluded",
+            "diverges (1e+30 vs 1E+30, -0 vs 0) -> numeric-looking literals excluded; " +
+            "subscripts diverge on non-array intermediates -> dotted-field paths only",
         liveProof = "TestDorisP5Batch",
     )
 

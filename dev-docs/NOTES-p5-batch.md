@@ -3,6 +3,12 @@
 Live probes 2026-07-19 (Doris 4.1.3-rc02, throwaway probes at `/tmp/opencode/p5-probe`;
 repeatable pins in `TestDorisP5Batch`; fixture `p5_batch`).
 
+**R-02 correction, 2026-09-05:** the original path probe only checked correctly shaped
+arrays and did not justify subscript pushdown on arbitrary JSON. Subscript paths now stay
+local; only simple dotted-field paths are admitted. See
+[R-02 in the review](REVIEW-2026-09-05.md#r-02-json-subscript-syntax-is-not-semantic-equivalence)
+for the before/after evidence and regression coverage.
+
 ## 1. json_extract_scalar -> json_unquote(json_extract(...)) — EQUALITY ONLY
 
 Registry: `json_extract_scalar` -> `json_unquote`, verdict IDENTICAL (0.7.0; pinned in
@@ -18,7 +24,8 @@ vs Trino-through-the-connector) found the cells the registry tuple doesn't cover
 | **non-scalar at path** (object/array) | the JSON TEXT (`'{"b":1}'`, `'[1,2]'`) | **SQL NULL** | DIVERGENT, data-dependent ⇒ `<>` / `IS NULL` / `IS NOT NULL` NEVER push; `=` guards literal prefix `{`/`[` |
 | **numbers** | Doris-canonical: `1e+30`, `1.5e-07`, `-0` | Trino-canonical: `1E+30`, `1.5E-7`, `0` | DIVERGENT rendering ⇒ numeric-looking literals NEVER push (broad regex) |
 | int-ish numbers | `1`, `1.1`, `100`, big ints verbatim | same | identical in every probed cell — but guarded anyway by the numeric-literal skip (formatting risk isn't worth the cell-by-cell carve-out) |
-| paths | `$.a`, `$.a.b`, `$.a[0]` identical; dotted keys need `$."a.b"` | dotted keys need `$["a.b"]` | path guard: only `$(\.simple_key|\[\d+\])+` pushes |
+| paths (original probe) | `$.a`, `$.a.b`, `$.a[0]` agreed on the probed shapes; dotted keys need `$."a.b"` | dotted keys need `$["a.b"]` | original subscript admission withdrawn by R-02; only simple dotted-field paths push |
+| subscripts (R-02) | `[0]` on a non-array acts as identity; numeric object keys are not traversed like Trino subscripts | scalar intermediates yield NULL; numeric tokens can select object keys | all subscript-bearing paths stay local, including root and nested subscripts |
 
 Notes:
 - Doris canonicalizes JSON numbers AT STORAGE (`1.0` -> `1`, `1e2` -> `100`), and Trino
@@ -73,7 +80,7 @@ controller ships that domain as a superset pre-filter WITH the exact Trino filte
 So item 3 shipped as tests + docs only (`testGuardedLikePrefix*` pins) — the honest
 implementation was recognizing the engine already provides it.
 
-## Test surface
+## Original Test Surface (2026-07-19)
 
 `TestDorisP5Batch` (13): JSON equality pushdown + exact remote shape + per-cell
 differentials (incl. guarded-out literals — local == pushed truth for all), semantics pins,
