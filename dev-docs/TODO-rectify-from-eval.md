@@ -59,32 +59,44 @@ registry prose that in several places contradicts the code it claims to prove.
   259 passed, 5 skipped, 1 failed in the unrelated direct-JDBC cancellation probe (see E-29).
   The cancellation suite passed on isolated rerun; plugin assembly and verification passed.
 
-### E-03 [H] Cluster-scoped cancel never fires during the execute phase (no first row yet)
-- `DorisClient.kt:465-476` hooks `abortReadConnection`, but `JdbcPageSource.close()` (483) only
-  calls it when `resultSet != null`, i.e. after `executeQuery` has returned. A cancel while Doris
-  is still computing (heavy pushed aggregation/join/TopN — the cases where cancel matters most)
-  never reaches `clusterScopedCancel.onAbort`; `registrations` keeps the entry until GC.
-- `TestDorisCancellation` uses a send-blocked cross-join (streaming phase) so this gap is untested.
-- Fix: wrap the `PreparedStatement` from `getPreparedStatement` (`DorisClient.kt:455-463`) in a
-  forwarding statement whose `cancel()` dispatches `clusterScopedCancel.onAbort(connection)`
-  (async, non-blocking); register at `buildSql`/`getPreparedStatement` time so both phases are covered.
+### E-03 [H] DONE 2026-09-05 - Cancellation before result-set adoption
+- Confirmed against Trino 483: `abortReadConnection` is skipped until JdbcPageSource adopts
+  its result set, including the interval after executeQuery returns but before adoption.
+- `DorisClient.buildSql` now wraps the prepared/bound scan in `DorisPreparedStatement`.
+  Its cancel hook dispatches the helper and aborts the captured connection before JDBC cleanup.
+  A cancellation latch prevents queued execution after close; concurrent and late-result
+  cleanup wait for socket-abort completion without holding the state lock during JDBC work.
+- The helper retries initially absent tokens and matching rows with unassigned/invalid IDs.
+  Client execution ending after socket abort does not prove a buffered FE request has vanished.
+- Proof: `TestDorisScanCancellation` exercises real Trino JdbcPageSource with controlled
+  JDBC races and a live pre-result close; `TestDorisPreparedStatement` pins concurrent cleanup.
+  Six lifecycle and two cleanup-race regressions failed before their respective fixes.
+- Full build with `-PwithCancellation` passed: 273 passed, 5 overlay tests skipped, no failures.
+  See `NOTES-cancel-cluster-scoped.md` for the precise contract and remaining limitations.
 
-### E-04 [H] Connector/J's LB-unsafe `Statement.cancel()` is still invoked
+### E-04 [H] DONE 2026-09-05 - Suppress Connector/J's LB-unsafe Statement.cancel
 - `JdbcPageSource.close()` calls `statement.cancel()` unconditionally before `abortReadConnection`.
   Connector/J opens a new session to the same `HostInfo` and issues `KILL QUERY <connection-id>`
   — behind an LB that is a kill of an unrelated same-user session on an arbitrary FE (the class
   header of `DorisClusterScopedCancel.kt:31-36` describes this hazard but nothing suppresses it).
-- Fix: same forwarding statement as E-03; its `cancel()` must NOT delegate to Connector/J.
+- Qualification: Connector/J sends this numeric-ID kill only while its execution flag is set;
+  it normally returns without doing so after executeQuery returns a streaming result.
+- Resolution: the E-03 wrapper never delegates cancel, including when the cluster helper is
+  disabled. Socket abort remains the fallback. Tests assert zero raw cancel calls in queued,
+  executing, streaming, unadopted-result, and fully consumed states.
 
-### E-05 [H] Query-scoped kill can fail a healthy query on legitimate early page-source close
+### E-05 [H] DONE 2026-09-05 - Isolate cancellation to one scan statement
 - `DorisClusterScopedCancel.kt:228-237` `isRunningCancelCandidate` matches *every* running
   statement carrying the query-id marker. `abortReadConnection` also fires on non-error early
   close (`!resultSet.isAfterLast` after a non-pushed `LIMIT`/`EXISTS`/semi-join is satisfied).
   Closing scan A early then kills scan B of the same Trino query → "cancel query by user" → whole
   query fails. Stock `connection.abort()` was per-connection and had no such hazard.
-- Fix: scope the kill to the aborting connection (per-split token in the comment, e.g.
-  `/*trino_query_id=<id>;split=<n>*/`), or only issue query-wide kills when the Trino query
-  itself is failing/cancelled (which requires the E-03 hook relocation).
+- Resolution: every buildSql call generates a fresh `/*trino_statement_id=<uuid>*/` token;
+  helper matching uses that complete comment, never the query-id tracing comment. No shared
+  per-query deduplication remains. Fully consumed scans do not dispatch cancellation helpers.
+- Proof: a fake-JDBC early stream close kills only its token and its sibling remains readable;
+  a live production-helper test cancels one of two same-query-id sleep statements while the
+  other remains running. Multi-FE overlay tests were skipped; no new cross-FE measurement claimed.
 
 ### E-06 [M] DATE/TIMESTAMP literals outside Doris's representable range are pushed unguarded
 - `DorisScalarPushdownRules.kt:122-137` (`RewriteScalarConstant`), also domain pushdown via
@@ -129,24 +141,28 @@ registry prose that in several places contradicts the code it claims to prove.
   U+FFFD before binding, so the pushed pattern differs from Trino's. (3-arg LIKE path :93 is fine.)
 - Fix: do the escaping at the byte level or reject non-UTF-8 slices (stay local).
 
-### E-13 [L] `isRunningCancelCandidate` excludes rows by substring
+### E-13 [L] DONE 2026-09-05 - Cancel candidate helper exclusions
 - `DorisClusterScopedCancel.kt:233`: any statement text containing `KILL QUERY` / `SHOW FULL
   PROCESSLIST` is never a candidate — a user literal `WHERE msg = 'kill query'` makes that query
   un-cancellable by this path.
-- Fix: exclude by the helper's own connection id, or require the statement to *start with* SHOW/KILL.
+- Resolution: only leading SHOW/KILL statements are excluded. Added literal and exact-marker
+  collision checks to `testRunningCancelCandidateClassification`.
 
-### E-14 [L] Cancel helper: no statement timeout, unbounded cached thread pool, interrupt swallowed
-- `DorisClusterScopedCancel.kt:139-161` bounds the loop (15s) but each `SHOW FULL PROCESSLIST`/
-  `KILL QUERY` has no `setQueryTimeout`; `Executors.newCachedThreadPool` (:207-209) spawns a thread
-  per concurrent cancel; `InterruptedException` from `Thread.sleep` (:159) is caught generically
-  (:131) without restoring the flag; `killsDispatched` (:99) increments before `execute` can reject (:103).
-- Fix: bounded pool + bounded queue with drop-on-reject; `setQueryTimeout` on helper statements;
-  restore interrupt; count after successful dispatch.
+### E-14 [L] PARTIAL - Bound cancel-helper resources and network operations
+- Remaining: the 15s retry deadline does not bound individual network calls; the cached daemon
+  pool is unbounded. Initially absent tokens are now retried through that window, increasing
+  the importance of explicit resource bounds under cancellation bursts.
+- Fixed with E-03: interrupted helpers restore the interrupt flag; dispatches are counted only
+  after executor acceptance.
+- Do NOT blindly add Statement.setQueryTimeout: Connector/J's timeout task can independently
+  issue the same LB-unsafe numeric-ID kill. Investigate network/connect deadlines and bounded
+  executor capacity without reintroducing that cancellation mechanism.
 
-### E-15 [L] `registrations` entries only removed on abort
+### E-15 [L] DONE 2026-09-05 - Remove connection/session registrations
 - `DorisClient.kt:466`: normal completion (`isAfterLast`) never unregisters; `WeakHashMap` makes it
   GC-bounded, but each entry holds a strong `ConnectorSession`.
-- Fix: `clusterScopedCancel.unregister(connection)` in the `isAfterLast` branch.
+- Resolution: removed the weak-map registry entirely. The statement wrapper owns its token
+  and callback; only an active helper task retains the session during cancellation.
 
 ---
 
@@ -265,18 +281,20 @@ the evidence registry are the proof". Fix the text or the code — whichever is 
 
 ## D. Tests / CI
 
-### E-29 [M] The two suites that prove the headline cancellation fix never run in CI
+### E-29 [M] PARTIAL - Cancellation CI coverage and optional integration suites
 - E-02 verification (2026-09-04) also exposed an intermittent failure in
   `TestDorisClusterScopedCancel.testKillByQueryIdReleasesAndRepeatIsHarmless`: the processlist
   supplied a QueryId rejected by `isValidQueryId` at line 142. The suite passed on isolated rerun.
-  Investigate transient processlist IDs and improve assertion diagnostics when addressing cancellation.
+  Doris 4.1.3 source confirms unassigned IDs render as an empty string. The replacement live
+  probe retries these rows and reports their raw values; a deterministic production-loop test
+  covers empty/null/invalid IDs. The historical failing value itself was not captured.
 - `TestDorisCancellation` is `@Tag("cancellation")` and excluded by default (`build.gradle.kts:110-114`);
   `TestDorisMultiFeFailover` is `@EnabledIf overlayIsUp` and the 3-FE overlay is never started in CI.
-- `TestDorisClusterScopedCancel` live tests (119-213) re-implement the scan→kill→verify loop in
-  test code and never call `killQuietly`/`killUntilReleased`. Net: the production kill loop has
-  no CI coverage.
-- Fix: add a hermetic unit test of `killUntilReleased` against a fake `Connection`/`Statement`;
-  run `-PwithCancellation` in CI (or nightly); consider a nightly multi-FE job.
+- Fixed with E-03/E-04/E-05: default CI now includes deterministic production-helper scripts,
+  actual JdbcPageSource lifecycle regressions, a live execute-phase cancellation, and live
+  same-query-id statement isolation. The tests call the production helper, not a replica loop.
+- Remaining: decide whether to schedule the slow end-to-end and multi-FE suites in CI/nightly.
+  The slow suite was explicitly enabled in the successful 2026-09-05 full verification run.
 
 ### E-30 [M] Live suites hard-fail (not skip) with a hard-coded cluster
 - `DorisQueryRunner.kt:32-33` pins `127.0.0.1:9130` root/no-password; `DorisTestCluster.kt:26,95-118`
@@ -303,9 +321,8 @@ the evidence registry are the proof". Fix the text or the code — whichever is 
 
 ## Suggested order
 
-1. E-01, E-02 (default-mode correctness; small, testable) →
-2. E-03, E-04, E-05 (cancellation seam; one forwarding-statement change resolves all three) →
-3. E-17, E-16, E-18, E-19, E-20 (make prose match code; decide NULL_ONLY/GUARDED contracts) →
-4. E-06, E-07, E-08, E-09, E-10, E-11 →
-5. E-29, E-30 (CI coverage of the cancel path; portable live tests) →
-6. Everything else opportunistically.
+1. E-06 (probe out-of-range temporal literals before deciding the fix).
+2. E-07, E-14 (cancel-helper observability and resource/network bounds).
+3. E-17, E-16, E-18, E-19, E-20 (align documented and implemented contracts).
+4. Validate E-08, E-09, E-10, E-11 against actual Doris behavior.
+5. Remaining E-29/E-30 work and other items opportunistically.

@@ -16,12 +16,10 @@ package dev.brikk.trino.doris
 import io.airlift.log.Logger
 import io.trino.plugin.jdbc.ConnectionFactory
 import io.trino.spi.connector.ConnectorSession
-import java.sql.Connection
 import java.sql.SQLException
-import java.util.Collections
-import java.util.WeakHashMap
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 
@@ -39,12 +37,10 @@ import java.util.concurrent.atomic.AtomicInteger
  * in dev.sort.doris.cancel — production-hardened against a real LB'd cluster; re-proven
  * live on Doris 4.1.3 single-FE and the 3-FE overlay, `NOTES-cancel-cluster-scoped.md`):
  *
- *  1. Every scan statement already carries the `/*trino_query_id=<id>*/` comment
- *     ([DorisRemoteQueryModifier]) — the probe proved `SHOW FULL PROCESSLIST` `Info` is
- *     UNTRUNCATED (120KB statement, trailing marker visible) and CLUSTER-WIDE on 4.1.3,
- *     so the existing marker suffices; no `session_context` trace-id bind is needed
- *     (and unlike the reference's per-CONNECTION guid, the marker is per-QUERY —
- *     exactly the cancel scope we want).
+ *  1. Each built scan receives a fresh `/*trino_statement_id=<uuid>*/` comment. The
+ *     Trino query-id comment remains for tracing, but is NOT a cancellation key: Trino
+ *     closes scans early for LIMIT as well as on failure, without cancelling sibling scans.
+ *     The probe proved SHOW FULL PROCESSLIST Info is untruncated and cluster-wide on 4.1.3.
  *  2. At cancel: a short-lived HELPER connection (same URL — ANY FE is fine), widen with
  *     `SET fetch_all_fe_for_system_table = true` (defensive; 4.1.3 defaults cluster-wide),
  *     `SHOW FULL PROCESSLIST`, match the marker in `Info` (skipping idle rows and the
@@ -54,12 +50,12 @@ import java.util.concurrent.atomic.AtomicInteger
  *     production scar) — it happens to work on 4.1.3, but the QueryId path works on BOTH.
  *  3. The kill runs ASYNCHRONOUSLY: the busy streaming connection is NEVER touched at
  *     cancel time (even `getClientInfo` can stall ~8s mid-query — reference finding);
- *     marker bookkeeping lives in connector memory, keyed weakly by the scan connection.
+ *     marker and execution state are captured by the scan's [DorisPreparedStatement].
  *     The blocked ResultSet read unblocks when the server errors the statement
  *     ("cancel query by user") — that is the completion signal.
  *
- * Every failure here degrades silently to the stock belt ([DorisClient.abortReadConnection]
- * keeps `connection.abort()`): a cancellation must never hang or fail because the helper
+ * Every failure here degrades to the socket belt ([DorisPreparedStatement] aborts the
+ * captured connection): a cancellation must never hang or fail because the helper
  * could not do its work. "Unknown query id" from the kill means the query already finished
  * — success, DEBUG.
  */
@@ -67,41 +63,19 @@ internal class DorisClusterScopedCancel(
     private val connectionFactory: ConnectionFactory,
     private val enabled: Boolean,
 ) {
-    private class Registration(val marker: String, val session: ConnectorSession)
-
-    /** Scan-connection -> (marker, session); entries die with the connection. */
-    private val registrations: MutableMap<Connection, Registration> =
-        Collections.synchronizedMap(WeakHashMap())
-
-    /** Markers with a kill currently in flight (dedupe for multi-scan queries). */
-    private val inFlight: MutableSet<String> = Collections.synchronizedSet(HashSet())
-
-    /** Called from the scan path at statement build time; overwrites any prior registration. */
-    fun register(connection: Connection, session: ConnectorSession) {
-        if (enabled) {
-            registrations[connection] = Registration(DorisRemoteQueryModifier.marker(session.queryId), session)
-        }
-    }
-
     /**
-     * Called from [DorisClient.abortReadConnection] BEFORE the socket abort: dispatches the
-     * async cluster-scoped kill for the aborting scan's query. Never blocks, never throws.
+     * Called once by the scan wrapper before socket abort. No busy JDBC calls on this thread.
+     * executionFinished must reflect delegate execution exit, not just cancellation/close.
      */
-    @Suppress("TooGenericExceptionCaught") // best-effort BY CONTRACT: cancel must never fail because of the helper
-    fun onAbort(connection: Connection) {
+    fun cancel(session: ConnectorSession, marker: String, executionFinished: () -> Boolean) {
         if (!enabled) {
             return
         }
-        val registration = registrations.remove(connection) ?: return
-        if (!inFlight.add(registration.marker)) {
-            return // another scan of the same query already dispatched the kill
-        }
-        killsDispatched.incrementAndGet()
         try {
-            executor.execute { killQuietly(registration) }
-        } catch (e: RuntimeException) {
-            inFlight.remove(registration.marker)
-            log.debug(e, "cluster-scoped cancel dispatch failed for %s", registration.marker)
+            executor.execute { killQuietly(session, marker, executionFinished) }
+            killsDispatched.incrementAndGet()
+        } catch (e: RejectedExecutionException) {
+            log.debug(e, "cluster-scoped cancel dispatch failed for %s", marker)
         }
     }
 
@@ -118,39 +92,48 @@ internal class DorisClusterScopedCancel(
      * row from the CI finding — repeat kills of those are silently accepted and harmless).
      */
     @Suppress("TooGenericExceptionCaught") // best-effort BY CONTRACT: the stock abort belt already ran
-    private fun killQuietly(registration: Registration) {
+    private fun killQuietly(session: ConnectorSession, marker: String, executionFinished: () -> Boolean) {
         try {
-            connectionFactory.openConnection(registration.session).use { helper ->
+            connectionFactory.openConnection(session).use { helper ->
                 helper.createStatement().use { statement ->
                     // widen to all FEs — 4.1.3 already defaults cluster-wide, but the explicit
                     // SET is cheap insurance for configurations that flipped it back
                     runCatching { statement.execute("SET fetch_all_fe_for_system_table = true") }
-                    killUntilReleased(statement, registration.marker)
+                    killUntilReleased(statement, marker, executionFinished)
                 }
             }
+        } catch (e: InterruptedException) {
+            Thread.currentThread().interrupt()
+            log.debug(e, "cluster-scoped cancel helper interrupted for %s", marker)
         } catch (e: Exception) {
             // the stock socket-abort belt already ran; the helper is best-effort by contract
-            log.debug(e, "cluster-scoped cancel helper failed for %s", registration.marker)
-        } finally {
-            inFlight.remove(registration.marker)
+            log.debug(e, "cluster-scoped cancel helper failed for %s", marker)
         }
     }
 
-    private fun killUntilReleased(statement: java.sql.Statement, marker: String) {
+    private fun killUntilReleased(statement: java.sql.Statement, marker: String, executionFinished: () -> Boolean) {
         val deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(KILL_WINDOW_MILLIS)
+        var observed = false
         while (true) {
+            // Read BEFORE scanning: execution could start/finish while SHOW is in flight.
+            val finishedBeforeScan = executionFinished()
             val queryIds = scanRunningQueryIds(statement, marker)
-            if (queryIds.isEmpty()) {
+            if (queryIds.isEmpty() && finishedBeforeScan && observed) {
                 // finished or killed — that IS success for a cancel
                 log.debug("cluster-scoped cancel: no running statement for %s", marker)
                 return
             }
+            // Socket abort can finish client execution before the FE exposes a buffered
+            // request. Until we observe this token, an empty scan is not proof of release.
+            observed = observed || queryIds.isNotEmpty()
             for (queryId in queryIds) {
-                killQueryId(statement, queryId, marker)
+                if (isValidQueryId(queryId)) {
+                    killQueryId(statement, requireNotNull(queryId), marker)
+                }
             }
             if (System.nanoTime() >= deadline) {
                 log.debug(
-                    "cluster-scoped cancel: %s still lists running rows after %sms — leaving to the socket belt",
+                    "cluster-scoped cancel: release of %s not confirmed after %sms — leaving to the socket belt",
                     marker,
                     KILL_WINDOW_MILLIS,
                 )
@@ -160,7 +143,7 @@ internal class DorisClusterScopedCancel(
         }
     }
 
-    private fun scanRunningQueryIds(statement: java.sql.Statement, marker: String): List<String> =
+    private fun scanRunningQueryIds(statement: java.sql.Statement, marker: String): List<String?> =
         statement.executeQuery(SHOW_FULL_PROCESSLIST).use { resultSet ->
             buildList {
                 while (resultSet.next()) {
@@ -169,10 +152,9 @@ internal class DorisClusterScopedCancel(
                     if (!isRunningCancelCandidate(command, info, marker)) {
                         continue
                     }
-                    val queryId = resultSet.getString("QueryId")
-                    if (isValidQueryId(queryId)) {
-                        add(queryId)
-                    }
+                    // A visible row may not have an assigned QueryId yet. Keep it so that
+                    // the retry loop cannot mistake an unkillable-yet statement for release.
+                    add(resultSet.getString("QueryId"))
                 }
             }
         }
@@ -221,19 +203,20 @@ internal class DorisClusterScopedCancel(
 
         /**
          * A row we may kill: RUNNING (not an idle `Sleep` connection), carrying OUR marker,
-         * and not the helper's own SHOW/KILL statement. Unlike the reference (per-connection
-         * guids, wrong-kill risk on ambiguity), the marker is per-QUERY here, so EVERY match
-         * belongs to the query being cancelled — multi-scan queries kill all their scans.
+         * and not the helper's own SHOW/KILL statement. Match the complete marker comment,
+         * not a query-id prefix; production callers use a unique per-statement token.
          */
         internal fun isRunningCancelCandidate(command: String?, info: String?, marker: String): Boolean {
             if (command?.trim().equals("Sleep", ignoreCase = true)) {
                 return false
             }
             val sql = info ?: return false
-            if (sql.contains(SHOW_FULL_PROCESSLIST, ignoreCase = true) || sql.contains("KILL QUERY", ignoreCase = true)) {
+            if (sql.trimStart().startsWith(SHOW_FULL_PROCESSLIST, ignoreCase = true) ||
+                sql.trimStart().startsWith("KILL QUERY", ignoreCase = true)
+            ) {
                 return false
             }
-            return sql.contains(marker)
+            return sql.contains("/*$marker*/")
         }
 
         /** "Unknown query id" (any hop of the cause chain) == the query already finished. */

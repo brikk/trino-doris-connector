@@ -74,6 +74,7 @@ import java.sql.ResultSet
 import java.sql.SQLException
 import java.util.Locale
 import java.util.Optional
+import java.util.UUID
 import java.util.function.BiFunction
 
 /**
@@ -446,10 +447,14 @@ class DorisClient @Inject constructor(
             val seconds = maxOf(1L, timeout.roundTo(java.util.concurrent.TimeUnit.SECONDS))
             connection.createStatement().use { it.execute("SET query_timeout = $seconds") }
         }
-        // cluster-scoped cancel bookkeeping: marker+session for this scan connection, read
-        // back at abort time (the busy connection itself is never touched at cancel)
-        clusterScopedCancel.register(connection, session)
-        return super.buildSql(session, connection, split, table, columns)
+        // Fresh per execution attempt: early close of this scan must never kill sibling scans.
+        val marker = "trino_statement_id=${UUID.randomUUID()}"
+        val query = prepareQuery(session, connection, table, Optional.empty(), columns, emptyMap(), Optional.of(split))
+            .transformQuery { sql -> "$sql /*$marker*/" }
+        val statement = queryBuilder.prepareStatement(this, session, connection, query, Optional.of(columns.size))
+        return DorisPreparedStatement(statement, connection) { executionFinished ->
+            clusterScopedCancel.cancel(session, marker, executionFinished)
+        }
     }
 
     override fun getPreparedStatement(connection: Connection, sql: String, columnCount: Optional<Int>): PreparedStatement {
@@ -464,13 +469,8 @@ class DorisClient @Inject constructor(
 
     override fun abortReadConnection(connection: Connection, resultSet: ResultSet) {
         if (!resultSet.isAfterLast) {
-            // PRIMARY: async cluster-scoped kill (marker -> cluster-wide processlist ->
-            // QueryId -> KILL QUERY, forwarded cross-FE) — correct behind LB/multi-FE where
-            // driver-level kills target an arbitrary FE ([DorisClusterScopedCancel]).
-            clusterScopedCancel.onAbort(connection)
-            // BELT (stock, SR K11): abort the socket instead of draining the streaming
-            // result. On the owning FE this alone releases the query; behind an LB it may
-            // not — hence the primary above.
+            // Scan cancellation already ran through DorisPreparedStatement.cancel(); retain
+            // the socket-only fallback for other BaseJdbcClient read paths too.
             connection.abort(directExecutor())
         }
     }

@@ -8,7 +8,7 @@ only and masked it. Implementation adapted (with credit and thanks) from the Apa
 reference in `dev.sort.doris.cancel` (DataGrip plugin) — production-hardened against a real
 LB'd cluster; every step re-proven live on Doris 4.1.3 (single-FE + the 3-FE overlay).
 
-## Marker decision: the existing statement comment, NOT session_context
+## Marker decision: one token per statement, NOT per Trino query
 
 Probe evidence (4.1.3):
 - `SHOW FULL PROCESSLIST` `Info` is **untruncated** — a 120,059-char statement showed its
@@ -18,31 +18,50 @@ Probe evidence (4.1.3):
   widening; `SET fetch_all_fe_for_system_table = true` is issued anyway as cheap insurance —
   the variable was renamed from `show_all_fe_connection` and default-flipped in 4.x).
 
-So the marker every scan already carries ([DorisRemoteQueryModifier]) suffices — and it is
-per-QUERY (the exact cancel scope), whereas the reference's `SET session_context =
-'trace_id:...'` is per-CONNECTION and costs a connect-time round trip. No trace-id bind.
+The original implementation used the Trino query-id comment as its cancellation key.
+The 2026-09-05 E-03/E-04/E-05 correction replaces that key with a fresh
+`/*trino_statement_id=<uuid>*/` for each `DorisClient.buildSql` call, including retries.
+Trino also closes individual scans early (for example, a local LIMIT); closing one does
+not authorize killing its siblings. The query-id comment remains for tracing only.
+Neither marker needs a session_context bind or an extra connection-time round trip.
 
 ## The working sequence (live-proven, 4.1.3)
 
 1. Async helper connection (same URL; ANY FE — probed helper-on-fe3).
 2. `SET fetch_all_fe_for_system_table = true` (best-effort).
-3. `SHOW FULL PROCESSLIST` -> rows where `Command != Sleep`, `Info` contains the marker,
-   `Info` is not the helper's own SHOW/KILL -> `QueryId` (regex-validated:
+3. `SHOW FULL PROCESSLIST` -> rows where `Command != Sleep`, `Info` contains the complete
+   statement-marker comment and does not start with the helper's SHOW/KILL -> `QueryId` (regex-validated:
    `[0-9a-f]{1,16}-[0-9a-f]{1,16}`).
 4. `KILL QUERY "<QueryId>"` per match — Doris forwards FE-to-FE. Cross-FE proof: query
    owned by fe2, helper on fe3, kill returned in 22ms, victim released with
-   "cancel query by user". Multi-scan Trino queries kill ALL their scans (the marker is
-   query-scoped, so every match is legitimately ours — unlike the reference's ambiguity
-   refusal, which guards per-connection guids).
-5. "Unknown query id" == already finished == success (DEBUG). 4.1.3 nuance: repeating a
-   kill for a COMPLETED query returns OK silently; a never-existed id errors.
+   "cancel query by user". Only the matching statement is targeted; sibling scans retain
+   their own tokens. That cross-FE forwarding measurement predates the lifecycle correction;
+   the new lifecycle and isolation tests were run against the single-FE fixture.
+5. "Unknown query id" == already finished == success (DEBUG). A repeated kill can either
+   succeed or report Unknown query id, depending on server cleanup timing.
 6. **VERIFY AND RETRY** (`killUntilReleased`, 15s window / 500ms recheck): a kill issued in
    the FIRST INSTANTS of a query's life — the processlist row appears before the coordinator
    registers as cancellable — returns OK but is a SILENT NO-OP and the query runs to
    completion (live-reproduced: 1/25 tight-loop rounds; the victim COMPLETED normally
    despite the accepted kill — this was the "flaky pin" during development, root-caused).
-   Re-scanning until no row matches closes the window; rows that outlive it (e.g. the
-   killed-but-lingering send-blocked case) are left to the socket belt at DEBUG.
+   Matching rows with an unassigned/invalid QueryId are retained for retry, never sent to KILL.
+   An empty scan ends the loop only after this token has been observed and client execution
+   has exited. A socket abort can finish client execution before a buffered request becomes
+   visible on the FE, so an initially absent token is polled through the window.
+   The loop is best-effort: unconfirmed release at the deadline is logged at DEBUG;
+   socket abort and configured server-side query timeouts remain the fallbacks. Individual
+   helper network operations are not bounded by that loop deadline (remaining E-14 work).
+
+### Unassigned QueryIds
+
+The old live test asserted every active processlist row had a valid QueryId and intermittently
+failed. Doris 4.1.3 source confirms an unassigned ID renders as an empty string:
+[`ConnectContext.ThreadInfo.toRow`](https://github.com/apache/doris/blob/4.1.3/fe/fe-core/src/main/java/org/apache/doris/qe/ConnectContext.java)
+calls [`DebugUtil.printId`](https://github.com/apache/doris/blob/4.1.3/fe/fe-core/src/main/java/org/apache/doris/common/util/DebugUtil.java),
+which returns `""` for null. This establishes a possible transient state, not the precise
+interleaving of the historical failure. The deterministic retry test covers `""`, SQL NULL,
+other invalid IDs, delayed visibility, and repeated valid-ID kills. Live diagnostics now
+include the raw invalid value instead of failing on its first appearance.
 
 ## kill-by-trace-id: version-unstable — still not used
 
@@ -54,26 +73,39 @@ and documents the instability so nobody "simplifies" to trace-id kills.
 
 ## Wiring
 
-- Bookkeeping at `DorisClient.buildSql`: scan connection -> (marker, session), weak map —
-  the busy streaming connection is NEVER touched at cancel time (reference finding: even
-  `getClientInfo` can stall ~8s mid-query).
-- `DorisClient.abortReadConnection`: PRIMARY = async dispatch of the cluster-scoped kill;
-  BELT = the stock `connection.abort()` socket teardown (stays: it is the instant release
-  on the owning FE and the only path when the helper cannot work). The blocked ResultSet
-  read unblocks when the server errors the statement — the completion signal.
-- Helper failures degrade silently (DEBUG): a cancel must never hang or fail because the
-  helper couldn't do its work. In-flight dedupe per marker; daemon executor.
-- Config: `doris.cluster-scoped-cancel` (default TRUE — strictly more correct).
-- Observed side benefit: single-FE release evidence now arrives via processlist clearance
-  in ~46ms (previously the socket-teardown fe.log race, ~125ms+).
+- `DorisClient.buildSql` appends the statement token after query transformations, preserves
+  parameter binding and query-id decoration, and wraps the prepared statement.
+- `DorisPreparedStatement.cancel()` never delegates to Connector/J. It dispatches the helper
+  once and aborts the captured connection without acquiring the driver's busy connection lock.
+  Disabling `doris.cluster-scoped-cancel` disables the helper, not the socket fallback.
+- Cancellation/close before execution prevents the queued supplier from reaching the driver.
+  No wrapper monitor is held during JDBC work. Concurrent statement close and late-result
+  cleanup wait for socket-abort completion before entering potentially draining JDBC close.
+- A wrapper around ResultSet.next records exhaustion; closing a fully consumed scan neither
+  dispatches a helper nor aborts its connection. No connection/session registry is retained.
+- Trino 483 calls Statement.cancel before abortReadConnection, and only invokes the latter
+  once the page source has adopted its result set. This includes a gap AFTER executeQuery
+  returns but BEFORE adoption. Both phases are now covered by the statement wrapper.
+- `DorisClient.abortReadConnection` retains socket-only behavior for other BaseJdbc read paths.
+  Helper failures log at DEBUG; daemon executor capacity/network bounds remain E-14 work.
+- This does not change Trino's scheduling of close: a driver thread blocked in synchronous
+  ResultSet.next can still delay operator destruction. No universal cancellation latency is promised.
 
 ## Proof surface
 
-- `TestDorisClusterScopedCancel` (8): pure-function pins (QueryId validation, candidate
-  classification, unknown-query-id), bookkeeping + helper-failure tolerance (throwing
-  factory; in-flight slot clears), live single-FE kill pin, trace-id behavior pin.
-- `TestDorisCancellation` (3): the structural release contract now ALSO asserts the
-  cluster-scoped dispatch fired (same-JVM counter); both orderings green.
-- `TestDorisMultiFeFailover` (+2, overlay-guarded): deterministic cross-FE kill
+- `TestDorisScanCancellation`: real Trino JdbcPageSource over fake JDBC for queued execution,
+  blocked execution, unadopted results, normal completion, and sibling-stream isolation;
+  also a live single-FE page-source close before the first result. Included in default CI.
+- `TestDorisPreparedStatement`: concurrent close/late-result ordering against a paused cancel,
+  wrapper-preserving unwrap, idempotent close, and socket fallback without a helper.
+- `TestDorisClusterScopedCancel`: deterministic scripts drive the production helper loop;
+  a live test cancels one of two same-query-id statements and verifies its sibling survives.
+- `TestDorisCancellation`: opt-in slow end-to-end query kill and server-side timeout tests;
+  helper dispatch remains informational there, with mandatory dispatch proved in the new suite.
+- `TestDorisMultiFeFailover` (overlay-guarded): deterministic cross-FE kill
   (fe2-owned query, fe3 helper) and the connector end-to-end overlay cancel through the
-  comma-list URL — THE tests this fix exists for.
+   comma-list URL.
+
+Verification on 2026-09-05: full `./gradlew build -PwithCancellation` passed in 13m08s:
+273 passed, 5 multi-FE overlay tests skipped, zero failures; detekt and plugin assembly passed.
+Use `mise exec -- ./gradlew build -PwithCancellation` to select the repository's JDK.

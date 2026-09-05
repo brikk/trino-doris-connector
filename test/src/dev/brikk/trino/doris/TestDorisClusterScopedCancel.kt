@@ -21,9 +21,16 @@ import org.junit.jupiter.api.Test
 import java.lang.reflect.Proxy
 import java.sql.Connection
 import java.sql.DriverManager
+import java.sql.ResultSet
 import java.sql.SQLException
+import java.sql.Statement
+import java.util.UUID
+import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * Cluster-scoped cancel: pure-function pins, bookkeeping/failure-tolerance units, and the
@@ -40,26 +47,32 @@ class TestDorisClusterScopedCancel {
         assertThat(DorisClusterScopedCancel.isValidQueryId("2a7996e4e05a462d-b5b5071a01104ecb")).isTrue()
         assertThat(DorisClusterScopedCancel.isValidQueryId(null)).isFalse()
         assertThat(DorisClusterScopedCancel.isValidQueryId("")).isFalse()
+        assertThat(DorisClusterScopedCancel.isValidQueryId("N/A")).isFalse()
         assertThat(DorisClusterScopedCancel.isValidQueryId("nodash")).isFalse()
         assertThat(DorisClusterScopedCancel.isValidQueryId("""x"; KILL QUERY "y""")).isFalse()
     }
 
     @Test
     fun testRunningCancelCandidateClassification() {
-        val marker = "trino_query_id=20260719_1"
+        val marker = "trino_statement_id=00000000-0000-0000-0000-000000000001"
         // running row carrying the marker: candidate
         assertThat(DorisClusterScopedCancel.isRunningCancelCandidate("Query", "SELECT ... /*$marker*/", marker)).isTrue()
         // idle pooled connections never match
         assertThat(DorisClusterScopedCancel.isRunningCancelCandidate("Sleep", "SELECT ... /*$marker*/", marker)).isFalse()
         // the helper's own statements never match
-        assertThat(DorisClusterScopedCancel.isRunningCancelCandidate("Query", "SHOW FULL PROCESSLIST", marker)).isFalse()
+        assertThat(DorisClusterScopedCancel.isRunningCancelCandidate("Query", "  show full processlist /*$marker*/", marker)).isFalse()
         assertThat(
-            DorisClusterScopedCancel.isRunningCancelCandidate("Query", """KILL QUERY "x" /*$marker*/""", marker),
+            DorisClusterScopedCancel.isRunningCancelCandidate("Query", """  kill query "x" /*$marker*/""", marker),
         ).isFalse()
         // other queries' markers never match
         assertThat(
-            DorisClusterScopedCancel.isRunningCancelCandidate("Query", "SELECT 1 /*trino_query_id=20260719_2*/", marker),
+            DorisClusterScopedCancel.isRunningCancelCandidate("Query", "SELECT 1 /*${marker}0*/", marker),
         ).isFalse()
+        assertThat(DorisClusterScopedCancel.isRunningCancelCandidate("Query", "SELECT '$marker'", marker)).isFalse()
+        assertThat(DorisClusterScopedCancel.isRunningCancelCandidate("Query", "SELECT 1 /*prefix_$marker*/", marker)).isFalse()
+        assertThat(
+            DorisClusterScopedCancel.isRunningCancelCandidate("Query", "SELECT 'KILL QUERY', 'SHOW FULL PROCESSLIST' /*$marker*/", marker),
+        ).isTrue()
         assertThat(DorisClusterScopedCancel.isRunningCancelCandidate("Query", null, marker)).isFalse()
     }
 
@@ -81,94 +94,193 @@ class TestDorisClusterScopedCancel {
     // --- bookkeeping + failure tolerance ---
 
     @Test
-    fun testHelperFailureNeverPropagatesAndClearsInFlight() {
-        val failingFactory = ConnectionFactory { throw SQLException("no cluster reachable") }
-        val cancel = DorisClusterScopedCancel(failingFactory, enabled = true)
-        val connection = fakeConnection()
-        cancel.register(connection, SESSION)
-        // must not throw, despite the helper factory failing on the async path
-        cancel.onAbort(connection)
-        // the in-flight slot must clear (async, in the helper's finally) so a later cancel
-        // of the same query can retry — re-register+re-abort until the dispatch is accepted
-        val before = DorisClusterScopedCancel.killsDispatched.get()
-        awaitTrue {
-            cancel.register(connection, SESSION)
-            cancel.onAbort(connection)
-            DorisClusterScopedCancel.killsDispatched.get() > before
+    fun testHelperFailureNeverPropagatesAndEachCallDispatches() {
+        val attempted = CountDownLatch(2)
+        val failingFactory = ConnectionFactory {
+            attempted.countDown()
+            throw SQLException("no cluster reachable")
         }
-    }
-
-    @Test
-    fun testAbortWithoutRegistrationIsANoOp() {
-        val cancel = DorisClusterScopedCancel({ throw AssertionError("must not open") }, enabled = true)
-        cancel.onAbort(fakeConnection()) // unknown connection: nothing dispatched, nothing thrown
+        val cancel = DorisClusterScopedCancel(failingFactory, enabled = true)
+        val marker = "trino_statement_id=${UUID.randomUUID()}"
+        val before = DorisClusterScopedCancel.killsDispatched.get()
+        // No registry or in-flight deduplication: the wrapper owns dispatch-once behavior.
+        repeat(2) { cancel.cancel(SESSION, marker) { true } }
+        assertThat(DorisClusterScopedCancel.killsDispatched.get()).isEqualTo(before + 2)
+        assertThat(attempted.await(5, TimeUnit.SECONDS)).isTrue()
     }
 
     @Test
     fun testDisabledDoesNothing() {
         val cancel = DorisClusterScopedCancel({ throw AssertionError("must not open") }, enabled = false)
-        val connection = fakeConnection()
         val before = DorisClusterScopedCancel.killsDispatched.get()
-        cancel.register(connection, SESSION)
-        cancel.onAbort(connection)
+        cancel.cancel(SESSION, "trino_statement_id=${UUID.randomUUID()}") { throw AssertionError("must not read execution state") }
         assertThat(DorisClusterScopedCancel.killsDispatched.get()).isEqualTo(before)
+    }
+
+    @Test
+    @Suppress("LongMethod", "CyclomaticComplexMethod", "NestedBlockDepth", "ThrowsCount") // Strict fake-JDBC script with its assertions.
+    fun testProductionHelperRetriesEmptyAndUnassignedRowsUntilReleased() {
+        val marker = "trino_statement_id=${UUID.randomUUID()}"
+        val queryId = "ce96d055444242d1-a5a580d0c15a4c40"
+        val scans = listOf(
+            emptyList(), emptyList(), emptyList(), listOf(null), listOf(""), listOf("N/A"),
+            listOf("""x"; KILL QUERY "y"""), listOf(queryId), listOf(queryId), emptyList(),
+        )
+        val scanCount = AtomicInteger()
+        val finished = AtomicBoolean()
+        val closed = CountDownLatch(1)
+        val events = CopyOnWriteArrayList<String>()
+        val sql = CopyOnWriteArrayList<String>()
+        val statement = jdbcProxy(Statement::class.java) { method, args ->
+            when (method) {
+                "execute" -> { sql.add(args[0] as String); false }
+                "executeQuery" -> {
+                    sql.add(args[0] as String)
+                    val scan = scanCount.getAndIncrement()
+                    events.add("scan $scan")
+                    // Completion DURING an empty scan must not terminate that iteration.
+                    // Finished execution can still leave visible, as-yet-unkillable server rows.
+                    if (scan == 1) finished.set(true)
+                    val rows = scans[scan]
+                    var row = -1
+                    jdbcProxy(ResultSet::class.java) { operation, columns ->
+                        when (operation) {
+                            "next" -> ++row < rows.size
+                            "getString" -> when (columns[0]) {
+                                "Info" -> "SELECT sleep(30) /*$marker*/"
+                                "Command" -> "Query"
+                                "QueryId" -> rows[row]
+                                else -> throw AssertionError("unexpected column: ${columns[0]}")
+                            }
+                            "close" -> null
+                            else -> throw AssertionError("unexpected result call: $operation")
+                        }
+                    }
+                }
+                "close" -> null
+                else -> throw AssertionError("unexpected statement call: $method")
+            }
+        }
+        val connection = jdbcProxy(Connection::class.java) { method, _ ->
+            when (method) {
+                "createStatement" -> statement
+                "close" -> { closed.countDown(); null }
+                else -> throw AssertionError("unexpected connection call: $method")
+            }
+        }
+
+        DorisClusterScopedCancel({ connection }, enabled = true).cancel(SESSION, marker) {
+            finished.get().also { events.add("finished $it") }
+        }
+
+        assertThat(closed.await(10, TimeUnit.SECONDS)).describedAs("production helper released its connection").isTrue()
+        assertThat(scanCount.get()).isEqualTo(scans.size)
+        assertThat(events).containsExactlyElementsOf(scans.indices.flatMap { listOf("finished ${it >= 2}", "scan $it") })
+        assertThat(sql).containsExactly(
+            "SET fetch_all_fe_for_system_table = true",
+            "SHOW FULL PROCESSLIST", "SHOW FULL PROCESSLIST", "SHOW FULL PROCESSLIST",
+            "SHOW FULL PROCESSLIST", "SHOW FULL PROCESSLIST",
+            "SHOW FULL PROCESSLIST", "SHOW FULL PROCESSLIST",
+            "SHOW FULL PROCESSLIST", """KILL QUERY "$queryId"""",
+            "SHOW FULL PROCESSLIST", """KILL QUERY "$queryId"""",
+            "SHOW FULL PROCESSLIST",
+        )
     }
 
     // --- live probe pins (single-FE cluster) ---
 
     @Test
-    fun testKillByQueryIdReleasesAndRepeatIsHarmless() {
-        // EARLY-KILL NO-OP RACE (live-reproduced, 1/25 tight-loop rounds on 4.1.3): a
-        // KILL QUERY "<QueryId>" issued in the first instants of a query's life — the
-        // processlist row appears BEFORE the coordinator registers as cancellable —
-        // returns OK but silently does nothing and the query runs to completion. The
-        // production code therefore VERIFIES AND RETRIES within a bounded window
-        // (DorisClusterScopedCancel.killUntilReleased); this pin exercises the same
-        // scan->kill->verify->retry contract rather than a single fire-and-forget kill.
-        val marker = "trino_query_id=csc_pin_${System.nanoTime()}"
-        val pool = Executors.newSingleThreadExecutor()
-        val victim = pool.submit<String> {
-            runCatching {
-                openRoot().use { it.createStatement().execute("SELECT sleep(30) /*$marker*/") }
-            }.exceptionOrNull()?.message ?: "completed"
+    @Suppress("LongMethod", "CyclomaticComplexMethod", "NestedBlockDepth") // One live probe, including failure-path cleanup.
+    fun testProductionHelperCancelsOnlyItsStatementAndRepeatIsHarmless() {
+        val queryMarker = "trino_query_id=${SESSION.queryId}"
+        val markers = List(2) { "trino_statement_id=${UUID.randomUUID()}" }
+        val helpersClosed = CountDownLatch(2)
+        val cancel = DorisClusterScopedCancel(
+            ConnectionFactory {
+                val connection = openRoot()
+                object : Connection by connection {
+                    override fun close() {
+                        try {
+                            connection.close()
+                        } finally {
+                            helpersClosed.countDown()
+                        }
+                    }
+                }
+            },
+            enabled = true,
+        )
+        val pool = Executors.newFixedThreadPool(2)
+        val victims = markers.map { marker ->
+            pool.submit<String> {
+                runCatching {
+                    openRoot().use { connection ->
+                        connection.createStatement().use { it.execute("SELECT sleep(30) /*$queryMarker*/ /*$marker*/") }
+                    }
+                }.exceptionOrNull()?.message ?: "completed"
+            }
+        }
+        val dispatched = BooleanArray(2)
+        fun cancelOnce(index: Int) {
+            if (!dispatched[index]) {
+                dispatched[index] = true
+                cancel.cancel(SESSION, markers[index]) { victims[index].isDone }
+            }
         }
         try {
             openRoot().use { helper ->
                 helper.createStatement().use { statement ->
-                    var lastKilled: String? = null
-                    awaitTrue {
-                        val queryIds = runningQueryIds(statement, marker)
-                        for (queryId in queryIds) {
-                            assertThat(DorisClusterScopedCancel.isValidQueryId(queryId)).isTrue()
-                            statement.execute("""KILL QUERY "$queryId"""")
-                            lastKilled = queryId
+                    var queryIds = emptyList<String?>()
+                    awaitTrue("both statement markers have assigned QueryIds: $markers") {
+                        queryIds = markers.map { marker ->
+                            runningQueryIds(statement, marker).singleOrNull()?.takeIf(DorisClusterScopedCancel::isValidQueryId)
                         }
-                        // released == no more running rows AFTER at least one kill was issued
-                        lastKilled != null && queryIds.isEmpty()
+                        queryIds.all { it != null }
                     }
-                    // the blocked read unblocked with the server error — the completion signal
-                    assertThat(victim.get(10, TimeUnit.SECONDS)).contains("cancel query by user")
-                    // 4.1.3 pins: repeating a kill for a COMPLETED query is silently accepted;
-                    // a NEVER-EXISTED id errors "Unknown query id" (classified as success)
-                    runCatching { statement.execute("""KILL QUERY "$lastKilled"""") }
+                    assertThat(queryIds).doesNotHaveDuplicates()
+                    cancelOnce(0)
+                    assertThat(victims[0].get(20, TimeUnit.SECONDS)).contains("cancel query by user")
+                    awaitTrue("helper A finished verifying release") { helpersClosed.count == 1L }
+                    assertThat(runningQueryIds(statement, markers[0])).isEmpty()
+                    assertThat(runningQueryIds(statement, markers[1])).contains(queryIds[1])
+                    assertThat(victims[1].isDone).describedAs("sibling with the same Trino query id remains live").isFalse()
+
+                    // Depending on cleanup timing, repeat kills succeed or report Unknown query id.
+                    val repeated = runCatching { statement.execute("""KILL QUERY "${queryIds[0]}"""") }.exceptionOrNull()
+                    assertThat(repeated == null || DorisClusterScopedCancel.isUnknownQueryId(repeated))
+                        .describedAs("repeat-kill outcome: $repeated").isTrue()
                     val neverExisted = runCatching {
                         statement.execute("""KILL QUERY "deadbeef00000000-badc0ffee0000000"""")
                     }.exceptionOrNull()
-                    assertThat(DorisClusterScopedCancel.isUnknownQueryId(neverExisted)).isTrue()
+                    assertThat(DorisClusterScopedCancel.isUnknownQueryId(neverExisted)).describedAs("unknown-id error: $neverExisted").isTrue()
+                    cancelOnce(1)
+                    assertThat(victims[1].get(20, TimeUnit.SECONDS)).contains("cancel query by user")
+                    assertThat(helpersClosed.await(20, TimeUnit.SECONDS)).isTrue()
+                    assertThat(runningQueryIds(statement, markers[1])).isEmpty()
                 }
             }
         } finally {
+            markers.indices.forEach(::cancelOnce)
             pool.shutdownNow()
+            assertThat(pool.awaitTermination(35, TimeUnit.SECONDS)).describedAs("live probe executions exited").isTrue()
+            assertThat(helpersClosed.await(20, TimeUnit.SECONDS)).describedAs("live probe helpers closed").isTrue()
         }
     }
 
-    private fun runningQueryIds(statement: java.sql.Statement, marker: String): List<String> =
+    private fun runningQueryIds(statement: Statement, marker: String): List<String?> =
         statement.executeQuery("SHOW FULL PROCESSLIST").use { rs ->
             buildList {
                 while (rs.next()) {
                     val info = rs.getString("Info") ?: continue
                     if (DorisClusterScopedCancel.isRunningCancelCandidate(rs.getString("Command"), info, marker)) {
-                        add(rs.getString("QueryId"))
+                        val queryId = rs.getString("QueryId")
+                        if (!DorisClusterScopedCancel.isValidQueryId(queryId)) {
+                            println(
+                                "Unassigned/invalid QueryId=${queryId?.let { "'$it' (length=${it.length})" } ?: "<SQL NULL>"}; " +
+                                    "Id=${rs.getString("Id")}; Command=${rs.getString("Command")}; State=${rs.getString("State")}; Info=$info",
+                            )
+                        }
+                        add(queryId)
                     }
                 }
             }
@@ -217,24 +329,15 @@ class TestDorisClusterScopedCancel {
 
         private fun openRoot(): Connection = DriverManager.getConnection("${DorisQueryRunner.JDBC_URL}/?user=root")
 
-        /** A JDBC Connection stand-in for bookkeeping tests (no method is ever really called). */
-        private fun fakeConnection(): Connection =
-            Proxy.newProxyInstance(
-                TestDorisClusterScopedCancel::class.java.classLoader,
-                arrayOf(Connection::class.java),
-            ) { _, method, _ ->
-                when (method.name) {
-                    "hashCode" -> System.identityHashCode(this)
-                    "equals" -> false
-                    "toString" -> "fake-connection"
-                    else -> throw AssertionError("unexpected call: ${method.name}")
-                }
-            } as Connection
+        private fun <T> jdbcProxy(type: Class<T>, handler: (String, Array<out Any?>) -> Any?): T =
+            type.cast(Proxy.newProxyInstance(type.classLoader, arrayOf(type)) { _, method, args ->
+                handler(method.name, args ?: emptyArray())
+            })
 
-        private fun awaitTrue(condition: () -> Boolean) {
+        private fun awaitTrue(description: String = "condition", condition: () -> Boolean) {
             val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(30)
             while (!condition()) {
-                check(System.nanoTime() < deadline) { "condition not met within 30s" }
+                check(System.nanoTime() < deadline) { "$description not met within 30s" }
                 Thread.sleep(250)
             }
         }
