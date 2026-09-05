@@ -112,11 +112,15 @@ registry prose that in several places contradicts the code it claims to prove.
 - Full `mise exec -- ./gradlew build -PwithCancellation` passed: 302 passed, 5 overlay skips,
   zero failures; detekt and plugin assembly passed.
 
-### E-07 [M] `SET fetch_all_fe_for_system_table = true` failure is silently swallowed
-- `DorisClusterScopedCancel.kt:127` `runCatching` around the SET. If the variable name is wrong
-  for a Doris version (NOTES say it was renamed from `show_all_fe_connection`), the cross-FE
-  mechanism silently depends on the undocumented default.
-- Fix: log WARN (rate-limited/once) on failure; add a live pin asserting the variable exists.
+### E-07 [M] DONE 2026-09-05 - Report failure to enable cluster-wide processlist visibility
+- Live Doris 4.1.3 probe confirmed the setting exists, defaults to true, and can be toggled
+  false/true within a session. The connector still explicitly enables it on every helper.
+- A failed SET now emits WARN with the cause and statement marker, once per connector
+  instance using an atomic guard. Cancellation continues best-effort; socket fallback remains.
+- `TestDorisCancelVisibility` pins the live setting and verifies warning suppression, separate
+  connector warnings, continued visible-query kills, socket fallback and silent success.
+  The warning test failed before the fix. Focused cancellation suites (including the opt-in
+  slow suite), detekt and plugin assembly verification passed via `mise exec -- ./gradlew`.
 
 ### E-08 [M] Statistics: `ndv == 0` with non-null rows reported as `distinctValuesCount = 0`
 - `DorisTableStatisticsReader.kt:149-153`. A stale sketch producing 0 tells the CBO the column has
@@ -335,7 +339,6 @@ the evidence registry are the proof". Fix the text or the code — whichever is 
 
 ## Suggested order
 
-1. E-07 (cancel-helper widening failure observability).
-2. E-17, E-16, E-18, E-19, E-20 (align documented and implemented contracts).
-3. Validate E-08, E-09, E-10, E-11 against actual Doris behavior.
-4. Remaining E-29/E-30 work and other items opportunistically.
+1. E-17, E-16, E-18, E-19, E-20 (align documented and implemented contracts).
+2. Validate E-08, E-09, E-10, E-11 against actual Doris behavior.
+3. Remaining E-29/E-30 work and other items opportunistically.

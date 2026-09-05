@@ -28,7 +28,9 @@ Neither marker needs a session_context bind or an extra connection-time round tr
 ## The working sequence (live-proven, 4.1.3)
 
 1. Async helper connection (same URL; ANY FE — probed helper-on-fe3).
-2. `SET fetch_all_fe_for_system_table = true` (best-effort).
+2. `SET fetch_all_fe_for_system_table = true` (best-effort). Failure logs a WARN with its
+   cause and statement marker once per connector instance; visible-query cancellation and
+   socket fallback continue. Doris 4.1.3 default and session toggling are live-verified.
 3. `SHOW FULL PROCESSLIST` -> rows where `Command != Sleep`, `Info` contains the complete
    statement-marker comment and does not start with the helper's SHOW/KILL -> `QueryId` (regex-validated:
    `[0-9a-f]{1,16}-[0-9a-f]{1,16}`).
@@ -138,6 +140,8 @@ driver's verified non-locking abort behavior and ordinary JVM scheduling.
   wrapper-preserving unwrap, idempotent close, and socket fallback without a helper.
 - `TestDorisClusterScopedCancel`: deterministic scripts drive the production helper loop;
   a live test cancels one of two same-query-id statements and verifies its sibling survives.
+- `TestDorisCancelVisibility`: live setting toggle plus SET-failure warning suppression and
+  continued visible-query cancellation/socket fallback.
 - `TestDorisCancelDriver`: timeout/property precedence, credential/TLS preservation, cached-URL
   isolation, bounded failover and dispatch deadlines, replication SRV role selection, a real
   TCP endpoint that accepts without sending a greeting, and live stalled-SQL read timeout.

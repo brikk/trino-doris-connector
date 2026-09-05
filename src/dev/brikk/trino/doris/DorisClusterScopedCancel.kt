@@ -18,6 +18,7 @@ import io.airlift.log.Logger
 import io.trino.spi.connector.ConnectorSession
 import java.sql.Connection
 import java.sql.SQLException
+import java.sql.Statement
 import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.Executor
 import java.util.concurrent.RejectedExecutionException
@@ -25,6 +26,7 @@ import java.util.concurrent.ScheduledFuture
 import java.util.concurrent.ScheduledThreadPoolExecutor
 import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 
 /**
@@ -69,6 +71,8 @@ internal class DorisClusterScopedCancel(
     private val executor: Executor = SHARED_EXECUTOR,
     private val timeoutMillis: Long = KILL_WINDOW_MILLIS,
 ) {
+    private val visibilityWarningLogged = AtomicBoolean()
+
     init {
         require(timeoutMillis > 0) { "Cancellation timeout must be positive" }
     }
@@ -126,9 +130,7 @@ internal class DorisClusterScopedCancel(
                 // Connector/J implements this as SO_TIMEOUT, not a numeric-ID KILL timer.
                 helper.setNetworkTimeout(directExecutor(), DorisCancelDriver.NETWORK_TIMEOUT_MILLIS)
                 helper.createStatement().use { statement ->
-                    // widen to all FEs — 4.1.3 already defaults cluster-wide, but the explicit
-                    // SET is cheap insurance for configurations that flipped it back
-                    runCatching { statement.execute("SET fetch_all_fe_for_system_table = true") }
+                    enableClusterVisibility(statement, marker)
                     killUntilReleased(statement, marker, executionFinished, deadline)
                 }
             }
@@ -140,6 +142,21 @@ internal class DorisClusterScopedCancel(
             log.debug(e, "cluster-scoped cancel helper failed for %s", marker)
         } finally {
             watchdog?.cancel(false)
+        }
+    }
+
+    private fun enableClusterVisibility(statement: Statement, marker: String) {
+        try {
+            statement.execute("SET fetch_all_fe_for_system_table = true")
+        } catch (e: SQLException) {
+            if (visibilityWarningLogged.compareAndSet(false, true)) {
+                log.warn(
+                    e,
+                    "Could not enable fetch_all_fe_for_system_table for %s; cluster-wide visibility is not guaranteed. " +
+                        "Continuing best-effort cancellation with socket-abort fallback (warning once per connector).",
+                    marker,
+                )
+            }
         }
     }
 
