@@ -458,11 +458,25 @@ internal class DorisTypeMapping(typeManager: TypeManager) {
             return Int128.valueOf(value)
         }
 
-        /** FLOAT -> REAL. Exact-equality pushdown disabled: approximate type (ledger §A; SR K8). */
+        /** FLOAT -> REAL via text: Connector/J getFloat/getObject reject infinities, including during NULL detection. */
         private fun dorisFloatColumnMapping(): ColumnMapping {
             return ColumnMapping.longMapping(
                 REAL,
-                { resultSet, columnIndex -> floatToRawIntBits(resultSet.getFloat(columnIndex)).toLong() },
+                object : LongReadFunction {
+                    override fun isNull(resultSet: ResultSet, columnIndex: Int): Boolean {
+                        resultSet.getString(columnIndex)
+                        return resultSet.wasNull()
+                    }
+
+                    override fun readLong(resultSet: ResultSet, columnIndex: Int): Long {
+                        val text = resultSet.getString(columnIndex)
+                        try {
+                            return floatToRawIntBits(text.toFloat()).toLong()
+                        } catch (e: NumberFormatException) {
+                            throw TrinoException(GENERIC_INTERNAL_ERROR, "Unreadable Doris FLOAT wire value: '$text'", e)
+                        }
+                    }
+                },
                 realWriteFunction(),
                 DISABLE_PUSHDOWN,
             )

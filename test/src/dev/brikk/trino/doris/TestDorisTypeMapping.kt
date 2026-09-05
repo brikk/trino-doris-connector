@@ -14,6 +14,8 @@
 package dev.brikk.trino.doris
 
 import io.trino.plugin.jdbc.TypeHandlingJdbcConfig
+import io.trino.plugin.jdbc.LongReadFunction
+import io.trino.plugin.jdbc.PredicatePushdownController.DISABLE_PUSHDOWN
 import io.trino.plugin.jdbc.TypeHandlingJdbcSessionProperties
 import io.trino.plugin.jdbc.UnsupportedTypeHandling
 import io.trino.spi.TrinoException
@@ -40,6 +42,9 @@ import org.assertj.core.api.Assertions.assertThat
 import org.assertj.core.api.Assertions.assertThatThrownBy
 import org.junit.jupiter.api.Test
 import java.math.BigInteger
+import java.lang.Float.floatToRawIntBits
+import java.lang.reflect.Proxy
+import java.sql.ResultSet
 
 /** Unit tests for the COLUMN_TYPE parser and the ledger §A scalar type contract. No cluster needed. */
 class TestDorisTypeMapping {
@@ -108,6 +113,34 @@ class TestDorisTypeMapping {
         assertThat(mapping.toColumnMapping(session, "variant").orElseThrow().type.baseName).isEqualTo("json")
         assertThat(mapping.toColumnMapping(session, "ipv4").orElseThrow().type.baseName).isEqualTo("ipaddress")
         assertThat(mapping.toColumnMapping(session, "ipv6").orElseThrow().type.baseName).isEqualTo("ipaddress")
+    }
+
+    @Test
+    fun testFloatReadsAndNullChecksUseTextOnly() {
+        var wire: String? = null
+        val resultSet = Proxy.newProxyInstance(ResultSet::class.java.classLoader, arrayOf(ResultSet::class.java)) { _, method, _ ->
+            when (method.name) {
+                "getString" -> wire
+                "wasNull" -> wire == null
+                else -> throw AssertionError("Unexpected numeric JDBC getter: ${method.name}")
+            }
+        } as ResultSet
+        val columnMapping = mapping.toColumnMapping(session, "float").orElseThrow()
+        assertThat(columnMapping.predicatePushdownController).isSameAs(DISABLE_PUSHDOWN)
+        val reader = columnMapping.readFunction as LongReadFunction
+        assertThat(reader.isNull(resultSet, 1)).isTrue()
+        for ((text, value) in listOf(
+            "Infinity" to Float.POSITIVE_INFINITY, "-Infinity" to Float.NEGATIVE_INFINITY, "NaN" to Float.NaN,
+            "0.0" to 0.0f, "-0.0" to -0.0f, "1.401298E-45" to Float.MIN_VALUE,
+            "3.402823E38" to 3.402823e38f, "-3.402823E38" to -3.402823e38f,
+        )) {
+            wire = text
+            assertThat(reader.isNull(resultSet, 1)).describedAs(text).isFalse()
+            assertThat(reader.readLong(resultSet, 1)).describedAs(text).isEqualTo(floatToRawIntBits(value).toLong())
+        }
+        wire = "invalid-float"
+        assertThatThrownBy { reader.readLong(resultSet, 1) }.isInstanceOf(TrinoException::class.java)
+            .hasMessageContaining("Unreadable Doris FLOAT wire value").hasCauseInstanceOf(NumberFormatException::class.java)
     }
 
     @Test

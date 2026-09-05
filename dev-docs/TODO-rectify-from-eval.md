@@ -151,12 +151,17 @@ registry prose that in several places contradicts the code it claims to prove.
 - Fix: unparseable columns follow the existing "hidden" policy (map to `Optional.empty()` with a
   WARN); reserve throws for internal callers.
 
-### E-11 [L] FLOAT read path uses `getFloat`; DOUBLE path deliberately avoids `getDouble` for Infinity
-- `DorisTypeMapping.kt:428-435` vs `:444-465`. Connector/J's `FloatValueFactory` has the same
-  range check that makes `getDouble` throw on `Infinity`. The P0 probe only proved `NaN` and
-  `±3.402823E38` for FLOAT, not `Infinity`.
-- Fix: live-probe `cast('Infinity' AS FLOAT)` through the connector; if it throws, switch FLOAT
-  to the `getString` + `toFloat()` pattern (and cover in `TestDorisP1aSmoke`).
+### E-11 [M] DONE 2026-09-05 - FLOAT infinities failed whole scans
+- Live connector scan failed on stored Infinity during the default getObject-based NULL
+  check. Direct Connector/J 9.7.0 probes confirmed both getObject and getFloat reject positive
+  and negative Infinity, while getString succeeds.
+- FLOAT now uses text for NULL detection and value parsing; malformed text fails loudly.
+  NaN, signed zero, NULL, subnormal and finite wire values are preserved. Pushdown stays disabled.
+- `TestDorisFloatSpecialValues` covers the live connector/JDBC behavior and local predicates;
+  `TestDorisTypeMapping` uses a strict text-only ResultSet and verifies malformed-value errors.
+  76 focused tests passed, plus detekt and plugin assembly verification. Full suite not rerun.
+- Stored finite extrema have pre-existing wire precision loss, separately pinned and documented
+  rather than claimed fixed. Evidence: `REPORT-float-special-values-4.1.3.md`.
 
 ### E-12 [L] Slice → String → Slice round trip in LIKE/starts_with corrupts invalid UTF-8
 - `RewriteStringLike.kt:68,76`, `DorisScalarPushdownRules.kt:381,385`. Non-UTF-8 bytes become
@@ -355,5 +360,5 @@ the evidence registry are the proof". Fix the text or the code — whichever is 
 ## Suggested order
 
 1. E-16, E-18, E-19, E-20 (align documented and implemented contracts).
-2. Validate E-10 and E-11 against actual Doris behavior.
+2. Validate E-10 against actual Doris behavior.
 3. Remaining E-29/E-30 work and other items opportunistically.

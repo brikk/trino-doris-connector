@@ -149,6 +149,10 @@ equality/ordering, `approx_distinct` unless `doris.approximate-pushdown` is opte
 | MAP / STRUCT | text with `unsupported-type-handling=CONVERT_TO_VARCHAR`, otherwise hidden |
 | BITMAP / HLL / AGG_STATE | hidden (opaque engine state) |
 
+FLOAT/DOUBLE reads support infinities, NaN, signed zero, and NULL. Doris's wire rendering can
+lose precision at finite extrema; these mappings are not lossless binary transport. See the
+[FLOAT probe](dev-docs/REPORT-float-special-values-4.1.3.md) for the stored-value versus wire-value evidence.
+
 ### Read-only
 
 The connector is read-only end to end: `INSERT`, `DELETE`, `UPDATE`, `MERGE`, `TRUNCATE`,
