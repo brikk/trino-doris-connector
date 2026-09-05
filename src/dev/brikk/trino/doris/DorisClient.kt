@@ -67,6 +67,7 @@ import io.trino.spi.type.SmallintType
 import io.trino.spi.type.TimestampType
 import io.trino.spi.type.TinyintType
 import io.trino.spi.type.TypeManager
+import io.trino.spi.type.VarcharType
 import java.sql.Connection
 import java.sql.DatabaseMetaData
 import java.sql.PreparedStatement
@@ -485,10 +486,10 @@ class DorisClient @Inject constructor(
     override fun isLimitGuaranteed(session: ConnectorSession): Boolean = true
 
     /**
-     * Safe TopN (PLAN §6.5; P3): pushed only when EVERY sort key is a non-text exact type.
-     * Excluded with evidence: CHAR/VARCHAR (G5 — Doris collation unproven; SR K7 posture),
-     * REAL/DOUBLE (approximate; Trino orders NaN largest — Doris NaN placement unproven),
-     * everything else unproven. Doris 4.1.3 supports the native `NULLS FIRST/LAST` syntax
+     * Safe TopN (PLAN §6.5; P3): every key must have proven ordering semantics, including
+     * IPADDRESS and mode-gated native VARCHAR. CHAR, REAL/DOUBLE, and text-rendered complex
+     * types stay local because stored-value and exposed-value ordering can differ.
+     * Doris 4.1.3 supports the native `NULLS FIRST/LAST` syntax
      * for all four Trino orderings (live-probed 2026-07-19 — SR K6's ISNULL-prefix trick is
      * unnecessary; "keep the pattern, re-decide the rendering" resolved to native). A TopN is
      * always rendered WITH its LIMIT (bare ORDER BY is never emitted; probed anyway:
@@ -496,22 +497,23 @@ class DorisClient @Inject constructor(
      * ordered rows).
      */
     override fun supportsTopN(session: ConnectorSession, handle: JdbcTableHandle, sortOrder: List<JdbcSortItem>): Boolean =
-        sortOrder.all { !isDecimal256(it.column()) && isPushableSortKey(session, it.column().columnType) }
+        sortOrder.all { !isDecimal256(it.column()) && isPushableSortKey(session, it.column()) }
 
     /**
-     * VARCHAR sort keys become TopN-eligible in BINARY/FULL string-pushdown mode: Doris
+     * Native VARCHAR sort keys become TopN-eligible in BINARY/FULL string-pushdown mode: Doris
      * `ORDER BY` over strings is pure byte order (probe: the full adversarial set sorts in
      * ascending UTF-8 byte order), which equals Trino's VARCHAR codepoint ordering. CHAR keys
      * stay OFF in every mode — Trino orders trimmed/padded CHAR values while Doris orders
      * stored bytes, divergent for trailing-space data and undetectable from the query
      * (REPORT-string-comparison-probe-4.1.3.md "ORDER BY").
      */
-    private fun isPushableSortKey(session: ConnectorSession, type: Type): Boolean = when {
-        type is io.trino.spi.type.VarcharType -> DorisSessionProperties.getStringPushdownMode(session).allowsFullStringPushdown
+    private fun isPushableSortKey(session: ConnectorSession, column: JdbcColumnHandle): Boolean = when {
+        column.columnType is VarcharType -> isNativeVarchar(column) &&
+            DorisSessionProperties.getStringPushdownMode(session).allowsFullStringPushdown
         // IPADDRESS: Doris IPV4/IPV6 order == Trino's unsigned big-endian 16-byte order
         // (IpAddressType.comparisonOperator), live-proven byte-exact; NULLS FIRST/LAST native.
-        typeMapping.isIpAddress(type) -> true
-        else -> isPushableSortKey(type)
+        typeMapping.isIpAddress(column.columnType) -> true
+        else -> isPushableSortKey(column.columnType)
     }
 
     override fun topNFunction(): Optional<BaseJdbcClient.TopNFunction> {
@@ -620,7 +622,7 @@ class DorisClient @Inject constructor(
     /**
      * GROUP BY comes with aggregate pushdown, so every grouping key must be either an
      * exact-pushable type ([DorisAggregatePushdown.isExactPushableKeyType]) or — since
-     * READ-ONLY-MAX batch 3 — VARCHAR/STRING: grouping is EQUALITY-only, and string
+     * READ-ONLY-MAX batch 3 — native VARCHAR/STRING: grouping is EQUALITY-only, and string
      * equality is byte-exact on both engines (P4 probe; the tiered-GUARDED evidence),
      * with wire fidelity proven for the key values that come back. This also makes
      * SELECT DISTINCT over text columns push (DISTINCT lowers to an aggregation with no
@@ -630,6 +632,7 @@ class DorisClient @Inject constructor(
      * count DISTINCT args, TopN sort keys) deliberately do NOT inherit this widening —
      * those remain governed by their own gates and the string-mode design.
      * NULL grouping semantics are live-proven identical (NULL keys form one group).
+     * Complex types exposed as VARCHAR cannot inherit native string grouping semantics.
      */
     override fun supportsAggregationPushdown(
         session: ConnectorSession,
@@ -643,7 +646,7 @@ class DorisClient @Inject constructor(
             .firstOrNull {
                 isDecimal256(it) ||
                     (!DorisAggregatePushdown.isExactPushableKeyType(it.columnType) &&
-                        it.columnType !is io.trino.spi.type.VarcharType)
+                        !isNativeVarchar(it))
             }
         if (unsupportedKey != null) {
             log.debug(
@@ -655,6 +658,11 @@ class DorisClient @Inject constructor(
         }
         return true
     }
+
+    private fun isNativeVarchar(column: JdbcColumnHandle): Boolean =
+        column.columnType is VarcharType && column.jdbcTypeHandle.jdbcTypeName()
+            .map { DorisColumnType.parse(it).baseName in setOf("varchar", "string", "text") }
+            .orElse(false)
 
     private fun isDecimal256(column: JdbcColumnHandle): Boolean =
         column.jdbcTypeHandle.jdbcTypeName()

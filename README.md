@@ -64,7 +64,7 @@ Predicates and query shapes the connector pushes into Doris:
 | `NOT` / `AND` / `OR` | composed remote predicates | over value-identical operands (e.g. `array_position` / `cardinality` comparisons) |
 | `JOIN` (opt-in: `join-pushdown.enabled=true`) | `INNER/LEFT/RIGHT JOIN` as one remote statement | **off by default**; equality, `IS NOT DISTINCT FROM` (Doris `<=>`), and range conditions on non-text exact keys (numerics, decimal incl. LARGEINT, date, datetime, boolean); FULL OUTER and text/float keys stay in Trino; `join-pushdown.strategy=AUTOMATIC` (default) decides by table statistics, `EAGER` always pushes |
 | `LIMIT n` | `LIMIT n` | |
-| `ORDER BY ... LIMIT n` (TopN) | `ORDER BY ... NULLS FIRST/LAST LIMIT n` | non-text sort keys, incl. IPADDRESS (byte-order identical) (plus VARCHAR keys in `BINARY`/`FULL` string modes); all four NULL orderings render natively |
+| `ORDER BY ... LIMIT n` (TopN) | `ORDER BY ... NULLS FIRST/LAST LIMIT n` | non-text sort keys, incl. IPADDRESS (byte-order identical) (plus native VARCHAR/STRING keys in `BINARY`/`FULL` string modes); all four NULL orderings render natively |
 | String predicates and `LIKE` | mode-dependent | see [String pushdown modes](#string-pushdown-modes) |
 | `count(*)` / `count(col)` / `count(DISTINCT col)` | `count(...)` | any column type for plain counts; DISTINCT on non-text exact types only |
 | `min` / `max` | `min(col)` / `max(col)` | numeric, decimal (incl. LARGEINT), date, datetime, boolean — not text (collation), not FLOAT/DOUBLE (Doris ranks NaN largest, Trino doesn't) |
@@ -73,7 +73,7 @@ Predicates and query shapes the connector pushes into Doris:
 | `any_value(x)` | `any_value(x)` | nondeterministic on both engines; NULL-handling verified identical |
 | `approx_distinct(x)` | `approx_count_distinct(x)` | **opt-in** (`doris.approximate-pushdown`, default off): the HLL sketches differ, so estimates won't match local results |
 | `avg(x)` | *not pushed* | Doris avg semantics diverge (scale truncation / lossy accumulation); write `sum(x)/count(x)` instead — both push and the division stays Trino-exact |
-| `GROUP BY` (with the above) | `GROUP BY ...` | exact-type AND varchar keys (byte-exact grouping verified; CHAR and FLOAT/DOUBLE keys stay local); NULL grouping verified identical |
+| `GROUP BY` (with the above) | `GROUP BY ...` | exact-type and native VARCHAR/STRING keys (byte-exact grouping verified; CHAR and FLOAT/DOUBLE keys stay local); NULL grouping verified identical |
 | `SELECT DISTINCT ...` | remote `GROUP BY` | same key rules as GROUP BY; composes with WHERE and LIMIT |
 | `HAVING` | outer `WHERE` over the pushed GROUP BY subquery | verified end-to-end |
 
@@ -152,6 +152,11 @@ equality/ordering, `approx_distinct` unless `doris.approximate-pushdown` is opte
 FLOAT/DOUBLE reads support infinities, NaN, signed zero, and NULL. Doris's wire rendering can
 lose precision at finite extrema; these mappings are not lossless binary transport. See the
 [FLOAT probe](dev-docs/REPORT-float-special-values-4.1.3.md) for the stored-value versus wire-value evidence.
+
+VARCHAR renderings of Decimal256 or unsupported complex types do not inherit native string
+grouping or ordering semantics. `GROUP BY`, `DISTINCT`, and TopN on those keys stay in Trino,
+including under `BINARY`/`FULL` string modes. Native and derived string keys remain eligible
+subject to the existing string-mode rules.
 
 ### Read-only
 

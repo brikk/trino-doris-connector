@@ -14,6 +14,8 @@
 package dev.brikk.trino.doris
 
 import io.trino.Session
+import io.trino.sql.planner.plan.AggregationNode
+import io.trino.sql.planner.plan.TopNNode
 import io.trino.testing.AbstractTestQueryFramework
 import io.trino.testing.QueryRunner
 import org.assertj.core.api.Assertions.assertThat
@@ -203,6 +205,96 @@ class TestDorisP2aArray : AbstractTestQueryFramework() {
         assertThat(DorisTestCluster.queryScalar("SELECT array_size(a_vc) FROM p2_array.strs WHERE id = 2")).isEqualTo("2")
     }
 
+    @Test
+    fun testTextMappedArrayGroupingUsesExposedText() {
+        for (mode in DorisStringPushdownMode.entries) {
+            val sql = "SELECT a_vc, count(*) FROM doris.p2_array.strs GROUP BY a_vc"
+            assertThat(query(textSession(mode), sql))
+                .matches("""VALUES (VARCHAR '["a", "b"]', BIGINT '2')""")
+                .isNotFullyPushedDown(AggregationNode::class.java)
+        }
+    }
+
+    @Test
+    fun testTextMappedArrayDistinctUsesExposedText() {
+        for (mode in DorisStringPushdownMode.entries) {
+            assertThat(query(textSession(mode), "SELECT DISTINCT a_vc FROM doris.p2_array.strs"))
+                .matches("""VALUES VARCHAR '["a", "b"]'""")
+                .isNotFullyPushedDown(AggregationNode::class.java)
+        }
+    }
+
+    @Test
+    fun testTextMappedArrayCountDistinctUsesExposedText() {
+        for (mode in DorisStringPushdownMode.entries) {
+            assertThat(query(textSession(mode), "SELECT count(DISTINCT a_vc) FROM doris.p2_array.strs"))
+                .matches("VALUES BIGINT '1'")
+            assertThat(query(textSession(mode), "SELECT count(*) FROM (SELECT DISTINCT a_vc FROM doris.p2_array.strs)"))
+                .matches("VALUES BIGINT '1'")
+        }
+    }
+
+    @Test
+    fun testTextMappedArrayTopNUsesExposedText() {
+        for (mode in DorisStringPushdownMode.entries) {
+            val text = textSession(mode)
+            val local = Session.builder(text).setSystemProperty("allow_pushdown_into_connectors", "false").build()
+            val sql = "SELECT a_vc FROM doris.p2_array.text_ordering WHERE id <= 2 ORDER BY a_vc LIMIT 1"
+            assertThat(computeActual(text, sql).onlyValue).isEqualTo("""["x"]""")
+            for (ordering in listOf("ASC NULLS FIRST", "ASC NULLS LAST", "DESC NULLS FIRST", "DESC NULLS LAST")) {
+                val topN = "SELECT a_vc FROM doris.p2_array.text_ordering ORDER BY a_vc $ordering LIMIT 2"
+                assertThat(computeActual(text, topN).onlyColumn.toList())
+                    .describedAs("$mode $ordering").isEqualTo(computeActual(local, topN).onlyColumn.toList())
+                assertThat(query(text, topN)).ordered().isNotFullyPushedDown(TopNNode::class.java)
+            }
+        }
+    }
+
+    @Test
+    fun testTextMappedMapAndStructKeysStayLocal() {
+        for (mode in DorisStringPushdownMode.entries) {
+            val text = textSession(mode)
+            val local = Session.builder(text).setSystemProperty("allow_pushdown_into_connectors", "false").build()
+            for (column in listOf("m_si", "s_ab")) {
+                val groupBy = "SELECT $column, count(*) FROM doris.p0_probe.mapstruct GROUP BY $column"
+                assertThat(query(text, groupBy)).isNotFullyPushedDown(AggregationNode::class.java)
+                assertThat(computeActual(text, groupBy).materializedRows.map { it.toString() }.sorted())
+                    .isEqualTo(computeActual(local, groupBy).materializedRows.map { it.toString() }.sorted())
+                val topN = "SELECT $column FROM doris.p0_probe.mapstruct ORDER BY $column NULLS LAST LIMIT 2"
+                assertThat(query(text, topN)).ordered().isNotFullyPushedDown(TopNNode::class.java)
+                assertThat(computeActual(text, topN).onlyColumn.toList()).isEqualTo(computeActual(local, topN).onlyColumn.toList())
+            }
+        }
+    }
+
+    @Test
+    fun testNativeAndDerivedStringKeysStillPush() {
+        for (mode in DorisStringPushdownMode.entries) {
+            val text = textSession(mode)
+            for (expression in listOf("v", "s", "lower(v)", "coalesce(s, 'absent')")) {
+                assertThat(query(text, "SELECT $expression, count(*) FROM doris.p2_array.text_ordering GROUP BY 1"))
+                    .isFullyPushedDown()
+                assertThat(query(text, "SELECT DISTINCT $expression FROM doris.p2_array.text_ordering")).isFullyPushedDown()
+                val topN = "SELECT $expression AS k FROM doris.p2_array.text_ordering ORDER BY k NULLS LAST LIMIT 2"
+                if (mode.allowsFullStringPushdown) {
+                    assertThat(query(text, topN)).ordered().isFullyPushedDown()
+                } else {
+                    assertThat(query(text, topN)).ordered().isNotFullyPushedDown(TopNNode::class.java)
+                }
+            }
+            // Text-mapped payloads do not prevent pushdown when the keys themselves are exact.
+            assertThat(query(text, "SELECT a_vc FROM doris.p2_array.text_ordering ORDER BY id LIMIT 2"))
+                .ordered().isFullyPushedDown()
+            assertThat(query(text, "SELECT id, count(a_vc) FROM doris.p2_array.text_ordering GROUP BY id"))
+                .isFullyPushedDown()
+        }
+    }
+
+    private fun textSession(mode: DorisStringPushdownMode): Session = Session.builder(session)
+        .setCatalogSessionProperty(DorisQueryRunner.CATALOG, "unsupported_type_handling", "CONVERT_TO_VARCHAR")
+        .setCatalogSessionProperty(DorisQueryRunner.CATALOG, "string_pushdown_mode", mode.name)
+        .build()
+
     // --- differential machinery ---
 
     private fun assertArrayColumnMatchesOracle(table: String, column: String, compare: (Any?, String?) -> Unit) {
@@ -338,6 +430,13 @@ class TestDorisP2aArray : AbstractTestQueryFramework() {
                 """.trimIndent(),
                 // spike §4 ambiguity pair: one element `a", "b` vs two elements `a`,`b`
                 """INSERT INTO p2_array.strs VALUES (1, ARRAY('a", "b')), (2, ARRAY('a', 'b'))""",
+                """
+                CREATE TABLE p2_array.text_ordering (id INT NOT NULL, a_vc ARRAY<VARCHAR(50)>, v VARCHAR(50), s STRING)
+                DUPLICATE KEY(id) DISTRIBUTED BY HASH(id) BUCKETS 1 PROPERTIES ("replication_num" = "1")
+                """.trimIndent(),
+                """INSERT INTO p2_array.text_ordering VALUES
+                (1, ARRAY(), 'z', 'z'), (2, ARRAY('x'), 'a', 'a'), (3, ARRAY('a', 'b'), 'm', 'm'), (4, NULL, NULL, NULL)
+                """.trimIndent(),
                 """
                 CREATE TABLE p2_array.large_extreme (id INT NOT NULL, a_largeint ARRAY<LARGEINT>)
                 DUPLICATE KEY(id) DISTRIBUTED BY HASH(id) BUCKETS 1 PROPERTIES ("replication_num" = "1")
