@@ -570,16 +570,16 @@ class DorisClient @Inject constructor(
      * P6 typed scalar PROJECTION pushdown ([RewriteCastDatetimeToDate], [RewriteDateTrunc]):
      * a converted projection becomes a synthetic derived column, which the aggregate
      * machinery can then GROUP BY remotely — `GROUP BY date(event_at)` collapses into one
-     * Doris statement (proven end-to-end in TestDorisP6DateProjection). The inner rewriter
-     * only needs [RewriteVariable]; rules own their type/shape guards.
+     * Doris statement (proven end-to-end in TestDorisP6DateProjection). The scalar rewriter
+     * resolves source-column assignments and validates their native type mappings.
      */
     private val projectFunctionRewriter = io.trino.plugin.base.projection.ProjectFunctionRewriter(
         // the scalar tier doubles as the projection expression rewriter, so every scalar
         // shape (and composition) it accepts becomes a groupable synthetic column
         scalarRewriterHolder.rewriter,
         com.google.common.collect.ImmutableSet.of<io.trino.plugin.base.projection.ProjectFunctionRule<JdbcExpression, ParameterizedExpression>>(
-            RewriteCastDatetimeToDate(::quoted),
-            RewriteDateTrunc(::quoted),
+            RewriteCastDatetimeToDate(),
+            RewriteDateTrunc(),
             RewriteScalarProjection(scalarRewriterHolder),
         ),
     )

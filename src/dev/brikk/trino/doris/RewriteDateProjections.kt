@@ -47,9 +47,7 @@ import java.util.Optional
  * `date(x)` spelling desugars to this cast, so one rule covers both spellings.
  * Source restricted to plain DATETIME columns (Variable of TIMESTAMP(0..6)).
  */
-internal class RewriteCastDatetimeToDate(
-    private val quote: (String) -> String,
-) : ProjectFunctionRule<JdbcExpression, ParameterizedExpression> {
+internal class RewriteCastDatetimeToDate : ProjectFunctionRule<JdbcExpression, ParameterizedExpression> {
     override fun getPattern(): Pattern<out ConnectorExpression> = PATTERN
 
     override fun rewrite(
@@ -60,10 +58,11 @@ internal class RewriteCastDatetimeToDate(
     ): Optional<JdbcExpression> {
         val call = expression as Call
         val source = pushableDatetimeColumn(call.arguments[0]) ?: return Optional.empty()
+        val rewritten = context.rewriteExpression(source).orElse(null) ?: return Optional.empty()
         return Optional.of(
             JdbcExpression(
-                "CAST(${quote(source.name)} AS DATE)",
-                listOf(),
+                "CAST(${rewritten.expression()} AS DATE)",
+                rewritten.parameters(),
                 DorisTypeMapping.toTypeHandle("date"),
             ),
         )
@@ -90,9 +89,7 @@ internal class RewriteCastDatetimeToDate(
  * year|quarter|month|week|day|hour|minute|second") and stays local (Trino itself
  * rejects `microsecond`). Non-constant units never push.
  */
-internal class RewriteDateTrunc(
-    private val quote: (String) -> String,
-) : ProjectFunctionRule<JdbcExpression, ParameterizedExpression> {
+internal class RewriteDateTrunc : ProjectFunctionRule<JdbcExpression, ParameterizedExpression> {
     override fun getPattern(): Pattern<out ConnectorExpression> = PATTERN
 
     override fun rewrite(
@@ -108,10 +105,11 @@ internal class RewriteDateTrunc(
         if (resultType.precision > DORIS_MAX_DATETIME_PRECISION) {
             return Optional.empty()
         }
+        val rewritten = context.rewriteExpression(source).orElse(null) ?: return Optional.empty()
         return Optional.of(
             JdbcExpression(
-                "date_trunc(${quote(source.name)}, '$unit')",
-                listOf(),
+                "date_trunc(${rewritten.expression()}, '$unit')",
+                rewritten.parameters(),
                 DorisTypeMapping.toTypeHandle("datetime(${resultType.precision})"),
             ),
         )
@@ -139,7 +137,7 @@ internal class RewriteDateTrunc(
     }
 }
 
-/** A plain native DATETIME column reference: Variable of TIMESTAMP(0..6). */
+/** TIMESTAMP column shape; the scalar rewriter resolves its physical name and validates native metadata. */
 private fun pushableDatetimeColumn(argument: ConnectorExpression): Variable? {
     val variable = argument as? Variable ?: return null
     val type = variable.type as? TimestampType ?: return null

@@ -13,6 +13,7 @@
  */
 package dev.brikk.trino.doris
 
+import io.trino.Session
 import io.trino.testing.AbstractTestQueryFramework
 import io.trino.testing.QueryRunner
 import org.assertj.core.api.Assertions.assertThat
@@ -70,6 +71,43 @@ class TestDorisP6DateProjection : AbstractTestQueryFramework() {
         for (column in listOf("dt0", "dt3", "dt6")) {
             assertPushedAndIdentical("SELECT date($column) FROM doris.p6_dates.t")
         }
+    }
+
+    @Test
+    fun testDateProjectionsResolvePhysicalColumnNames() {
+        for (column in listOf("dt_6", "\"select\"")) {
+            for (expression in listOf("date($column)", "CAST($column AS DATE)", "date_trunc('day', $column)")) {
+                assertPushedAndIdentical("SELECT id, $expression FROM doris.p6_dates.renamed")
+                assertPushedAndIdentical("SELECT $expression, count(*) FROM doris.p6_dates.renamed GROUP BY 1")
+            }
+        }
+        assertThat(computeActual("SELECT date(dt_6) FROM doris.p6_dates.renamed WHERE id = 1").onlyValue.toString())
+            .isEqualTo("2020-01-02")
+        assertThat(remoteSql("SELECT date(dt_6), date_trunc('day', dt_6) FROM doris.p6_dates.renamed"))
+            .contains("CAST(`dt_6` AS DATE)", "date_trunc(`dt_6`, 'day')")
+    }
+
+    @Test
+    fun testDateProjectionsResolvePushedJoinColumns() {
+        val eager = Session.builder(session)
+            .setCatalogSessionProperty(DorisQueryRunner.CATALOG, "join_pushdown_enabled", "true")
+            .setCatalogSessionProperty(DorisQueryRunner.CATALOG, "join_pushdown_strategy", "EAGER")
+            .build()
+        val unpushed = Session.builder(eager)
+            .setSystemProperty("allow_pushdown_into_connectors", "false")
+            .build()
+        val sql = "SELECT date(l.dt_6), date_trunc('day', r.dt_6) " +
+            "FROM doris.p6_dates.renamed l LEFT JOIN doris.p6_dates.renamed r ON l.id = r.id"
+        assertThat(query(eager, sql)).isFullyPushedDown()
+        assertThat(rows(eager, sql)).isEqualTo(rows(unpushed, sql))
+        val execution = getDistributedQueryRunner().executeWithPlan(eager, sql)
+        val marker = DorisRemoteQueryModifier.marker(execution.queryId().toString())
+        val remote = DorisTestCluster.awaitAuditLogStatements(marker, 60_000)
+            .single { it.contains("p6_dates") }.substringAfter("|Stmt=")
+        // Join outputs retain the physical name with a generated suffix, not the planner symbol "dt".
+        assertThat(remote).contains("LEFT JOIN")
+            .containsPattern("CAST\\(`dt_6_\\d+` AS DATE\\)")
+            .containsPattern("date_trunc\\(`dt_6_\\d+`, 'day'\\)")
     }
 
     // --- the motivating composition: GROUP BY date(...) + aggregates, ONE remote statement ---
@@ -186,6 +224,16 @@ class TestDorisP6DateProjection : AbstractTestQueryFramework() {
                 (7, 7, 'day', '2026-04-01 00:00:00', '2026-04-01 00:00:00', '2026-04-01 00:00:00'),
                 (8, 8, 'day', '2026-07-19 02:15:00', '2026-07-19 02:15:00.001', '2026-07-19 02:15:00.000001'),
                 (9, NULL, NULL, NULL, NULL, NULL)
+                """.trimIndent(),
+                """
+                CREATE TABLE p6_dates.renamed (
+                    id INT NOT NULL, dt_6 DATETIME(6), dt DATETIME(6), `select` DATETIME(6)
+                ) DUPLICATE KEY(id) DISTRIBUTED BY HASH(id) BUCKETS 1 PROPERTIES ("replication_num" = "1")
+                """.trimIndent(),
+                """
+                INSERT INTO p6_dates.renamed VALUES
+                (1, '2020-01-02 03:04:05.123456', '2030-06-07 08:09:10.654321', '2040-02-03 04:05:06.123456'),
+                (2, NULL, '2031-01-01 00:00:00', NULL)
                 """.trimIndent(),
             )
         }
