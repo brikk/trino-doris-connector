@@ -49,8 +49,8 @@ Neither marker needs a session_context bind or an extra connection-time round tr
    has exited. A socket abort can finish client execution before a buffered request becomes
    visible on the FE, so an initially absent token is polled through the window.
    The loop is best-effort: unconfirmed release at the deadline is logged at DEBUG;
-   socket abort and configured server-side query timeouts remain the fallbacks. Individual
-   helper network operations are not bounded by that loop deadline (remaining E-14 work).
+   socket abort and configured server-side query timeouts remain the fallbacks. The E-14
+   limits below bound helper concurrency, connection attempts, and post-connect work.
 
 ### Unassigned QueryIds
 
@@ -87,9 +87,47 @@ and documents the instability so nobody "simplifies" to trace-id kills.
   once the page source has adopted its result set. This includes a gap AFTER executeQuery
   returns but BEFORE adoption. Both phases are now covered by the statement wrapper.
 - `DorisClient.abortReadConnection` retains socket-only behavior for other BaseJdbc read paths.
-  Helper failures log at DEBUG; daemon executor capacity/network bounds remain E-14 work.
+  Helper failures log at DEBUG; helper connections use their own bounded factory and executor.
 - This does not change Trino's scheduling of close: a driver thread blocked in synchronous
   ResultSet.next can still delay operator destruction. No universal cancellation latency is promised.
+
+## Helper limits (E-14, 2026-09-05)
+
+- **Capacity:** one pool per plugin classloader, shared across catalogs: 8 workers and a
+  64-entry queue. Saturation rejects immediately; it never runs helper work on the scan's
+  cancellation thread. Socket abort still runs when dispatch is rejected. Idle threads expire.
+- **Budget:** 15 seconds from dispatch, including queue time. Expired queued tasks do not open
+  connections. `DorisCancelConnectionFactory` passes the original monotonic deadline into the
+  driver, so connection attempts cannot restart the budget after waiting in the queue.
+- **Connections:** `DorisCancelDriver` uses the same catalog URL, per-session credential provider,
+  TLS/authentication settings, and session variables as the normal factory. It copies resolved
+  HostInfo settings and imposes positive connect/socket timeouts of at most 2 seconds, capped
+  by the remaining budget, AFTER URL/per-host/config/transform merging. Cached parsed URLs and
+  ordinary scan settings are not modified.
+- **Host attempts:** resolved MySQL endpoints are tried once per list entry, without HA proxy
+  retries or automatic primary fallback. Load-balance/replication URL hosts remain available,
+  but helper routing is one-pass because any Doris FE can forward the kill. Replication SRV
+  sources and replicas are resolved separately; its ALL view contains unresolved service names.
+  X Protocol is not supported by this MySQL-wire helper.
+- **After connect:** `Connection.setNetworkTimeout` sets SO_TIMEOUT, not a query-cancel timer.
+  A separate watchdog aborts the helper at its remaining deadline and stays armed through
+  ResultSet/Statement/Connection cleanup. This releases workers stalled in SQL or graceful close.
+  Completed helpers cancel and remove their watchdog tasks; only active helpers schedule them.
+- **No unsafe timeout kills:** reconnect flags and `enableQueryTimeouts` are forced off on
+  helper connections. No Statement.setQueryTimeout, Statement.cancel, or global
+  DriverManager.setLoginTimeout is used by the helper. The watchdog aborts the actual connection,
+  never a numeric-ID session on a potentially different FE.
+- **Diagnostics:** accepted, rejected, expired dispatches and watchdog timeouts have counters;
+  dispatch expiry/rejection and helper failures are logged at DEBUG. Interrupt flags are preserved.
+
+These are not an absolute 15-second wall-clock guarantee for arbitrary connection setup.
+The verified standard TCP transport bounds individual connects and reads, including greeting
+and TLS handshake reads. DNS resolution, credential providers, custom socket/authentication
+plugins, remote key-store loading, and multiple progressing handshake reads can outlast the
+budget before a connection is returned. No further host/SQL attempt is admitted after expiry,
+and a late returned helper is closed without executing SQL. The bounded pool prevents unlimited
+thread growth even when external setup code stalls. The post-connect watchdog requires the
+driver's verified non-locking abort behavior and ordinary JVM scheduling.
 
 ## Proof surface
 
@@ -100,12 +138,17 @@ and documents the instability so nobody "simplifies" to trace-id kills.
   wrapper-preserving unwrap, idempotent close, and socket fallback without a helper.
 - `TestDorisClusterScopedCancel`: deterministic scripts drive the production helper loop;
   a live test cancels one of two same-query-id statements and verifies its sibling survives.
+- `TestDorisCancelDriver`: timeout/property precedence, credential/TLS preservation, cached-URL
+  isolation, bounded failover and dispatch deadlines, replication SRV role selection, a real
+  TCP endpoint that accepts without sending a greeting, and live stalled-SQL read timeout.
+- `TestDorisCancelLimits`: 8+64 saturation and socket fallback, queued expiry, dispatch-deadline
+  propagation, watchdog release of stalled SHOW/close, and cleanup after late connection opening.
 - `TestDorisCancellation`: opt-in slow end-to-end query kill and server-side timeout tests;
   helper dispatch remains informational there, with mandatory dispatch proved in the new suite.
 - `TestDorisMultiFeFailover` (overlay-guarded): deterministic cross-FE kill
   (fe2-owned query, fe3 helper) and the connector end-to-end overlay cancel through the
    comma-list URL.
 
-Verification on 2026-09-05: full `./gradlew build -PwithCancellation` passed in 13m08s:
-273 passed, 5 multi-FE overlay tests skipped, zero failures; detekt and plugin assembly passed.
-Use `mise exec -- ./gradlew build -PwithCancellation` to select the repository's JDK.
+Verification on 2026-09-05 after E-14: `mise exec -- ./gradlew build -PwithCancellation`
+passed in 13m14s: 292 passed, 5 multi-FE overlay tests skipped, zero failures;
+detekt and plugin assembly passed. The overlay was not started for this verification.

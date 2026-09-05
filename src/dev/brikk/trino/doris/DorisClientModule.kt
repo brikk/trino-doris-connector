@@ -115,6 +115,24 @@ class DorisClientModule : AbstractConfigurationAwareModule() {
             .build()
     }
 
+    @Provides
+    @Singleton
+    fun createCancelConnectionFactory(
+        config: DorisJdbcConfig,
+        dorisConfig: DorisConfig,
+        credentialProvider: CredentialProvider,
+        openTelemetry: OpenTelemetry,
+    ): DorisCancelConnectionFactory {
+        val properties = connectionProperties(dorisConfig)
+        return DorisCancelConnectionFactory { session, deadline ->
+            DriverConnectionFactory.builder(DorisCancelDriver(deadlineNanos = deadline), config.connectionUrl, credentialProvider)
+                .setConnectionProperties(properties)
+                .setOpenTelemetry(openTelemetry)
+                .build()
+                .openConnection(session)
+        }
+    }
+
     companion object {
         /**
          * Connection property pin list per ledger §B (each entry evidence-backed):

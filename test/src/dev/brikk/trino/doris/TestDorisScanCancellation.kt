@@ -74,6 +74,9 @@ class TestDorisScanCancellation {
             },
             DorisQueryBuilder(RemoteQueryModifier.NONE), TESTING_TYPE_MANAGER,
             DefaultIdentifierMapping(), RemoteQueryModifier.NONE,
+            DorisCancelConnectionFactory { _, deadline ->
+                DorisCancelDriver(deadlineNanos = deadline).connect("${DorisQueryRunner.JDBC_URL}/?user=root", null)!!
+            },
         )
         val table = JdbcTableHandle(
             JdbcQueryRelationHandle(PreparedQuery("SELECT sleep(30) AS value", emptyList())),
@@ -299,6 +302,7 @@ class TestDorisScanCancellation {
             ConnectionFactory { pendingConnections.poll() ?: helperConnection() },
             DorisQueryBuilder(RemoteQueryModifier.NONE), TESTING_TYPE_MANAGER,
             DefaultIdentifierMapping(), RemoteQueryModifier.NONE,
+            DorisCancelConnectionFactory { _, _ -> helperConnection() },
         )
 
         fun scan(): FakeScan = FakeScan("a-${scans.size + 1}").also { scans.add(it) }
@@ -348,6 +352,7 @@ class TestDorisScanCancellation {
                     }
                 }
                 "close" -> { helperClosed.countDown(); null }
+                "setNetworkTimeout" -> null
                 else -> throw AssertionError("Unexpected helper connection call: $method")
             }
         }

@@ -148,15 +148,24 @@ registry prose that in several places contradicts the code it claims to prove.
 - Resolution: only leading SHOW/KILL statements are excluded. Added literal and exact-marker
   collision checks to `testRunningCancelCandidateClassification`.
 
-### E-14 [L] PARTIAL - Bound cancel-helper resources and network operations
-- Remaining: the 15s retry deadline does not bound individual network calls; the cached daemon
-  pool is unbounded. Initially absent tokens are now retried through that window, increasing
-  the importance of explicit resource bounds under cancellation bursts.
-- Fixed with E-03: interrupted helpers restore the interrupt flag; dispatches are counted only
-  after executor acceptance.
-- Do NOT blindly add Statement.setQueryTimeout: Connector/J's timeout task can independently
-  issue the same LB-unsafe numeric-ID kill. Investigate network/connect deadlines and bounded
-  executor capacity without reintroducing that cancellation mechanism.
+### E-14 [L] DONE 2026-09-05 - Bound cancel-helper resources and network operations
+- Shared 8-worker/64-entry executor rejects saturation without caller-thread execution;
+  socket fallback still runs. A 15s dispatch deadline includes queue time; expired work never
+  opens a connection, and the original deadline is propagated into connection establishment.
+- Dedicated helper factory preserves session credentials, TLS and catalog settings. Its
+  Connector/J driver enforces <=2s connect/read timeouts after per-host property merging,
+  avoids HA retries/reconnects and disables query timers. Ordinary scan settings are untouched.
+- Post-connect watchdog aborts stalled SQL and cleanup at the remaining deadline. It stays
+  armed through close and removes cancelled scheduled tasks. Rejection/expiry/timeout counters
+  supplement the previously fixed interrupt handling and accepted-dispatch counter.
+- Tests: `TestDorisCancelDriver` covers property precedence, credentials, failover, SRV roles,
+  dispatch budgets, a real silent TCP endpoint and live SQL read timeout. `TestDorisCancelLimits`
+  covers saturation, queued expiry, deadline propagation, stalled SHOW/close and late connections.
+- Full `mise exec -- ./gradlew build -PwithCancellation` passed: 292 passed, 5 overlay skips,
+  no failures; detekt and plugin assembly passed.
+- Limitations: no absolute setup wall-clock guarantee for DNS, custom credential/socket/auth
+  plugins, remote TLS stores or multiple progressing handshake reads. Pool capacity remains
+  bounded and no further attempt is admitted after expiry. See cancellation notes for details.
 
 ### E-15 [L] DONE 2026-09-05 - Remove connection/session registrations
 - `DorisClient.kt:466`: normal completion (`isAfterLast`) never unregisters; `WeakHashMap` makes it
@@ -322,7 +331,7 @@ the evidence registry are the proof". Fix the text or the code — whichever is 
 ## Suggested order
 
 1. E-06 (probe out-of-range temporal literals before deciding the fix).
-2. E-07, E-14 (cancel-helper observability and resource/network bounds).
+2. E-07 (cancel-helper widening failure observability).
 3. E-17, E-16, E-18, E-19, E-20 (align documented and implemented contracts).
 4. Validate E-08, E-09, E-10, E-11 against actual Doris behavior.
 5. Remaining E-29/E-30 work and other items opportunistically.

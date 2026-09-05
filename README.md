@@ -29,6 +29,9 @@ Built and tested against **Apache Doris 4.1.3**, **Trino 483**, and MySQL Connec
   default on). This covers execution before the first result and early scan closure without
   killing sibling scans. Connector/J's connection-ID cancel is replaced; socket abort remains
   a fallback. Each remote statement also retains the Trino query id for correlation in logs.
+- Cancellation helpers use a bounded 8-worker/64-request queue, a 15-second dispatch budget,
+  2-second connect/read timeouts, and a post-connect abort watchdog. These limits do not alter
+  normal scan connections; see [cancellation notes](dev-docs/NOTES-cancel-cluster-scoped.md) for details and limitations.
 - Dynamic catalogs: `CREATE CATALOG` / `DROP CATALOG` at runtime, with configuration validated
   loudly at create time.
 - Doris session controls per catalog: `doris.query-timeout`, `doris.exec-mem-limit`,

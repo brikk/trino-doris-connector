@@ -13,7 +13,6 @@
  */
 package dev.brikk.trino.doris
 
-import io.trino.plugin.jdbc.ConnectionFactory
 import io.trino.spi.connector.ConnectorSession
 import io.trino.testing.TestingConnectorSession
 import org.assertj.core.api.Assertions.assertThat
@@ -96,7 +95,7 @@ class TestDorisClusterScopedCancel {
     @Test
     fun testHelperFailureNeverPropagatesAndEachCallDispatches() {
         val attempted = CountDownLatch(2)
-        val failingFactory = ConnectionFactory {
+        val failingFactory = DorisCancelConnectionFactory { _, _ ->
             attempted.countDown()
             throw SQLException("no cluster reachable")
         }
@@ -111,7 +110,7 @@ class TestDorisClusterScopedCancel {
 
     @Test
     fun testDisabledDoesNothing() {
-        val cancel = DorisClusterScopedCancel({ throw AssertionError("must not open") }, enabled = false)
+        val cancel = DorisClusterScopedCancel({ _, _ -> throw AssertionError("must not open") }, enabled = false)
         val before = DorisClusterScopedCancel.killsDispatched.get()
         cancel.cancel(SESSION, "trino_statement_id=${UUID.randomUUID()}") { throw AssertionError("must not read execution state") }
         assertThat(DorisClusterScopedCancel.killsDispatched.get()).isEqualTo(before)
@@ -164,12 +163,13 @@ class TestDorisClusterScopedCancel {
         val connection = jdbcProxy(Connection::class.java) { method, _ ->
             when (method) {
                 "createStatement" -> statement
+                "setNetworkTimeout" -> null
                 "close" -> { closed.countDown(); null }
                 else -> throw AssertionError("unexpected connection call: $method")
             }
         }
 
-        DorisClusterScopedCancel({ connection }, enabled = true).cancel(SESSION, marker) {
+        DorisClusterScopedCancel({ _, _ -> connection }, enabled = true).cancel(SESSION, marker) {
             finished.get().also { events.add("finished $it") }
         }
 
@@ -196,7 +196,7 @@ class TestDorisClusterScopedCancel {
         val markers = List(2) { "trino_statement_id=${UUID.randomUUID()}" }
         val helpersClosed = CountDownLatch(2)
         val cancel = DorisClusterScopedCancel(
-            ConnectionFactory {
+            DorisCancelConnectionFactory { _, _ ->
                 val connection = openRoot()
                 object : Connection by connection {
                     override fun close() {

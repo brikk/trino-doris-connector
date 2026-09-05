@@ -98,6 +98,7 @@ class DorisClient @Inject constructor(
     typeManager: TypeManager,
     identifierMapping: IdentifierMapping,
     queryModifier: RemoteQueryModifier,
+    cancelConnectionFactory: DorisCancelConnectionFactory,
 ) : BaseJdbcClient(
     "`",
     connectionFactory,
@@ -113,7 +114,7 @@ class DorisClient @Inject constructor(
     private val typeMapping = DorisTypeMapping(typeManager)
 
     /** Cluster-scoped cancellation (multi-FE/LB correct) — see [DorisClusterScopedCancel]. */
-    private val clusterScopedCancel = DorisClusterScopedCancel(connectionFactory, dorisConfig.isClusterScopedCancel())
+    private val clusterScopedCancel = DorisClusterScopedCancel(cancelConnectionFactory, dorisConfig.isClusterScopedCancel())
 
     /**
      * Typed ARRAY predicate rules (PLAN §6.1 layer 2, §6.2; P2b/P3) in two tiers:

@@ -13,13 +13,17 @@
  */
 package dev.brikk.trino.doris
 
+import com.google.common.util.concurrent.MoreExecutors.directExecutor
 import io.airlift.log.Logger
-import io.trino.plugin.jdbc.ConnectionFactory
 import io.trino.spi.connector.ConnectorSession
+import java.sql.Connection
 import java.sql.SQLException
-import java.util.concurrent.ExecutorService
-import java.util.concurrent.Executors
+import java.util.concurrent.ArrayBlockingQueue
+import java.util.concurrent.Executor
 import java.util.concurrent.RejectedExecutionException
+import java.util.concurrent.ScheduledFuture
+import java.util.concurrent.ScheduledThreadPoolExecutor
+import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 
@@ -60,9 +64,15 @@ import java.util.concurrent.atomic.AtomicInteger
  * — success, DEBUG.
  */
 internal class DorisClusterScopedCancel(
-    private val connectionFactory: ConnectionFactory,
+    private val connectionFactory: DorisCancelConnectionFactory,
     private val enabled: Boolean,
+    private val executor: Executor = SHARED_EXECUTOR,
+    private val timeoutMillis: Long = KILL_WINDOW_MILLIS,
 ) {
+    init {
+        require(timeoutMillis > 0) { "Cancellation timeout must be positive" }
+    }
+
     /**
      * Called once by the scan wrapper before socket abort. No busy JDBC calls on this thread.
      * executionFinished must reflect delegate execution exit, not just cancellation/close.
@@ -71,10 +81,19 @@ internal class DorisClusterScopedCancel(
         if (!enabled) {
             return
         }
+        val deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMillis)
         try {
-            executor.execute { killQuietly(session, marker, executionFinished) }
+            executor.execute {
+                if (System.nanoTime() >= deadline) {
+                    killsExpired.incrementAndGet()
+                    log.debug("cluster-scoped cancel expired in queue for %s", marker)
+                } else {
+                    killQuietly(session, marker, executionFinished, deadline)
+                }
+            }
             killsDispatched.incrementAndGet()
         } catch (e: RejectedExecutionException) {
+            killsRejected.incrementAndGet()
             log.debug(e, "cluster-scoped cancel dispatch failed for %s", marker)
         }
     }
@@ -92,14 +111,25 @@ internal class DorisClusterScopedCancel(
      * row from the CI finding — repeat kills of those are silently accepted and harmless).
      */
     @Suppress("TooGenericExceptionCaught") // best-effort BY CONTRACT: the stock abort belt already ran
-    private fun killQuietly(session: ConnectorSession, marker: String, executionFinished: () -> Boolean) {
+    private fun killQuietly(session: ConnectorSession, marker: String, executionFinished: () -> Boolean, deadline: Long) {
+        var watchdog: ScheduledFuture<*>? = null
         try {
-            connectionFactory.openConnection(session).use { helper ->
+            connectionFactory.openConnection(session, deadline).use { helper ->
+                // Keep the watchdog armed through resource close too, which can perform network I/O.
+                watchdog = WATCHDOG.schedule(
+                    { abortHelper(helper, marker) },
+                    maxOf(0, deadline - System.nanoTime()), TimeUnit.NANOSECONDS,
+                )
+                if (System.nanoTime() >= deadline) {
+                    return
+                }
+                // Connector/J implements this as SO_TIMEOUT, not a numeric-ID KILL timer.
+                helper.setNetworkTimeout(directExecutor(), DorisCancelDriver.NETWORK_TIMEOUT_MILLIS)
                 helper.createStatement().use { statement ->
                     // widen to all FEs — 4.1.3 already defaults cluster-wide, but the explicit
                     // SET is cheap insurance for configurations that flipped it back
                     runCatching { statement.execute("SET fetch_all_fe_for_system_table = true") }
-                    killUntilReleased(statement, marker, executionFinished)
+                    killUntilReleased(statement, marker, executionFinished, deadline)
                 }
             }
         } catch (e: InterruptedException) {
@@ -108,13 +138,14 @@ internal class DorisClusterScopedCancel(
         } catch (e: Exception) {
             // the stock socket-abort belt already ran; the helper is best-effort by contract
             log.debug(e, "cluster-scoped cancel helper failed for %s", marker)
+        } finally {
+            watchdog?.cancel(false)
         }
     }
 
-    private fun killUntilReleased(statement: java.sql.Statement, marker: String, executionFinished: () -> Boolean) {
-        val deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(KILL_WINDOW_MILLIS)
+    private fun killUntilReleased(statement: java.sql.Statement, marker: String, executionFinished: () -> Boolean, deadline: Long) {
         var observed = false
-        while (true) {
+        while (System.nanoTime() < deadline) {
             // Read BEFORE scanning: execution could start/finish while SHOW is in flight.
             val finishedBeforeScan = executionFinished()
             val queryIds = scanRunningQueryIds(statement, marker)
@@ -127,20 +158,17 @@ internal class DorisClusterScopedCancel(
             // request. Until we observe this token, an empty scan is not proof of release.
             observed = observed || queryIds.isNotEmpty()
             for (queryId in queryIds) {
+                if (System.nanoTime() >= deadline) {
+                    return
+                }
                 if (isValidQueryId(queryId)) {
                     killQueryId(statement, requireNotNull(queryId), marker)
                 }
             }
-            if (System.nanoTime() >= deadline) {
-                log.debug(
-                    "cluster-scoped cancel: release of %s not confirmed after %sms — leaving to the socket belt",
-                    marker,
-                    KILL_WINDOW_MILLIS,
-                )
-                return
-            }
-            Thread.sleep(KILL_RECHECK_MILLIS)
+            val remaining = TimeUnit.NANOSECONDS.toMillis(maxOf(0, deadline - System.nanoTime()))
+            Thread.sleep(minOf(KILL_RECHECK_MILLIS, remaining))
         }
+        log.debug("cluster-scoped cancel: release of %s not confirmed before deadline — leaving to the socket belt", marker)
     }
 
     private fun scanRunningQueryIds(statement: java.sql.Statement, marker: String): List<String?> =
@@ -182,17 +210,40 @@ internal class DorisClusterScopedCancel(
         private const val KILL_WINDOW_MILLIS = 15_000L
         private const val KILL_RECHECK_MILLIS = 500L
 
-        /**
-         * Kill task executor: daemon threads, unbounded-but-rare (cancels), idle threads die.
-         * Shared across catalogs — the tasks carry everything they need.
-         */
-        private val executor: ExecutorService = Executors.newCachedThreadPool { runnable ->
-            Thread(runnable, "doris-cluster-cancel").apply { isDaemon = true }
+        /** Shared per plugin classloader, not multiplied by the number of catalogs. */
+        private val SHARED_EXECUTOR = newExecutor()
+
+        internal fun newExecutor(): ThreadPoolExecutor = ThreadPoolExecutor(
+            8, 8, 30, TimeUnit.SECONDS, ArrayBlockingQueue(64),
+            { runnable -> Thread(runnable, "doris-cluster-cancel").apply { isDaemon = true } },
+            ThreadPoolExecutor.AbortPolicy(),
+        ).apply { allowCoreThreadTimeOut(true) }
+
+        // Only executing helpers schedule tasks, so at most eight watchdogs are pending.
+        private val WATCHDOG = ScheduledThreadPoolExecutor(1) { runnable ->
+            Thread(runnable, "doris-cancel-watchdog").apply { isDaemon = true }
+        }.apply {
+            removeOnCancelPolicy = true
+            setKeepAliveTime(30, TimeUnit.SECONDS)
+            allowCoreThreadTimeOut(true)
+        }
+
+        @Suppress("TooGenericExceptionCaught") // Do not terminate the watchdog on best-effort socket cleanup failure.
+        private fun abortHelper(helper: Connection, marker: String) {
+            helperTimeouts.incrementAndGet()
+            try {
+                helper.abort(directExecutor())
+            } catch (e: Exception) {
+                log.debug(e, "cluster-scoped cancel: helper abort failed for %s", marker)
+            }
         }
 
         /** Test/diagnostic counters: dispatches are deterministic; issued kills can lose the race to the socket belt. */
         internal val killsDispatched = AtomicInteger()
         internal val killsIssued = AtomicInteger()
+        internal val killsRejected = AtomicInteger()
+        internal val killsExpired = AtomicInteger()
+        internal val helperTimeouts = AtomicInteger()
 
         /**
          * `QueryId` shape from SHOW FULL PROCESSLIST (e.g. `ce96d055444242d1-a5a580d0c15a4c40`),
