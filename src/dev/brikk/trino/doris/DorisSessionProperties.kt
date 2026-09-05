@@ -34,7 +34,8 @@ class DorisSessionProperties @Inject constructor(dorisConfig: DorisConfig) : Ses
     private val properties: List<PropertyMetadata<*>> = listOf(
         durationProperty(
             QUERY_TIMEOUT,
-            "Per-statement query timeout enforced via JDBC (KILL QUERY on expiry); unset means no client-side limit",
+            "Per-scan Doris server-side query_timeout (seconds granularity); defaults to doris.query-timeout, " +
+                "otherwise leaves the connection's session timeout unchanged",
             dorisConfig.getQueryTimeout(),
             false,
         ),

@@ -14,6 +14,7 @@
 package dev.brikk.trino.doris
 
 import io.airlift.units.DataSize
+import io.airlift.configuration.ConfigDescription
 import io.airlift.units.Duration
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.Test
@@ -86,5 +87,17 @@ class TestDorisJdbcConfig {
         val unset = DorisSessionProperties(DorisConfig())
             .sessionProperties.single { it.name == DorisSessionProperties.QUERY_TIMEOUT }
         assertThat(unset.defaultValue).isNull()
+    }
+
+    @Test
+    fun testDescriptionsMatchPushdownAndTimeoutContracts() {
+        val guarded = DorisConfig::class.java.getMethod("setStringPushdownMode", DorisStringPushdownMode::class.java)
+            .getAnnotation(ConfigDescription::class.java).value
+        assertThat(guarded).contains("proven-exact domains fully pushed", "retain local LIKE", "hazardous values stay local")
+        assertThat(DorisConfig().getStringPushdownMode()).isEqualTo(DorisStringPushdownMode.GUARDED)
+        val timeout = DorisSessionProperties(DorisConfig()).sessionProperties
+            .single { it.name == DorisSessionProperties.QUERY_TIMEOUT }.description
+        assertThat(timeout).contains("server-side query_timeout", "seconds granularity", "doris.query-timeout")
+            .contains("session timeout unchanged").doesNotContain("enforced via JDBC", "KILL QUERY on expiry", "no client-side limit")
     }
 }

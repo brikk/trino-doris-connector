@@ -202,14 +202,16 @@ the evidence registry are the proof". Fix the text or the code — whichever is 
   test that instantiates the rule, or reword the KDoc to "documentation + artifact-drift canary"
   and drop `Treatment`/`guard`.
 
-### E-17 [M] `DorisConfig` says GUARDED keeps a retained Trino filter; it doesn't
-- `DorisConfig.kt:68`: `GUARDED (superset pre-filter, Trino filter retained; default)`.
-  `guardedResult` (`DorisTypeMapping.kt:365-375`) and `DorisStringPushdownMode.kt:29-31` push
-  **fully with no retained filter**. Operators reading the config description assume a safety net
-  that does not exist.
-- Fix: correct the `@ConfigDescription`. Also `DorisSessionProperties.kt` `query_timeout`
-  description says "enforced via JDBC (KILL QUERY on expiry)" — implementation is server-side
-  `SET query_timeout` (`DorisClient.kt:445-448`).
+### E-17 [M] DONE 2026-09-05 - Align config descriptions with actual enforcement
+- GUARDED now documents fully pushed proven-exact domains, retained local LIKE for prefix
+  pre-filters, and local evaluation of hazardous values. It no longer promises a retained
+  Trino filter for every pushed predicate.
+- `query_timeout` now describes per-scan Doris server-side enforcement, seconds granularity,
+  the catalog default, and leaving the connection's session timeout unchanged when unset.
+  Removed the incorrect JDBC-timer/KILL-on-expiry description.
+- No defaults or runtime behavior changed. `TestDorisJdbcConfig` pins the published metadata;
+  focused config, live string-pushdown and cancellation/timeout suites, detekt and plugin
+  assembly verification passed via `mise exec -- ./gradlew`.
 
 ### E-18 [M] NULL_ONLY string mode gate in the scalar tier is shallow
 - `DorisScalarPushdownRules.kt:287-292` checks only top-level operand types; :325-348 (IS NULL
@@ -339,6 +341,6 @@ the evidence registry are the proof". Fix the text or the code — whichever is 
 
 ## Suggested order
 
-1. E-17, E-16, E-18, E-19, E-20 (align documented and implemented contracts).
+1. E-16, E-18, E-19, E-20 (align documented and implemented contracts).
 2. Validate E-08, E-09, E-10, E-11 against actual Doris behavior.
 3. Remaining E-29/E-30 work and other items opportunistically.

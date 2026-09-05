@@ -65,7 +65,8 @@ class DorisConfig {
 
     @Config("doris.string-pushdown.mode")
     @ConfigDescription(
-        "String predicate pushdown mode: NULL_ONLY, GUARDED (superset pre-filter, Trino filter retained; default), " +
+        "String predicate pushdown mode: NULL_ONLY, GUARDED (default: proven-exact domains fully pushed; " +
+            "LIKE-prefix pre-filters retain local LIKE; hazardous values stay local), " +
             "BINARY (verified byte semantics), FULL (caller-asserted). Per-query override: string_pushdown_mode",
     )
     fun setStringPushdownMode(stringPushdownMode: DorisStringPushdownMode): DorisConfig {
