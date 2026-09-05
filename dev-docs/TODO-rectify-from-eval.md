@@ -98,14 +98,19 @@ registry prose that in several places contradicts the code it claims to prove.
   a live production-helper test cancels one of two same-query-id sleep statements while the
   other remains running. Multi-FE overlay tests were skipped; no new cross-FE measurement claimed.
 
-### E-06 [M] DATE/TIMESTAMP literals outside Doris's representable range are pushed unguarded
-- `DorisScalarPushdownRules.kt:122-137` (`RewriteScalarConstant`), also domain pushdown via
-  `dorisDateColumnMapping` (no controller). Trino DATE spans ±5.8M years; Doris `0000-01-01..9999-12-31`.
-  Doris non-strict mode yields NULL for invalid datetimes → `coalesce(d, DATE '2000-01-01') <
-  DATE '10000-01-01'` drops every row remotely; Trino keeps all rows.
-- Fix: reject out-of-range DATE/TIMESTAMP constants in `RewriteScalarConstant` and add a
-  `PredicatePushdownController` to the DATE/DATETIME mappings that keeps out-of-range domain
-  bounds local. Or: a live probe proving Doris errors loudly (then pin it).
+### E-06 [H] DONE 2026-09-05 - Out-of-range temporal parameters changed results
+- Live-confirmed: 30 of 58 probe queries differed from pushdown-disabled Trino evaluation.
+  Comparisons silently dropped valid rows, timestamp coalesce projections failed decoding,
+  and array contains/array_position incorrectly treated invalid needles as NULL matches.
+  Direct Doris casts of year -1/year 10000 values returned SQL NULL.
+- Resolution: a shared native epoch-day/microsecond range check guards DATE/DATETIME domain
+  endpoints, scalar constants, and both scalar/constant-array needles. Unsafe expressions
+  stay local; valid boundaries, NULL checks, compaction semantics and safe conjuncts still push.
+- Evidence and exact before/after cases: `REPORT-temporal-range-pushdown-4.1.3.md`.
+  Live plan/result regressions: `TestDorisTemporalRange`; boundary/domain units:
+  `TestDorisTemporalRangeMapping`.
+- Full `mise exec -- ./gradlew build -PwithCancellation` passed: 302 passed, 5 overlay skips,
+  zero failures; detekt and plugin assembly passed.
 
 ### E-07 [M] `SET fetch_all_fe_for_system_table = true` failure is silently swallowed
 - `DorisClusterScopedCancel.kt:127` `runCatching` around the SET. If the variable name is wrong
@@ -330,8 +335,7 @@ the evidence registry are the proof". Fix the text or the code — whichever is 
 
 ## Suggested order
 
-1. E-06 (probe out-of-range temporal literals before deciding the fix).
-2. E-07 (cancel-helper widening failure observability).
-3. E-17, E-16, E-18, E-19, E-20 (align documented and implemented contracts).
-4. Validate E-08, E-09, E-10, E-11 against actual Doris behavior.
-5. Remaining E-29/E-30 work and other items opportunistically.
+1. E-07 (cancel-helper widening failure observability).
+2. E-17, E-16, E-18, E-19, E-20 (align documented and implemented contracts).
+3. Validate E-08, E-09, E-10, E-11 against actual Doris behavior.
+4. Remaining E-29/E-30 work and other items opportunistically.

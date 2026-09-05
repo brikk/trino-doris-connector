@@ -81,6 +81,7 @@ import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter.ISO_LOCAL_DATE
 import java.time.format.DateTimeParseException
 import java.util.Optional
+import java.util.concurrent.TimeUnit.DAYS
 
 /**
  * Scalar type contract v1, implemented EXACTLY per `LEDGER-p0-type-and-capability.md` §A.
@@ -315,6 +316,33 @@ internal class DorisTypeMapping(typeManager: TypeManager) {
         private const val DORIS_MAX_DATETIME_PRECISION = MAX_DATETIME_PRECISION
         private const val LARGEINT_DECIMAL_PRECISION = 38
 
+        private val MIN_DORIS_DATE = LocalDate.of(0, 1, 1).toEpochDay()
+        private val MAX_DORIS_DATE = LocalDate.of(9999, 12, 31).toEpochDay()
+        private val MIN_DORIS_TIMESTAMP = DAYS.toMicros(MIN_DORIS_DATE)
+        private val DORIS_TIMESTAMP_UPPER_BOUND = DAYS.toMicros(MAX_DORIS_DATE + 1)
+
+        /** Checks Trino epoch days/microseconds without JDBC conversion; other types are unaffected. */
+        internal fun isWithinTemporalRange(type: Type, value: Any?): Boolean = when {
+            type == DATE -> value is Long && value in MIN_DORIS_DATE..MAX_DORIS_DATE
+            type is TimestampType -> value is Long && value >= MIN_DORIS_TIMESTAMP && value < DORIS_TIMESTAMP_UPPER_BOUND
+            else -> true
+        }
+
+        // Doris casts out-of-range temporal parameters to NULL, changing comparison semantics.
+        internal val TEMPORAL_PUSHDOWN = PredicatePushdownController { session, domain ->
+            val inRange = domain.values.valuesProcessor.transform(
+                { ranges ->
+                    ranges.orderedRanges.all { range ->
+                        range.lowValue.map { isWithinTemporalRange(domain.type, it) }.orElse(true) &&
+                            range.highValue.map { isWithinTemporalRange(domain.type, it) }.orElse(true)
+                    }
+                },
+                { discrete -> discrete.values.all { isWithinTemporalRange(domain.type, it) } },
+                { true },
+            )
+            if (inRange) FULL_PUSHDOWN.apply(session, domain) else DISABLE_PUSHDOWN.apply(session, domain)
+        }
+
         /** Max unscaled value representable in DECIMAL(38,0): 10^38 - 1. */
         private val DECIMAL_38_MAX: BigInteger = BigInteger.TEN.pow(LARGEINT_DECIMAL_PRECISION).subtract(BigInteger.ONE)
 
@@ -494,6 +522,7 @@ internal class DorisTypeMapping(typeManager: TypeManager) {
                     }
                 },
                 dateWriteFunctionUsingLocalDate(),
+                TEMPORAL_PUSHDOWN,
             )
         }
 
@@ -526,6 +555,7 @@ internal class DorisTypeMapping(typeManager: TypeManager) {
                     }
                 },
                 timestampWriteFunction(timestampType),
+                TEMPORAL_PUSHDOWN,
             )
         }
 

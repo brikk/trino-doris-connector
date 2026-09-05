@@ -80,6 +80,8 @@ Predicates and query shapes the connector pushes into Doris:
 Deliberately **not** pushed (kept in Trino to guarantee correct results):
 
 - `FLOAT`/`DOUBLE` equality — approximate types.
+- DATE/TIMESTAMP parameters outside Doris's year `0000–9999` range, including array needles:
+  these remain local because Doris can convert them to NULL and change query results.
 - `sum`/`avg` outside the table above — Doris wraps integer/decimal/LARGEINT sum overflow
   silently and truncates decimal averages where Trino rounds; these run in Trino so overflow
   still fails loudly and results stay Trino-exact.

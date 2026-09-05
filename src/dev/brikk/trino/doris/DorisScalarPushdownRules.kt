@@ -133,6 +133,9 @@ internal class RewriteScalarConstant : ConnectorExpressionRule<Constant, Paramet
         if (!DorisScalarValues.isValueType(expression.type)) {
             return Optional.empty()
         }
+        if (!DorisTypeMapping.isWithinTemporalRange(expression.type, value)) {
+            return Optional.empty()
+        }
         if (value is Slice && sliceContainsNulByte(value)) {
             return Optional.empty() // 0x00 hazard policy, same as the domain guard
         }

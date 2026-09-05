@@ -119,6 +119,10 @@ internal class DorisArrayPushdownSupport(
             rejected("NULL needle", expression.toString())
             return null
         }
+        if (!DorisTypeMapping.isWithinTemporalRange(column.elementType, value)) {
+            rejected("temporal needle outside Doris range", expression.toString())
+            return null
+        }
         if (!ipNeedleRenderable(value, column.ipV4)) {
             rejected("IPADDRESS needle not renderable for a Doris IPV4 column (non-v4-mapped)", expression.toString())
             return null
@@ -170,6 +174,10 @@ internal class DorisArrayPushdownSupport(
                 continue
             }
             val value = readNativeValue(column.elementType, block, i)
+            if (!DorisTypeMapping.isWithinTemporalRange(column.elementType, value)) {
+                rejected("temporal array element outside Doris range", expression.toString())
+                return null
+            }
             if (!ipNeedleRenderable(value, column.ipV4)) {
                 // non-v4-mapped element against a Doris IPV4 column: can never match -> keep local
                 rejected("IPADDRESS array element not renderable for a Doris IPV4 column", expression.toString())
