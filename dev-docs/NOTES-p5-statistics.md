@@ -19,7 +19,7 @@ Live probes 2026-07-19 (throwaway probes `/tmp/opencode/p5-stats`; repeatable pi
 | | `min`/`max` (DATE/DATETIME) | single-quoted text (`'2021-06-15 12:34:56.789012'`) | NO — parseable but the Trino stats-representation contract for temporal ranges is unproven; ndv/nulls still supplied |
 | | `min`/`max` (VARCHAR/CHAR/IP/BOOLEAN) | quoted/`TRUE`/`FALSE` text | NO (ranges are numeric-only in this reader) |
 | | `hot_values`, histograms | Doris 4.1.3 exposes hot values, no equi-height histogram in this surface | NO (nothing to consume) |
-| `__internal_schema.column_statistics` | raw stats store | readable (even by trino_ro), but per-index rows need aggregation the SHOW command already does | NO (SHOW COLUMN CACHED STATS is the supported view of the same data) |
+| `__internal_schema.column_statistics` | raw stats store | readable (even by trino_ro); SHOW emits separate per-index rows, not an aggregation | NO (the reader selects base-index records from SHOW COLUMN CACHED STATS) |
 
 ## What exists WITHOUT the user running ANALYZE
 
@@ -35,16 +35,24 @@ Live probes 2026-07-19 (throwaway probes `/tmp/opencode/p5-stats`; repeatable pi
 
 ## Consumption rules (the reader's contract)
 
-- Row count = max(TABLE_ROWS when >= 0, max per-column analyze `count`); **<= 0 -> unknown**
+- Only SHOW rows whose `index_name` equals the remote table name are consumed. Visible-index
+  order is unspecified; missing base-index statistics never fall back to rollup statistics.
+- Row count = max(TABLE_ROWS when >= 0, max base-index per-column analyze `count`); **<= 0 -> unknown**
   (a stale 0 on a just-loaded table is indistinguishable from truly empty; an exact 0
   misleads the CBO far worse than unknown).
-- ndv capped at non-null rows; nulls fraction = num_null / rowCount clamped to [0,1].
+- For a positive table row count, a column record with count 0, or NDV 0 without a matching
+  all-NULL count, becomes entirely unknown. This avoids mixing stale empty-column metadata
+  with fresh row counts. Consistent all-NULL records keep NDV 0 and null fraction 1.
+- Otherwise ndv is capped at non-null rows; nulls fraction = num_null / rowCount clamped to [0,1].
 - Ranges: TINYINT/SMALLINT/INT/BIGINT/LARGEINT/DECIMAL/FLOAT/DOUBLE only, both ends must
   parse finite via BigDecimal (rejects NaN/`∞`/quoted text by construction).
 - Fail SOFT everywhere: any statistics error -> `TableStatistics.empty()` + DEBUG log.
   Statistics are advisory; data paths keep their fail-loud discipline.
 - Named relations only (synthetic join/aggregation handles -> unknown).
 - Gating: `doris.statistics.enabled` (default true) + session `statistics_enabled`.
+
+E-08/E-09 validation, exact pre-fix results and regression coverage are recorded in
+[`REPORT-statistics-validation-4.1.3.md`](REPORT-statistics-validation-4.1.3.md).
 
 ## Permissions (trino_ro, SELECT_PRIV on internal.*.*)
 

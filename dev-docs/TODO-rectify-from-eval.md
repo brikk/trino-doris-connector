@@ -122,14 +122,27 @@ registry prose that in several places contradicts the code it claims to prove.
   The warning test failed before the fix. Focused cancellation suites (including the opt-in
   slow suite), detekt and plugin assembly verification passed via `mise exec -- ./gradlew`.
 
-### E-08 [M] Statistics: `ndv == 0` with non-null rows reported as `distinctValuesCount = 0`
-- `DorisTableStatisticsReader.kt:149-153`. A stale sketch producing 0 tells the CBO the column has
-  zero distinct values → near-zero cardinality after any equality filter.
-- Fix: treat `ndv <= 0 && nonNullRows > 0` as unknown.
+### E-08 [M] DONE 2026-09-05 - Reject inconsistent zero column statistics
+- Live validation reproduced a fresh row count of 2 combined with stale column NDV/data size
+  of 0 after an empty-table analysis, load and partial reanalysis. An all-NULL control correctly
+  retained NDV 0/null fraction 1; zero NDV must not be rejected indiscriminately.
+- The reader now returns entirely unknown column statistics when its count is zero despite
+  a positive table estimate, or when zero NDV lacks a matching all-NULL count. Valid table
+  counts, all-NULL records and positive NDV caps remain intact.
+- Deterministic regressions plus live all-NULL controls pass. This handles inconsistent snapshots,
+  not every possible stale estimate. Details: `REPORT-statistics-validation-4.1.3.md`.
 
-### E-09 [M] Statistics: index rows disambiguated by order, not `index_name`
-- `DorisTableStatisticsReader.kt:120-122` assumes the base index row appears first (`putIfAbsent`).
-- Fix: filter on the `index_name` column `== remoteTable`.
+### E-09 [M] DONE 2026-09-05 - Select base-index statistics explicitly
+- Live SHOW output returned a rollup before the base index; the reader chose NDV 3, size 24
+  and range [5,28] instead of base NDV 5, size 40 and range [5,15]. Doris source confirms
+  visible-index order is unspecified and the base index is named after the table, not N/A.
+- Rows are now filtered by `index_name == remoteTable` before row-count or column estimation.
+  Missing base rows stay unknown rather than borrowing rollup data.
+- Unit tests force both index orders and guard against non-base count inflation; a live
+  rollup test verifies source statistics and Trino estimates. Four combined E-08/E-09 unit
+  regressions failed before the fix. Full `mise exec -- ./gradlew build -PwithCancellation`
+  passed: 313 passed, 5 overlay skips, no failures; detekt and plugin assembly passed.
+  Evidence: `REPORT-statistics-validation-4.1.3.md`.
 
 ### E-10 [M] `DorisColumnType` parse failure is a hard `GENERIC_INTERNAL_ERROR` for the whole table
 - `DorisColumnType.kt:65-66`; called per column from `readColumns` (`DorisClient.kt:376-402`).
@@ -342,5 +355,5 @@ the evidence registry are the proof". Fix the text or the code — whichever is 
 ## Suggested order
 
 1. E-16, E-18, E-19, E-20 (align documented and implemented contracts).
-2. Validate E-08, E-09, E-10, E-11 against actual Doris behavior.
+2. Validate E-10 and E-11 against actual Doris behavior.
 3. Remaining E-29/E-30 work and other items opportunistically.

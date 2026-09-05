@@ -116,9 +116,12 @@ internal class DorisTableStatisticsReader(
             connection.createStatement().use { statement ->
                 statement.executeQuery(sql).use { resultSet ->
                     while (resultSet.next()) {
-                        val name = resultSet.getString("column_name") ?: continue
-                        // first row per column wins (extra rows only appear for extra
-                        // materialized indexes; the base index is reported first)
+                        // SHOW emits separate visible-index rows in unspecified order. The
+                        // base index name is the remote table name, including after rename.
+                        val name = resultSet.getString("column_name")
+                        if (name == null || resultSet.getString("index_name") != remoteTable) {
+                            continue
+                        }
                         byColumn.putIfAbsent(
                             name,
                             ColumnStatsRow(
@@ -141,6 +144,12 @@ internal class DorisTableStatisticsReader(
     }
 
     private fun toColumnStatistics(column: JdbcColumnHandle, stats: ColumnStatsRow, rowCount: Double): ColumnStatistics {
+        // Empty-table statistics can survive a load or partial ANALYZE. NDV zero is
+        // only consistent with a nonempty table when every row is known to be NULL.
+        if (stats.count == 0.0 || (stats.ndv == 0.0 && stats.numNull != rowCount)) {
+            log.debug("Ignoring inconsistent zero-count/NDV statistics for %s", column.columnName)
+            return ColumnStatistics.empty()
+        }
         val builder = ColumnStatistics.builder()
         val nullsFraction = stats.numNull?.let { (it / rowCount).coerceIn(0.0, 1.0) }
         if (nullsFraction != null) {

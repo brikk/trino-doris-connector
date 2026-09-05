@@ -21,6 +21,7 @@ import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.TestInstance
 import java.sql.DriverManager
+import java.util.concurrent.TimeUnit
 
 /**
  * P5 remote statistics: probe pins for what Doris 4.1.3 exposes (pre/post ANALYZE, formats,
@@ -140,6 +141,86 @@ class TestDorisP5Statistics : AbstractTestQueryFramework() {
         assertThat(dc.getField(5)).isEqualTo("-9999999.99") // decimal range parses
         val li = stats["li"]!!
         assertThat(li.getField(5)).isNotNull() // LARGEINT (decimal(38,0)) range fed
+    }
+
+    @Test
+    fun testAllNullColumnStatisticsRemainKnown() {
+        DorisTestCluster.executeAsRoot(
+            """
+            CREATE TABLE p5_stats.all_null (id INT NOT NULL, v BIGINT)
+            DUPLICATE KEY(id) DISTRIBUTED BY HASH(id) BUCKETS 1 PROPERTIES ("replication_num" = "1")
+            """.trimIndent(),
+            "INSERT INTO p5_stats.all_null VALUES (1, NULL), (2, NULL), (3, NULL)",
+            "ANALYZE TABLE p5_stats.all_null WITH SYNC",
+        )
+        val stats = showStats("doris.p5_stats.all_null")
+        assertThat(stats[""]!!.getField(4)).isEqualTo(3.0)
+        val v = stats["v"]!!
+        assertThat(v.getField(2)).isEqualTo(0.0)
+        assertThat(v.getField(3)).isEqualTo(1.0)
+        val id = stats["id"]!!
+        assertThat(id.getField(2)).isEqualTo(3.0)
+        assertThat(id.getField(3)).isEqualTo(0.0)
+        assertThat(id.getField(5)).isEqualTo("1")
+        assertThat(id.getField(6)).isEqualTo("3")
+    }
+
+    @Test
+    fun testRollupStatisticsDoNotReplaceBaseIndexStatistics() {
+        DorisTestCluster.executeAsRoot(
+            """
+            CREATE TABLE p5_stats.rollups (k1 INT NOT NULL, k2 INT NOT NULL, v BIGINT SUM)
+            AGGREGATE KEY(k1, k2) DISTRIBUTED BY HASH(k1) BUCKETS 1 PROPERTIES ("replication_num" = "1")
+            """.trimIndent(),
+            "INSERT INTO p5_stats.rollups VALUES (1, 1, 6), (1, 2, 7), (1, 3, 15), (2, 1, 5), (3, 1, 9)",
+            "ALTER TABLE p5_stats.rollups ADD ROLLUP r_k1(k1, v)",
+        )
+        openRoot().use { connection ->
+            connection.setNetworkTimeout(Runnable::run, 10_000)
+            connection.createStatement().use { statement ->
+                val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(120)
+                while (true) {
+                    val state = statement.executeQuery(
+                        "SHOW ALTER TABLE ROLLUP FROM p5_stats WHERE TableName = 'rollups'",
+                    ).use { rs ->
+                        check(rs.next())
+                        rs.getString("State")
+                    }
+                    assertThat(state).describedAs("rollups.r_k1 build state").isNotEqualTo("CANCELLED")
+                    if (state == "FINISHED") {
+                        break
+                    }
+                    check(System.nanoTime() < deadline) { "rollups.r_k1 did not finish within 120s: $state" }
+                    Thread.sleep(250)
+                }
+            }
+        }
+        DorisTestCluster.executeAsRoot("ANALYZE TABLE p5_stats.rollups WITH SYNC")
+        openRoot().use { connection ->
+            connection.createStatement().use { statement ->
+                statement.executeQuery("SHOW COLUMN CACHED STATS p5_stats.rollups (v)").use { rs ->
+                    // SHOW order is unspecified; the base index is named after the remote table, not N/A.
+                    val vStatsByIndex = HashMap<String, List<Double>>()
+                    while (rs.next()) {
+                        vStatsByIndex[rs.getString("index_name")] = listOf(
+                            rs.getDouble("count"), rs.getDouble("ndv"), rs.getDouble("data_size"), rs.getDouble("min"), rs.getDouble("max"),
+                        )
+                    }
+                    assertThat(vStatsByIndex).containsOnlyKeys("rollups", "r_k1")
+                    assertThat(vStatsByIndex["rollups"]).containsExactly(5.0, 5.0, 40.0, 5.0, 15.0)
+                    assertThat(vStatsByIndex["r_k1"]).containsExactly(3.0, 3.0, 24.0, 5.0, 28.0)
+                }
+            }
+        }
+        val stats = showStats("doris.p5_stats.rollups")
+        assertThat(stats[""]!!.getField(4)).isEqualTo(5.0)
+        val v = stats["v"]!!
+        // Trino SHOW STATS omits data size for fixed-width types; the reader unit pins it.
+        assertThat(v.getField(1)).isNull()
+        assertThat(v.getField(2)).isEqualTo(5.0)
+        assertThat(v.getField(3)).isEqualTo(0.0)
+        assertThat(v.getField(5)).isEqualTo("5")
+        assertThat(v.getField(6)).isEqualTo("15")
     }
 
     @Test
