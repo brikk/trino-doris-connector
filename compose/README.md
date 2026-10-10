@@ -1,16 +1,17 @@
-# trino-doris probe cluster (stock Apache Doris 4.1.3)
+# trino-doris validation cluster (stock Apache Doris 4.1.4.1)
 
-Isolated, evidence-grade stock Doris 4.1.3 cluster used by the P0 protocol/type
-probe (`../dev-docs/REPORT-protocol-type-probe-doris-4.1.3.md`).
+Isolated stock Doris 4.1.4.1 cluster for connector validation. Historical P0
+protocol/type evidence remains in `../dev-docs/REPORT-protocol-type-probe-doris-4.1.3.md`.
 
 ## Why a separate cluster
 
 `jvm/doris-ducklake` runs a **patched, master-based FE** (`doris-fe:pr62767-local`)
 on network `172.30.80.0/24` and host ports `9030`/`8030`. That FE is not a stock
-4.1.3 build, so it cannot be used for protocol/type evidence, and it must not be
+release build, so it cannot be used for protocol/type evidence, and it must not be
 disturbed.
 
-This cluster runs the **stock `apache/doris:fe-4.1.3` + `be-4.1.3` images** on a
+This cluster runs the **stock `apache/doris:fe-4.1.4.1` + `be-4.1.4.1` images**, pinned
+by multi-architecture release digest in both single-FE and multi-FE Compose files, on a
 dedicated `172.30.81.0/24` network with host ports:
 
 | Purpose          | Host port | Container port |
@@ -100,6 +101,8 @@ runs three FEs + a BE and is memory-hungry).
 - **Topology:** three FEs (`fe1` initial master + `fe2`/`fe3` followers that join the
   BDBJE electable group via `--helper`) and one BE, project `trino-doris-mfe`, on a
   dedicated `172.30.82.0/24` network (no collision with `81.x`/`80.x`).
+  FEs start together so persisted metadata can regain quorum; on a fresh cluster,
+  the stock follower init script waits for registration with FE1.
 
   | Node | Host MySQL port | Host HTTP port |
   |------|-----------------|----------------|

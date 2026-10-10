@@ -1,6 +1,6 @@
 # Full build + live-test gate for trino-doris-connector.
 #
-# The suite is NOT hermetic: ~170 tests connect to a real stock Doris 4.1.3 FE+BE
+# The suite is NOT hermetic: live tests connect to a real stock Doris 4.1.4.1 FE+BE
 # (FE MySQL on host 127.0.0.1:9130) AND docker-exec into the `trino-doris-fe`
 # container for oracle EXPLAIN / audit-log assertions (see test/.../DorisTestCluster.kt
 # and TestDorisP2bInvertedIndexEvidence.kt). That container-exec requirement is why we
@@ -21,7 +21,7 @@ concurrency:
 
 jobs:
   build:
-    name: build + live tests (Doris 4.1.3)
+    name: build + live tests (Doris 4.1.4.1)
     runs-on: ubuntu-latest
     # Cluster boot ~2-4 min + cold Gradle dependency resolution + detekt + ~170 live
     # tests. 30 min leaves headroom for a cold-cache first run without hanging forever.
@@ -63,7 +63,7 @@ jobs:
       # docker compose v2 (`docker compose`, not `docker-compose`) is preinstalled on
       # ubuntu-latest. up.sh pins platform to linux/amd64 (matches the x86_64 runner, so
       # no emulation) and gates on FE SELECT 1 + BE Alive=true with a 240s deadline each.
-      - name: Bring up Doris 4.1.3 cluster
+      - name: Bring up Doris 4.1.4.1 cluster
         run: ./compose/up.sh
 
       # up.sh already blocks until FE accepts SQL and one BE is Alive, so it is itself the

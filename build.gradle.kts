@@ -113,7 +113,7 @@ tasks.test {
         }
     }
 
-    // Live P1a smoke tests target the already-running stock Doris 4.1.3 compose cluster
+    // Live P1a smoke tests target the already-running stock Doris compose cluster
     // (./compose, mysql host port 9130). They fail loud if it is down.
     // 2g is ample for one in-process DistributedQueryRunner + the live suites (3g was
     // trino-ducklake heritage); a smaller test JVM also keeps host free memory above the

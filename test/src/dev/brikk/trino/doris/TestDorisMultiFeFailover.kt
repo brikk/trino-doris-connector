@@ -134,15 +134,19 @@ class TestDorisMultiFeFailover : AbstractTestQueryFramework() {
     @Test
     @org.junit.jupiter.api.Order(2)
     fun testCrossFeKillByQueryIdReleasesForeignFeQuery() {
+        provisionCancelFixture()
         val marker = "trino_query_id=mfe_xfe_${System.nanoTime()}"
         val pool = java.util.concurrent.Executors.newSingleThreadExecutor()
         val victim = pool.submit<String> {
             runCatching {
-                // victimProps() uses a socketTimeout LONGER than the 20s kill-wait window below
-                // (props()'s 8s would race the kill and mask the server message with a client-side
-                // "Communications link failure"); sleep(60) can only be unblocked by the KILL.
+                // Use cancellable scan work, not sleep(): Doris can accept the forwarded
+                // KILL during scheduling yet leave a sleeping BE expression running for
+                // its full duration (confirmed on 4.1.4.1; the 4.1.3 pin also timed out).
                 DriverManager.getConnection("jdbc:mysql://$HOST:9132/", victimProps()).use {
-                    it.createStatement().execute("SELECT sleep(60) /*$marker*/")
+                    it.createStatement().execute(
+                        "SELECT count(*) FROM mfe_cancel.big a CROSS JOIN mfe_cancel.big b " +
+                            "WHERE a.pad = b.pad AND a.id + b.id = -1 /*$marker*/",
+                    )
                 }
             }.exceptionOrNull()?.message ?: "completed"
         }
@@ -157,7 +161,7 @@ class TestDorisMultiFeFailover : AbstractTestQueryFramework() {
                             while (rs.next()) {
                                 val info = rs.getString("Info") ?: continue
                                 if (info.contains(marker) && !info.contains("PROCESSLIST")) {
-                                    queryId = rs.getString("QueryId")
+                                    queryId = rs.getString("QueryId")?.takeIf(DorisClusterScopedCancel::isValidQueryId)
                                     ownerFe = rs.getString("FE")
                                 }
                             }
@@ -166,9 +170,19 @@ class TestDorisMultiFeFailover : AbstractTestQueryFramework() {
                     }
                     // the query is genuinely FOREIGN to the helper's FE
                     assertThat(ownerFe).isEqualTo("172.30.82.11") // fe2
-                    statement.execute("""KILL QUERY "$queryId"""")
+                    assertThat(victim.isDone).describedAs("victim still running before cross-FE KILL").isFalse()
+                    // An assigned ID can still precede the coordinator. Retry the foreign-FE
+                    // kill within the production helper's 15s window; one accepted KILL is
+                    // not proof of release (observed during planning on 4.1.4.1).
+                    val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(15)
+                    while (!victim.isDone && System.nanoTime() < deadline) {
+                        val failure = runCatching { statement.execute("""KILL QUERY "$queryId"""") }.exceptionOrNull()
+                        assertThat(failure == null || DorisClusterScopedCancel.isUnknownQueryId(failure))
+                            .describedAs("cross-FE KILL outcome: $failure").isTrue()
+                        Thread.sleep(500)
+                    }
                     // the blocked victim read unblocks with the server's kill error
-                    assertThat(victim.get(20, TimeUnit.SECONDS)).contains("cancel query by user")
+                    assertThat(victim.get(5, TimeUnit.SECONDS)).contains("cancel query by user")
                 }
             }
         } finally {
@@ -349,7 +363,7 @@ class TestDorisMultiFeFailover : AbstractTestQueryFramework() {
 
         /**
          * For the cross-FE-kill victim: a socketTimeout comfortably longer than the 20s window
-         * the test waits for the kill, and shorter than the query's own sleep(60). This makes the
+         * the test waits for the kill. This makes the
          * KILL the ONLY thing that can unblock the victim inside the window, so the assertion sees
          * the server's "cancel query by user" message rather than a racing client-side timeout.
          */

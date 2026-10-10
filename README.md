@@ -18,7 +18,13 @@ fixes all of that:
 - **Read-only by construction**: writes, DDL, and procedure escape hatches are denied inside
   the connector before any SQL reaches Doris.
 
-Built and tested against **Apache Doris 4.1.3**, **Trino 483**, and MySQL Connector/J 9.7.0.
+Built and tested against **Apache Doris 4.1.4.1**, **Trino 483**, and MySQL Connector/J 9.7.0.
+
+Compose/CI use digest-pinned final release images. The
+[upgrade qualification](dev-docs/REPORT-doris-4.1.4.1-upgrade.md) records **345/346**
+tests passing in the last full run: the known, unused trace-ID cancellation pin
+timed out and passed in isolation. Production QueryId cancellation and the real-server
+smoke passed. Historical 4.1.3 probe evidence is preserved.
 
 ## Features
 
@@ -149,9 +155,11 @@ equality/ordering, `approx_distinct` unless `doris.approximate-pushdown` is opte
 | MAP / STRUCT | text with `unsupported-type-handling=CONVERT_TO_VARCHAR`, otherwise hidden |
 | BITMAP / HLL / AGG_STATE | hidden (opaque engine state) |
 
-FLOAT/DOUBLE reads support infinities, NaN, signed zero, and NULL. Doris's wire rendering can
-lose precision at finite extrema; these mappings are not lossless binary transport. See the
-[FLOAT probe](dev-docs/REPORT-float-special-values-4.1.3.md) for the stored-value versus wire-value evidence.
+FLOAT/DOUBLE reads support infinities, NaN, signed zero, and NULL. The sampled FLOAT extrema
+now round-trip exactly on 4.1.4.1, unlike the reduced-precision text observed on 4.1.3.
+These remain text mappings, not lossless binary transport; see the historical
+[FLOAT probe](dev-docs/REPORT-float-special-values-4.1.3.md) and
+[4.1.4.1 upgrade checks](dev-docs/REPORT-doris-4.1.4.1-upgrade.md).
 
 VARCHAR renderings of Decimal256 or unsupported complex types do not inherit native string
 grouping or ordering semantics. `GROUP BY`, `DISTINCT`, and TopN on those keys stay in Trino,
@@ -172,7 +180,7 @@ Prerequisites: JDK 25 (via [mise](https://mise.jdx.dev)) and Docker (for the liv
 
 ```bash
 mise install        # JDK 25, from ./mise.toml
-./compose/up.sh     # local Doris 4.1.3 cluster the tests run against
+./compose/up.sh     # local Doris 4.1.4.1 cluster the tests run against
                     # (FE MySQL on 127.0.0.1:9130, HTTP on 8130, root / no password)
 ./gradlew build     # compile + lint + full test suite + plugin assembly + assembly verification
 ```

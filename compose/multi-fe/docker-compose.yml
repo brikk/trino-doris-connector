@@ -31,7 +31,8 @@ name: trino-doris-mfe
 # by host:port in the metadata group.
 
 x-fe-common: &fe-common
-  image: apache/doris:fe-4.1.3
+  # Keep release digests aligned with ../docker-compose.yml (multi-arch indexes).
+  image: apache/doris:fe-4.1.4.1@sha256:a9da001c8afa6d07b9b3de532a0b65566c3bc134f0beefbedfce7fad006eb843
   platform: ${DORIS_FE_PLATFORM:-linux/amd64}
   # Every FE in the electable group sees the full 3-node roster; only FE_ID differs.
   # Ports are the EDIT_LOG_PORT (9010), which is what --helper and ADD FOLLOWER use.
@@ -71,7 +72,9 @@ services:
     hostname: trino-doris-mfe-fe2
     depends_on:
       doris-fe1:
-        condition: service_healthy
+        # Existing metadata needs a quorum before FE1 can become healthy. On a
+        # fresh cluster, the stock follower init script waits for registration.
+        condition: service_started
     environment:
       FE_SERVERS: fe1:172.30.82.10:9010,fe2:172.30.82.11:9010,fe3:172.30.82.12:9010
       FE_ID: "2"
@@ -92,7 +95,7 @@ services:
     hostname: trino-doris-mfe-fe3
     depends_on:
       doris-fe1:
-        condition: service_healthy
+        condition: service_started
     environment:
       FE_SERVERS: fe1:172.30.82.10:9010,fe2:172.30.82.11:9010,fe3:172.30.82.12:9010
       FE_ID: "3"
@@ -108,7 +111,7 @@ services:
         ipv4_address: 172.30.82.12
 
   doris-be:
-    image: apache/doris:be-4.1.3
+    image: apache/doris:be-4.1.4.1@sha256:0b2827e2fcc0fc9b007502bda2a89e00d97f5696ca47c89f95cdff8e488da249
     container_name: trino-doris-mfe-be
     hostname: trino-doris-mfe-be
     platform: ${DORIS_BE_PLATFORM:-linux/amd64}

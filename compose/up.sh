@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Bring up the ISOLATED stock Doris 4.1.3 cluster for the trino-doris P0 probe.
+# Bring up the ISOLATED stock Doris 4.1.4.1 connector validation cluster.
 #
 # Usage:
 #   ./up.sh            # stage runtime fe.conf, up FE+BE, wait for SELECT 1 + BE alive
@@ -33,7 +33,7 @@ cp "${HERE}/fe.conf" "${HERE}/.fe.conf.runtime"
 # the BE die before it can even open its log).
 cp "${HERE}/be.conf" "${HERE}/.be.conf.runtime"
 
-log "Starting stock Doris 4.1.3 FE + BE (project trino-doris-dev)…"
+log "Starting stock Doris 4.1.4.1 FE + BE (project trino-doris-dev)…"
 docker compose -f "${COMPOSE}" up -d
 
 log "Waiting for FE to accept SQL (SELECT 1 on 9030)…"

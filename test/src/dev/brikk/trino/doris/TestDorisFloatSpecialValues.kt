@@ -28,8 +28,8 @@ class TestDorisFloatSpecialValues : AbstractTestQueryFramework() {
     private val expected = listOf(
         Float.POSITIVE_INFINITY, Float.NEGATIVE_INFINITY, Float.NaN,
         3.402823e38f, -3.402823e38f, 0.0f, -0.0f, null, Float.MIN_VALUE,
-        // Stored extrema have reduced wire precision; preserve the existing finite wire values.
-        3.402823e38f, -3.402823e38f,
+        // Doris 4.1.4.1 renders enough digits to round-trip the stored extrema.
+        Float.MAX_VALUE, -Float.MAX_VALUE,
     )
 
     override fun createQueryRunner(): QueryRunner {
@@ -81,11 +81,11 @@ class TestDorisFloatSpecialValues : AbstractTestQueryFramework() {
                             assertThatThrownBy { result.getObject(2) }.isInstanceOf(SQLDataException::class.java)
                         }
                         if (id in 10..11) {
-                            // The stored value is the true extremum: widening before transport
-                            // reveals precision absent from the ordinary FLOAT wire text.
+                            // Both ordinary FLOAT text and widened DOUBLE now preserve the
+                            // stored extremum; 4.1.3's ordinary wire text lost low bits.
                             val stored = if (id == 10) Float.MAX_VALUE else -Float.MAX_VALUE
                             assertThat(floatToIntBits(result.getDouble(3).toFloat())).isEqualTo(floatToIntBits(stored))
-                            assertThat(floatToIntBits(value!!)).isNotEqualTo(floatToIntBits(stored))
+                            assertThat(floatToIntBits(value!!)).isEqualTo(floatToIntBits(stored))
                         }
                     }
                 }

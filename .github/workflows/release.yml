@@ -79,7 +79,7 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
 
-      - name: Bring up Doris 4.1.3 cluster
+      - name: Bring up Doris 4.1.4.1 cluster
         run: ./compose/up.sh
 
       - name: Verify cluster healthy
