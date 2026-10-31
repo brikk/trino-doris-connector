@@ -39,9 +39,9 @@ class TestDorisPushdownEvidenceDrift {
     @Test
     fun testEveryRulePinMatchesTheRegistry() {
         // contains, arrays_overlap, array_position, json_extract_scalar, cardinality,
-        // date-of-datetime, date_trunc, coalesce, nullif, lower, upper, length(->char_length),
+        // date-of-datetime, date_trunc, coalesce, nullif, length(->char_length),
         // starts_with, and the six temporal extracts
-        assertThat(DorisPushdownEvidence.ALL).hasSize(19)
+        assertThat(DorisPushdownEvidence.ALL).hasSize(17)
         for (evidence in DorisPushdownEvidence.ALL) {
             val entry = DorisPushdownEvidence.lookup(evidence.registrySource)
             assertThat(entry).describedAs(evidence.registrySource).isNotNull
@@ -133,6 +133,12 @@ class TestDorisPushdownEvidenceDrift {
             assertThat(DorisPushdownEvidence.ALL.map { it.registrySource })
                 .describedAs("no pushdown rule may exist for '$denied'")
                 .doesNotContain(denied)
+        }
+        // 0.21.0 retains historical identity entries, but 4.1.5 column probes disprove
+        // unrestricted case folding. Registry presence must not re-enable either rule.
+        for (denied in listOf("lower", "upper")) {
+            assertThat(HazardRegistry.lookup("trino", "doris", denied)).isNotNull()
+            assertThat(DorisPushdownEvidence.ALL.map { it.registrySource }).doesNotContain(denied)
         }
     }
 

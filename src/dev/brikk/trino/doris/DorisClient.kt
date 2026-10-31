@@ -136,7 +136,7 @@ class DorisClient @Inject constructor(
      */
     /**
      * Batch-1 SCALAR VALUE tier ([DorisScalarPushdownRules]): typed, composable rewrites of
-     * coalesce/nullif/year..second/lower/upper/length over the closed value-type set.
+     * coalesce/nullif/year..second/length over the closed value-type set.
      * Shared by the predicate bridges below and the projection path.
      */
     private val scalarRewriterHolder = DorisScalarRewriterHolder().also { holder ->
@@ -146,8 +146,8 @@ class DorisClient @Inject constructor(
             .add(RewriteScalarFunctionByName(io.trino.spi.expression.StandardFunctions.COALESCE_FUNCTION_NAME, "coalesce", 2..MAX_SCALAR_ARITY))
             .add(RewriteScalarFunctionByName(io.trino.spi.expression.StandardFunctions.NULLIF_FUNCTION_NAME, "nullif", 2..2))
             .apply { listOf("year", "month", "day", "hour", "minute", "second").forEach { add(RewriteTemporalExtract(it)) } }
-            .add(RewriteCaseFold("lower"))
-            .add(RewriteCaseFold("upper"))
+            // Doris 4.1.5 full/contextual Unicode folding differs from Trino. Keep
+            // both functions and expressions containing them in the engine in every mode.
             .add(RewriteCharLength())
             .build()
     }

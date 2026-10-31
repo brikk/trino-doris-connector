@@ -24,8 +24,10 @@ Compose/CI and native FE/BE version checks lock **Doris 4.1.5** as the golden
 validation baseline, with released metadata **0.21.0**. The
 [golden-stack qualification](dev-docs/REPORT-trino-484-doris-4.1.5-lock.md) records
 **351 passed, one failed, five optional multi-FE skips**, plus successful JSON and
-real-server installation checks. **Not release-ready:** Unicode LOWER/UPPER
-pushdown now gives wrong answers on 4.1.5; R-04/R-05 were also reproduced.
+real-server installation checks. This is the historical pre-fix run. Unicode
+LOWER/UPPER now stay local; R-04/R-05 fixes and final qualification are tracked
+in the [release-safety implementation](dev-docs/REPORT-trino-484-release-safety.md).
+**Not release-ready until those checks finish.**
 The opt-in slow cancellation suite was not run. Historical
 [484 / 4.1.4.1 qualification](dev-docs/REPORT-trino-484-upgrade.md),
 [Trino 483 / Doris upgrade qualification](dev-docs/REPORT-doris-4.1.4.1-upgrade.md)
@@ -69,7 +71,7 @@ Predicates and query shapes the connector pushes into Doris:
 | `date(dt_col)` / `CAST(dt_col AS DATE)` / `date_trunc('unit', dt_col)` | `CAST(col AS DATE)` / `date_trunc(col, 'unit')` | projection position, composes with GROUP BY + aggregates into one remote statement; units second/minute/hour/day/month/quarter/year (`week` excluded: year-0 truncation differs) |
 | `coalesce` / `nullif` (exact types + varchar) | `coalesce(...)` / `nullif(...)` | projection, predicate, GROUP BY keys; compositions push as a unit |
 | `year/month/day/hour/minute/second(dt_col)` | same-named functions | projection/GROUP BY (comparisons already unwrap to ranges upstream) |
-| `lower(x)` / `upper(x)` | `lower(x)` / `upper(x)` | **4.1.5 release blocker:** Unicode mappings differ from Trino; currently pushed, awaiting a guarded/local fallback |
+| `lower(x)` / `upper(x)` | evaluated in Trino | Unicode mappings differ on Doris 4.1.5; local in every mode, including nested expressions |
 | `length(x)` | `char_length(x)` | character count on both engines — never Doris `length()` (bytes) |
 | `starts_with(col, 'p')` | `col LIKE 'p%'` (metacharacters escaped) | index-eligible prefix scan |
 | `NOT` / `AND` / `OR` | composed remote predicates | over value-identical operands (e.g. `array_position` / `cardinality` comparisons) |

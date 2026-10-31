@@ -23,8 +23,8 @@ import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.TestInstance
 
 /**
- * Batch-1 scalar expression pushdown: coalesce/nullif, temporal extraction, lower/upper
- * (mode-gated), length->char_length, starts_with->escaped-LIKE-prefix — plus the pinned
+ * Batch-1 scalar expression pushdown: coalesce/nullif, temporal extraction,
+ * length->char_length, starts_with->escaped-LIKE-prefix; lower/upper stay local — plus the pinned
  * ENGINE DENIALS (CASE/IF never reach the connector at 483). Differentials compare pushed
  * vs `complex_expression_pushdown=false` (projections/predicate expressions local) vs the
  * direct Doris oracle. Probe verdicts: `NOTES-readonly-max-batch1.md`.
@@ -146,19 +146,19 @@ class TestDorisB1ScalarPushdown : AbstractTestQueryFramework() {
             .doesNotContain("year(").contains("`dt6` >=")
     }
 
-    // --- item 4: lower / upper (identity battery-proven; pushed in all value modes) ---
+    // --- item 4: lower / upper (Doris 4.1.5 divergence; local in every mode) ---
 
     @Test
-    fun testCaseFoldPushesWithModeContractRespected() {
+    fun testCaseFoldStaysLocalWithModeContractRespected() {
         for (shape in listOf(
             "SELECT id, lower(v) FROM doris.b1_scalar.t",
             "SELECT id, upper(v) FROM doris.b1_scalar.t",
             "SELECT id FROM doris.b1_scalar.t WHERE lower(v) = 'abc'",
         )) {
-            assertPushedAndIdentical(shape) // default GUARDED
+            assertThat(rows(session, shape)).isEqualTo(rows(local, shape))
         }
         assertThat(remoteSql("SELECT id FROM doris.b1_scalar.t WHERE lower(v) = 'abc'"))
-            .contains("(lower(`v`) = ")
+            .doesNotContain("lower(", "upper(")
         // NULL_ONLY: no string VALUE comparison pushes (mode contract) — projection of the
         // transform alone is a value read and still pushes
         val nullOnly = modeSession("NULL_ONLY")
@@ -169,10 +169,9 @@ class TestDorisB1ScalarPushdown : AbstractTestQueryFramework() {
     }
 
     @Test
-    fun testCaseFoldAgreementBatteryPins() {
-        // Historical identity battery: the 4.1.5 golden recheck now fails this pin.
-        // Keep Trino's expectations unchanged; Doris's new full/contextual mappings
-        // require a production admission fix, not a rewritten equivalence assertion.
+    fun testCaseFoldDivergenceBatteryPins() {
+        // Keep Trino expectations and explicitly pin the independently measured Doris
+        // differences. The corresponding functions are no longer admitted for pushdown.
         val battery = mapOf(
             "upper(U&'\\00B5')" to "\u039C", // micro -> GREEK CAPITAL MU (special mapping, BOTH)
             "upper(U&'\\00DF')" to "ß", // no SS expansion on either engine
@@ -185,11 +184,11 @@ class TestDorisB1ScalarPushdown : AbstractTestQueryFramework() {
             assertThat(computeActual("SELECT $expr").onlyValue).describedAs("Trino $expr").isEqualTo(expected)
         }
         assertThat(DorisTestCluster.queryScalar("SELECT upper('\u00B5')")).isEqualTo("\u039C")
-        assertThat(DorisTestCluster.queryScalar("SELECT upper('ß')")).isEqualTo("ß")
-        assertThat(DorisTestCluster.queryScalar("SELECT lower('ΑΣ')")).isEqualTo("ασ")
+        assertThat(DorisTestCluster.queryScalar("SELECT upper('ß')")).isEqualTo("SS")
+        assertThat(DorisTestCluster.queryScalar("SELECT lower('ΑΣ')")).isEqualTo("ας")
         assertThat(DorisTestCluster.queryScalar("SELECT lower('\u212A')")).isEqualTo("k")
         assertThat(DorisTestCluster.queryScalar("SELECT upper('\u017F')")).isEqualTo("S")
-        assertThat(DorisTestCluster.queryScalar("SELECT lower('\u0130')")).isEqualTo("i")
+        assertThat(DorisTestCluster.queryScalar("SELECT lower('\u0130')")).isEqualTo("i\u0307")
     }
 
     // --- item 5: length -> char_length ---
@@ -281,7 +280,7 @@ class TestDorisB1ScalarPushdown : AbstractTestQueryFramework() {
     fun testScalarOperationsOnSyntheticGroupingKeysStillPush() {
         assertPushedAndIdentical(
             "SELECT coalesce(g, 'absent'), c FROM " +
-                "(SELECT lower(v) AS g, count(*) AS c FROM doris.b1_scalar.t GROUP BY lower(v)) " +
+                "(SELECT coalesce(v, 'absent') AS g, count(*) AS c FROM doris.b1_scalar.t GROUP BY coalesce(v, 'absent')) " +
                 "WHERE length(g) > 2",
         )
     }

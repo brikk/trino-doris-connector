@@ -214,35 +214,6 @@ internal class RewriteTemporalExtract(
 }
 
 /**
- * `lower(x)` / `upper(x)` -> same-named Doris functions — registry-IDENTICAL, and the
- * connector's divergence hunt CONFIRMED it: a battery of Unicode special-mapping
- * adversaries (µ U+00B5 -> Μ, ß unchanged, ΑΣ -> ασ with NO final sigma, Kelvin U+212A ->
- * k, Å U+212B -> å, long s U+017F -> S, DZ digraphs, dotted İ -> i, roman numerals,
- * fullwidth letters) maps IDENTICALLY on both engines — Doris matches Trino's
- * simple+special (java.lang.Character-family) mapping on every probed codepoint, including
- * the classic full-mapping traps where BOTH decline to expand. Identity is claimed on that
- * battery basis (pinned live); enabled in every mode as a value transform.
- */
-internal class RewriteCaseFold(
-    private val name: String,
-) : ConnectorExpressionRule<Call, ParameterizedExpression> {
-    override fun getPattern(): Pattern<Call> = call()
-        .with(functionName().equalTo(FunctionName(name)))
-        .with(argumentCount().equalTo(1))
-
-    override fun rewrite(expression: Call, captures: Captures, context: RewriteContext<ParameterizedExpression>): Optional<ParameterizedExpression> {
-        if (expression.type !is VarcharType || expression.arguments[0].type !is VarcharType) {
-            return Optional.empty()
-        }
-        val child = context.defaultRewrite(expression.arguments[0])
-        if (child.isEmpty) {
-            return Optional.empty()
-        }
-        return Optional.of(ParameterizedExpression("$name(${child.get().expression()})", child.get().parameters()))
-    }
-}
-
-/**
  * Trino `length(varchar)` (CHARACTERS) -> Doris `char_length` (characters) — NOT Doris
  * `length` (BYTES; the registry-DIVERGENT hazard, [DorisPushdownEvidence.LENGTH]). Live
  * pins: emoji = 1, CJK chars = 1 each, NFD combining sequences count per codepoint —

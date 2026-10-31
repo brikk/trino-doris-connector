@@ -287,32 +287,6 @@ internal object DorisPushdownEvidence {
         listOf("year", "month", "day", "hour", "minute", "second").map(::temporalExtract)
 
     /**
-     * Historical registry-IDENTICAL claim, NOT a current 4.1.5 certification. The golden
-     * recheck found upper(ß), lower(ΑΣ), and lower(İ) divergences; release is blocked until
-     * case-fold admission is corrected (REPORT-trino-484-doris-4.1.5-lock.md).
-     * The original divergence hunt below had confirmed the Unicode
-     * special-mapping adversary battery (µ->Μ, ß unchanged, ΑΣ->ασ no-final-sigma,
-     * Kelvin->k, Å->å, ſ->S, DZ digraphs, İ->i, roman numerals, fullwidth) maps IDENTICALLY
-     * on both engines — Doris matches Trino's simple+special mapping on every probed
-     * codepoint. Identity claimed on that battery basis (live agreement pins).
-     */
-    private fun caseFold(name: String, example: String) = Evidence(
-        trinoFunction = "$name(varchar) — BINARY/FULL string modes only",
-        registrySource = name,
-        expectedTarget = name,
-        expectedVerdict = HazardVerdict.IDENTICAL,
-        expectedProvenance = "REPORT-doris-differential-probe-2026-07-13.md#$name",
-        dorisRendering = "$name(x)",
-        treatment = Treatment.DIRECT,
-        hazard = "none found: special-mapping adversary battery agrees on both engines ($example); " +
-            "Doris matches Trino's simple+special mapping on every probed codepoint",
-        liveProof = "TestDorisB1ScalarPushdown",
-    )
-
-    val LOWER = caseFold("lower", "Kelvin/Å/roman-numeral/İ lower-direction adversaries agree")
-    val UPPER = caseFold("upper", "µ->Μ, ſ->S, digraph-titlecase, no-ß-expansion all agree")
-
-    /**
      * The plan's canonical deny — Doris `length` counts BYTES — now carries its live proof:
      * Trino `length` (characters) renders as Doris `char_length` (characters), NEVER as
      * Doris `length`. Emoji=1, CJK=1/char, NFD sequences count per codepoint (live pins).
@@ -352,7 +326,7 @@ internal object DorisPushdownEvidence {
     /** Every rule the connector registers — one Evidence entry per pushdown rule, no more, no fewer. */
     val ALL: List<Evidence> = listOf(
         CONTAINS, ARRAYS_OVERLAP, ARRAY_POSITION, JSON_EXTRACT_SCALAR, CARDINALITY, DATE_OF_DATETIME, DATE_TRUNC,
-        COALESCE, NULLIF, LOWER, UPPER, LENGTH, STARTS_WITH,
+        COALESCE, NULLIF, LENGTH, STARTS_WITH,
     ) + TEMPORAL_EXTRACTS
 
     /**
