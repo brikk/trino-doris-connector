@@ -69,6 +69,7 @@ object DorisFixtures {
             if (provisioned.get()) {
                 return
             }
+            DorisTestCluster.requireGoldenVersion()
             if (fixturesComplete()) {
                 log.info("p0_probe fixtures already complete — skipping provisioning")
             } else {

@@ -17,7 +17,6 @@ import com.google.common.net.InetAddresses
 import io.airlift.slice.Slice
 import io.airlift.slice.Slices.utf8Slice
 import io.airlift.slice.Slices.wrappedBuffer
-import io.trino.plugin.base.util.JsonTypeUtil.jsonParse
 import io.trino.plugin.jdbc.ColumnMapping
 import io.trino.plugin.jdbc.JdbcTypeHandle
 import io.trino.plugin.jdbc.LongReadFunction
@@ -36,6 +35,7 @@ import io.trino.plugin.jdbc.StandardColumnMappings.dateWriteFunctionUsingLocalDa
 import io.trino.plugin.jdbc.StandardColumnMappings.decimalColumnMapping
 import io.trino.plugin.jdbc.StandardColumnMappings.doubleWriteFunction
 import io.trino.plugin.jdbc.StandardColumnMappings.integerColumnMapping
+import io.trino.plugin.jdbc.StandardColumnMappings.jsonColumnMapping
 import io.trino.plugin.jdbc.StandardColumnMappings.longDecimalWriteFunction
 import io.trino.plugin.jdbc.StandardColumnMappings.realWriteFunction
 import io.trino.plugin.jdbc.StandardColumnMappings.smallintColumnMapping
@@ -271,14 +271,9 @@ internal class DorisTypeMapping(typeManager: TypeManager) {
         return ColumnMapping.sliceMapping(varcharType, varcharReadFunction(varcharType), varcharWriteFunction(), VARCHAR_PUSHDOWN)
     }
 
-    /** JSON and VARIANT: server-normalized JSON text, strict jsonParse, no blind pushdown (ledger §A; SR K14). */
+    /** JSON and VARIANT: strict text-to-native-Json parsing, no blind pushdown (ledger §A; SR K14). */
     private fun jsonMapping(): ColumnMapping {
-        return ColumnMapping.sliceMapping(
-            jsonType,
-            { resultSet, columnIndex -> jsonParse(utf8Slice(resultSet.getString(columnIndex))) },
-            varcharWriteFunction(),
-            DISABLE_PUSHDOWN,
-        )
+        return jsonColumnMapping(jsonType, varcharWriteFunction())
     }
 
     /**

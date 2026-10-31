@@ -269,8 +269,9 @@ class TestDorisP1aSmoke : AbstractTestQueryFramework() {
 
     @Test
     fun testJsonAndVariantRoundTrip() {
+        // 484 preserves the Doris wire object's member order instead of sorting keys.
         assertThat(query("SELECT json_format(c_json) FROM doris.p0_probe.scalars WHERE id = 1"))
-                .matches("""VALUES VARCHAR '{"arr":[1,2,3],"k":"v","n":42}'""")
+                .matches("""VALUES VARCHAR '{"k":"v","n":42,"arr":[1,2,3]}'""")
         assertThat(query("SELECT json_format(c_variant) FROM doris.p0_probe.scalars WHERE id = 4"))
                 .matches("""VALUES VARCHAR '{"deep":{"a":[1,{"b":"中文"}]}}'""")
     }

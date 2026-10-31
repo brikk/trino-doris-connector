@@ -23,10 +23,34 @@ import java.util.concurrent.TimeUnit
  * substrate for pushed remote SQL (ledger §E: `fe.audit.log` `Stmt=` is verbatim).
  */
 object DorisTestCluster {
+    const val GOLDEN_NATIVE_VERSION = "doris-4.1.5-release-917b20be838"
     private const val FE_CONTAINER = "trino-doris-fe"
     private const val AUDIT_LOG_PATH = "/opt/apache-doris/fe/log/fe.audit.log"
 
     fun openRootConnection(): Connection = openConnection("root")
+
+    /** Fail before using fixtures if a different FE/BE release is on the validation port. */
+    fun requireGoldenVersion() {
+        openRootConnection().use { connection ->
+            connection.createStatement().use { statement ->
+                for (sql in listOf("SHOW FRONTENDS", "SHOW BACKENDS")) {
+                    statement.executeQuery(sql).use { result ->
+                        requireGoldenNodes(result, sql)
+                    }
+                }
+            }
+        }
+    }
+
+    private fun requireGoldenNodes(result: java.sql.ResultSet, sql: String) {
+        var alive = 0
+        while (result.next()) {
+            val version = result.getString("Version")
+            check(version == GOLDEN_NATIVE_VERSION) { "$sql returned $version; expected $GOLDEN_NATIVE_VERSION" }
+            if (result.getBoolean("Alive")) alive++
+        }
+        check(alive > 0) { "$sql has no alive $GOLDEN_NATIVE_VERSION nodes" }
+    }
 
     fun openConnection(user: String): Connection =
         DriverManager.getConnection("${DorisQueryRunner.JDBC_URL}/?user=$user")

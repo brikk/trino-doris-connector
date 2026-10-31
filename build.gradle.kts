@@ -7,10 +7,10 @@ plugins {
 }
 
 // Default dev version. CI release flow (.github/workflows/release.yml) overrides this with
-// -Pversion=<derived-from-branch> (e.g. release-483-2 -> 483-2). A plain Gradle script
+// -Pversion=<derived-from-branch> (e.g. release-484-2 -> 484-2). A plain Gradle script
 // assignment would clobber the -P property (proven: it runs after Gradle applies project
 // properties), so honor an explicit -Pversion when present and fall back to the dev default.
-version = (findProperty("version") as? String)?.takeIf { it != "unspecified" } ?: "483-0.2.0-SNAPSHOT"
+version = (findProperty("version") as? String)?.takeIf { it != "unspecified" } ?: "484-0.2.0-SNAPSHOT"
 
 // Idiomatic-Kotlin quality gate, same setup as trino-ducklake.
 detekt {
@@ -24,8 +24,9 @@ repositories {
 }
 
 // Dependency + exclusion block per dev-docs/REPORT-plugin-assembly-proof.md §6 (G12 "PROVEN CLEAN").
+// Trino 484 JSON/Guice adaptations: dev-docs/REPORT-trino-484-upgrade.md.
 dependencies {
-    // Trino 483 BOM drives io.trino / io.airlift / jackson / opentelemetry versions.
+    // Trino 484 BOM drives io.trino / io.airlift / jackson / opentelemetry versions.
     implementation(platform(libs.trino.bom))
     testImplementation(platform(libs.trino.bom))
     implementation(enforcedPlatform(libs.kotlin.bom)) {
@@ -37,11 +38,8 @@ dependencies {
     implementation("io.trino:trino-base-jdbc")
     implementation("io.trino:trino-plugin-toolkit")
     implementation("com.google.guava:guava")
-    implementation("com.google.inject:guice") {
-        artifact {
-            classifier = "classes" // assembly-proof §5.3: the non-Guava-shaded variant
-        }
-    }
+    // Trino 484/Airlift use the unshaded Airlift fork, not com.google.inject:guice.
+    implementation("io.airlift:guice")
     implementation("io.airlift:bootstrap")
     implementation("io.airlift:configuration")
     implementation("io.airlift:json")
@@ -49,7 +47,7 @@ dependencies {
     implementation("io.airlift:units")
     implementation("jakarta.validation:jakarta.validation-api")
 
-    // Doris FE speaks the MySQL wire protocol; Connector/J 9.7.0 is BOM-aligned with Trino 483.
+    // Doris FE speaks the MySQL wire protocol; Connector/J 26.7.0 is BOM-aligned with Trino 484.
     // Deviation from assembly-proof §6 (runtimeOnly): DorisClientModule/DorisJdbcConfig reference
     // com.mysql.cj.jdbc.Driver + ConnectionUrlParser at compile time (same as upstream trino-mysql,
     // where the driver is compile scope), so this is `implementation`, not `runtimeOnly`.
@@ -63,6 +61,7 @@ dependencies {
 
     // --- Provided / parent-first SPI set: compile against, never bundle ---
     compileOnly("io.trino:trino-spi")
+    compileOnly("io.trino:trino-json")
     compileOnly("io.airlift:slice")
     compileOnly("com.fasterxml.jackson.core:jackson-annotations")
     compileOnly("io.opentelemetry:opentelemetry-api")
@@ -71,6 +70,7 @@ dependencies {
 
     // --- Test scope: real engine + SPI in-process (mirror trino-ducklake) ---
     testImplementation("io.trino:trino-spi")
+    testImplementation("io.trino:trino-json")
     testImplementation("io.airlift:slice")
     testCompileOnly("com.fasterxml.jackson.core:jackson-annotations")
     testImplementation("io.trino:trino-main")
@@ -91,6 +91,7 @@ dependencies {
 // upstream, but excluding them here is harmless and documents intent.
 configurations.named("runtimeClasspath") {
     exclude(group = "io.trino", module = "trino-spi")
+    exclude(group = "io.trino", module = "trino-json")
     exclude(group = "io.airlift", module = "slice")
     exclude(group = "com.fasterxml.jackson.core", module = "jackson-annotations")
     exclude(group = "io.opentelemetry", module = "opentelemetry-api")
@@ -121,7 +122,7 @@ tasks.test {
     // BE fails ALL queries with MEM_ALLOC_FAILED regardless of its own usage.
     maxHeapSize = "1536m"
 
-    // Same JVM flags the in-process Trino 483 engine needs in trino-ducklake's test task
+    // Same JVM flags the in-process Trino 484 engine needs in trino-ducklake's test task
     // (BlockEncodingSimdSupport requires jdk.incubator.vector, etc.).
     jvmArgs(
         "-XX:+ExitOnOutOfMemoryError",
@@ -143,7 +144,7 @@ val pluginAssemble by tasks.registering(Copy::class) {
 
 // G12 guard mirroring the assembly-proof check: the assembled plugin dir must not bundle any
 // engine-provided (parent-first SPI) jar, must bundle base-jdbc + Connector/J, and must carry
-// exactly one guice jar (the `classes` classifier).
+// exactly one unshaded Airlift guice jar.
 val verifyPluginAssembly by tasks.registering {
     dependsOn(pluginAssemble)
     val pluginDir = layout.buildDirectory.dir("trino-plugin/trino-doris-$version")
@@ -153,6 +154,7 @@ val verifyPluginAssembly by tasks.registering {
 
         val forbiddenModules = listOf(
             "trino-spi",
+            "trino-json",
             "slice",
             "jackson-annotations",
             "opentelemetry-api",
@@ -169,7 +171,7 @@ val verifyPluginAssembly by tasks.registering {
             "trino-plugin-toolkit-",
             "mysql-connector-j-",
             // the pushdown-evidence registry and its serialization runtime (plugin-local)
-            "brikk-sql-metadata-jvm-",
+            "brikk-sql-metadata-jvmMain-",
             "kotlinx-serialization-core-jvm-",
             "kotlinx-serialization-json-jvm-",
         )
@@ -177,8 +179,8 @@ val verifyPluginAssembly by tasks.registering {
         check(missing.isEmpty()) { "expected bundled jars missing (prefixes): $missing; got $jars" }
 
         val guiceJars = jars.filter { it.startsWith("guice-") }
-        check(guiceJars.size == 1 && guiceJars.single().endsWith("-classes.jar")) {
-            "expected exactly one guice jar with the 'classes' classifier, got: $guiceJars"
+        check(guiceJars.size == 1 && Regex("^guice-\\d+\\.jar$").matches(guiceJars.single())) {
+            "expected exactly one unshaded io.airlift:guice jar, got: $guiceJars"
         }
 
         // A real Trino server discovers plugins from the plugin dir via ServiceLoader; the

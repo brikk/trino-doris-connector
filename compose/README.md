@@ -1,6 +1,6 @@
-# trino-doris validation cluster (stock Apache Doris 4.1.4.1)
+# trino-doris validation cluster (stock Apache Doris 4.1.5)
 
-Isolated stock Doris 4.1.4.1 cluster for connector validation. Historical P0
+Isolated stock Doris 4.1.5 cluster for connector validation. Historical P0
 protocol/type evidence remains in `../dev-docs/REPORT-protocol-type-probe-doris-4.1.3.md`.
 
 ## Why a separate cluster
@@ -10,7 +10,7 @@ on network `172.30.80.0/24` and host ports `9030`/`8030`. That FE is not a stock
 release build, so it cannot be used for protocol/type evidence, and it must not be
 disturbed.
 
-This cluster runs the **stock `apache/doris:fe-4.1.4.1` + `be-4.1.4.1` images**, pinned
+This cluster runs the **stock `apache/doris:fe-4.1.5` + `be-4.1.5` images**, pinned
 by multi-architecture release digest in both single-FE and multi-FE Compose files, on a
 dedicated `172.30.81.0/24` network with host ports:
 
@@ -67,7 +67,7 @@ is what CI does).
 
 ## Manual Trino smoke sandbox (`trino/`, user-facing)
 
-`trino/` is a **user-facing manual sandbox**: a single **Trino 483** coordinator with
+`trino/` is a **user-facing manual sandbox**: a single **Trino 484** coordinator with
 OUR `trino-doris` plugin installed and **dynamic catalog management** enabled, so you
 can log into the CLI and add your own Doris server at runtime via
 `CREATE CATALOG ... USING doris WITH (...)`. It is the **first production-shaped load

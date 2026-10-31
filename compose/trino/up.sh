@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Bring up the MANUAL trino-doris smoke sandbox: a single Trino 483 coordinator
+# Bring up the MANUAL trino-doris smoke sandbox: a single Trino 484 coordinator
 # with OUR plugin installed (production-shaped plugin-dir ServiceLoader load) and
 # dynamic catalog management enabled. Then print a copy-paste cheat sheet.
 #
@@ -83,7 +83,7 @@ if ! docker network inspect trino-doris-dev_doris-net >/dev/null 2>&1; then
     exit 1
 fi
 
-log "Starting Trino 483 with the plugin dir mounted read-only…"
+log "Starting Trino 484 with the plugin dir mounted read-only…"
 # --force-recreate: compose does NOT recreate on unchanged config, and the plugin
 # snapshot content changing is invisible to it — without this flag a --rebuild
 # silently leaves the OLD plugin running in the live JVM (bitten 2026-07-19; the

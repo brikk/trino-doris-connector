@@ -25,7 +25,7 @@ import java.security.MessageDigest
 
 /**
  * brikk evidence drift suite (PLAN G3/§6.3, the P2 "registry drift test" exit criterion —
- * unblocked by the released `brikk-sql-metadata-jvm:0.7.0`). No cluster needed.
+ * using the released `brikk-sql-metadata-jvm:0.21.0`). No cluster needed.
  *
  * The connector's pinned tuples in [DorisPushdownEvidence] are the source of truth; this
  * suite proves (a) the released registry still agrees with every pin, (b) the G3
@@ -70,6 +70,14 @@ class TestDorisPushdownEvidenceDrift {
         assertThatThrownBy { DorisPushdownEvidence.verify(wrongTarget) }
             .isInstanceOf(TrinoException::class.java)
             .hasMessageContaining("targetName drifted")
+        val unguardedJson = DorisPushdownEvidence.JSON_EXTRACT_SCALAR.copy(admissionGuard = null)
+        assertThatThrownBy { DorisPushdownEvidence.verify(unguardedJson) }
+            .isInstanceOf(TrinoException::class.java)
+            .hasMessageContaining("closed guard contract")
+        val directJson = DorisPushdownEvidence.JSON_EXTRACT_SCALAR.copy(treatment = DorisPushdownEvidence.Treatment.DIRECT)
+        assertThatThrownBy { DorisPushdownEvidence.verify(directJson) }
+            .isInstanceOf(TrinoException::class.java)
+            .hasMessageContaining("requires guarded treatment")
     }
 
     // --- (b) G3 verdict-gating policy, structurally ---
@@ -84,11 +92,16 @@ class TestDorisPushdownEvidenceDrift {
                 HazardVerdict.IDENTICAL ->
                     assertThat(evidence.treatment).isEqualTo(DorisPushdownEvidence.Treatment.DIRECT)
                 HazardVerdict.CONDITIONALLY_EQUIVALENT -> {
-                    // "requires a connector rule with explicit guards or wrappers" — the guard
-                    // must be declared AND present in the rendering the rule emits.
-                    assertThat(evidence.treatment).isEqualTo(DorisPushdownEvidence.Treatment.GUARDED_WRAPPER)
-                    assertThat(evidence.guard).describedAs(evidence.registrySource).isNotNull()
-                    assertThat(evidence.dorisRendering).contains(evidence.guard)
+                    if (evidence.treatment == DorisPushdownEvidence.Treatment.GUARDED_ADMISSION) {
+                        val contract = requireNotNull(evidence.admissionGuard)
+                        assertThat(contract.registrySource).isEqualTo(evidence.registrySource)
+                        assertThat(contract.target).isEqualTo(evidence.expectedTarget)
+                        assertThatCode { Class.forName("dev.brikk.trino.doris.${contract.unitProof}") }.doesNotThrowAnyException()
+                    } else {
+                        assertThat(evidence.treatment).isEqualTo(DorisPushdownEvidence.Treatment.GUARDED_WRAPPER)
+                        assertThat(evidence.guard).describedAs(evidence.registrySource).isNotNull()
+                        assertThat(evidence.dorisRendering).contains(evidence.guard)
+                    }
                 }
                 HazardVerdict.DIVERGENT -> {
                     // "may be implemented as a separate explicit rewrite after a dedicated
@@ -130,7 +143,7 @@ class TestDorisPushdownEvidenceDrift {
         val jar = File(HazardRegistry::class.java.protectionDomain.codeSource.location.toURI())
         assertThat(jar.name)
             .describedAs("registry must load from the pinned artifact (${DorisPushdownEvidence.ARTIFACT_PIN})")
-            .isEqualTo("brikk-sql-metadata-jvm-0.7.0.jar")
+            .isEqualTo("brikk-sql-metadata-jvmMain-0.21.0.jar")
 
         val digest = MessageDigest.getInstance("SHA-256")
         val sha256 = jar.inputStream().use { input ->

@@ -1,6 +1,6 @@
 # trino-doris MANUAL smoke sandbox
 
-A single **Trino 483** coordinator with **OUR `trino-doris` plugin installed** and
+A single **Trino 484** coordinator with **OUR `trino-doris` plugin installed** and
 **dynamic catalog management** enabled, so you can log into the CLI and add **your
 own** Doris server at runtime with `CREATE CATALOG ... USING doris WITH (...)` — no
 rebuild, no restart.
@@ -103,7 +103,7 @@ wire it after the fact only when needed:
 docker network connect trino-doris-dev_doris-net trino-doris-manual
 ```
 
-## Worked example (real transcript)
+## Historical worked example (Trino 483, real transcript)
 
 Captured against the live local compose Doris cluster (stock Apache Doris 4.1.3,
 FE at `172.30.81.10:9030` on `trino-doris-dev_doris-net`).

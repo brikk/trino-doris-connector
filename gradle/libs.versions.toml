@@ -1,13 +1,13 @@
 [versions]
-kotlin = "2.3.10"
+kotlin = "2.4.10"
 junit = "5.12.2"
 assertj = "3.27.3"
-trino = "483"
-mysql = "9.7.0"
+trino = "484"
+mysql = "26.7.0"
 detekt = "2.0.0-alpha.3"
 # brikk-sql-metadata: the featherweight embeddable hazard registry — a sanctioned PRODUCTION
-# dependency (PLAN G3); first non-SNAPSHOT release, pinned. sha256 asserted in the drift suite.
-brikk-sql-metadata = "0.7.0"
+# dependency (PLAN G3); released 484/4.1.5 JSON evidence, pinned. SHA asserted in the drift suite.
+brikk-sql-metadata = "0.21.0"
 
 [libraries]
 kotlin-bom = { module = "org.jetbrains.kotlin:kotlin-bom", version.ref = "kotlin" }

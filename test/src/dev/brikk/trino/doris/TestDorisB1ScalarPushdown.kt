@@ -170,9 +170,9 @@ class TestDorisB1ScalarPushdown : AbstractTestQueryFramework() {
 
     @Test
     fun testCaseFoldAgreementBatteryPins() {
-        // The divergence hunt came back EMPTY: both engines implement the same
-        // simple+special mapping. Pinned per adversary (Trino via the engine, Doris via
-        // the oracle) so any future engine change on either side fails loud here.
+        // Historical identity battery: the 4.1.5 golden recheck now fails this pin.
+        // Keep Trino's expectations unchanged; Doris's new full/contextual mappings
+        // require a production admission fix, not a rewritten equivalence assertion.
         val battery = mapOf(
             "upper(U&'\\00B5')" to "\u039C", // micro -> GREEK CAPITAL MU (special mapping, BOTH)
             "upper(U&'\\00DF')" to "ß", // no SS expansion on either engine

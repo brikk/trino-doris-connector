@@ -23,9 +23,9 @@ import java.sql.Connection
 import java.sql.DriverManager
 
 /**
- * Query-runner bootstrap against the ALREADY-RUNNING stock Doris 4.1.3 compose cluster
- * (`jvm/trino-doris/compose`, FE MySQL host port 9130, root / no password). Mirrors the
- * DucklakeQueryRunner conventions. If the cluster is down: `jvm/trino-doris/compose/up.sh`.
+ * Query-runner bootstrap against the ALREADY-RUNNING digest-pinned Doris 4.1.5 compose
+ * cluster (FE MySQL host port 9130, root / no password). Native FE/BE versions are checked
+ * before using the base fixtures. If the cluster is down: `./compose/up.sh`.
  */
 object DorisQueryRunner {
     const val CATALOG = "doris"

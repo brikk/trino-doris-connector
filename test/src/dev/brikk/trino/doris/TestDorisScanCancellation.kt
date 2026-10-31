@@ -58,7 +58,7 @@ import java.util.concurrent.TimeUnit.SECONDS
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 
-/** Trino 483 page-source lifecycle with controlled JDBC races and a live execute-phase proof. */
+/** Trino 484 page-source lifecycle with controlled JDBC races and a live execute-phase proof. */
 class TestDorisScanCancellation {
     @Test
     fun testLivePageSourceCloseCancelsBeforeFirstResult() {

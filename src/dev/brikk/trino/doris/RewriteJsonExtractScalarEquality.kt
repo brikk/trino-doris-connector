@@ -40,7 +40,7 @@ import java.util.Optional
 /**
  * `json_extract_scalar(json_col, '$.path') = 'literal'` (either orientation) ->
  * `(json_unquote(json_extract(`col`, ?)) = ?)` — registry evidence in
- * [DorisPushdownEvidence.JSON_EXTRACT_SCALAR] (verdict IDENTICAL for the scalar rendering),
+ * [DorisPushdownEvidence.JSON_EXTRACT_SCALAR] (verdict CONDITIONALLY_EQUIVALENT),
  * scope-restricted by the connector's own P5 live probe (`NOTES-p5-batch.md`) to the shapes
  * where the two engines are proven cell-identical THROUGH the connector:
  *
@@ -55,8 +55,10 @@ import java.util.Optional
  * - The LITERAL must not start with `{`/`[` (could equal Doris's non-scalar text where
  *   Trino sees NULL — over-return), must not look like a JSON number (both engines
  *   canonicalize number text INDEPENDENTLY and diverge: Doris `1e+30`/`1.5e-07`/`-0` vs
- *   Trino `1E+30`/`1.5E-7`/`0` — under-return through a pushed filter), and must not
- *   contain NUL (P4 policy). `'true'`/`'false'`/`'null'` are proven identical and push.
+ *   Trino 484 `1.0E30`/`1.5E-7`/`0` — under-return through a pushed filter), and must not
+ *   contain NUL (P4 policy). Non-finite spellings (`inf`, `NaN`, etc.) stay local too:
+ *   Doris can persist exponent overflow as invalid JSON and extract the text `inf`.
+ *   `'true'`/`'false'`/`'null'` are proven identical and push.
  *
  * JSON-null-at-path and missing-key both yield SQL NULL on BOTH engines (live-proven —
  * Doris `json_unquote(json_extract(...))` returns SQL NULL for JSON null, unlike MySQL's
@@ -131,8 +133,8 @@ internal class RewriteJsonExtractScalarEquality(
         if (text.startsWith("{") || text.startsWith("[")) {
             return null // could equal Doris's non-scalar JSON text where Trino sees NULL
         }
-        if (NUMERIC_LOOKING.matches(text)) {
-            return null // number canonicalization diverges (1e+30 vs 1E+30, -0 vs 0, ...)
+        if (NUMERIC_LOOKING.matches(text) || NON_FINITE_LOOKING.matches(text)) {
+            return null // number canonicalization diverges (1e+30 vs 1.0E30, -0 vs 0, ...)
         }
         return slice
     }
@@ -145,6 +147,8 @@ internal class RewriteJsonExtractScalarEquality(
 
         /** Broad "could be a number rendering on either engine" test — anything matching stays local. */
         private val NUMERIC_LOOKING = Regex("""[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?""")
+
+        private val NON_FINITE_LOOKING = Regex("""[+-]?(inf(inity)?|nan)""", RegexOption.IGNORE_CASE)
 
         private val VARCHAR_TYPE_HANDLE = DorisTypeMapping.toTypeHandle("string")
 

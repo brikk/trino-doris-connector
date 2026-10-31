@@ -21,9 +21,9 @@ import io.trino.spi.TrinoException
 
 /**
  * Evidence bridge for every pushdown rule (PLAN §6.3 contract, G3 verdict-gating), backed by
- * the RELEASED `dev.brikk.house:brikk-sql-metadata-jvm:0.7.0` hazard registry (the P2 exit
- * criterion "mapping API released and pinned" is CLOSED — 0.7.0 carries the
- * direction-oriented `sourceName`/`targetName` fields this connector requested).
+ * the RELEASED `dev.brikk.house:brikk-sql-metadata-jvm:0.21.0` hazard registry, including
+ * the directly paired Trino 484 / Doris 4.1.5 JSON evidence. The direction-oriented
+ * `sourceName`/`targetName` fields originally requested by this connector are retained.
  *
  * Trust model: the tuples pinned HERE are the source of truth the connector was proven
  * against; [HazardRegistry] is CROSS-CHECKED against them at connector construction
@@ -45,8 +45,17 @@ internal object DorisPushdownEvidence {
         /** CONDITIONALLY_EQUIVALENT: rule must carry an explicit guard/wrapper ([Evidence.guard]). */
         GUARDED_WRAPPER,
 
+        /** CONDITIONALLY_EQUIVALENT: reject unsafe input shapes before rendering SQL. */
+        GUARDED_ADMISSION,
+
         /** DIVERGENT: connector-original rewrite, requires a dedicated live test ([Evidence.liveProof]). */
         CONNECTOR_ORIGINAL_REWRITE,
+    }
+
+    /** Closed admission contracts, backed by executable rule tests rather than SQL substrings. */
+    internal enum class AdmissionGuard(val registrySource: String, val target: String, val unitProof: String) {
+        /** Native JSON, top-level equality, dotted path, non-numeric/non-container/NUL-free literal. */
+        JSON_SCALAR_EQUALITY("json_extract_scalar", "json_unquote", "TestDorisJsonExtractScalarEquality"),
     }
 
     internal data class Evidence(
@@ -70,10 +79,12 @@ internal object DorisPushdownEvidence {
         val hazard: String,
         /** The live proof (test class) backing the rule's safety argument. */
         val liveProof: String,
+        /** For GUARDED_ADMISSION: the closed contract exercised by its unit and live proofs. */
+        val admissionGuard: AdmissionGuard? = null,
     )
 
-    const val ARTIFACT_PIN = "dev.brikk.house:brikk-sql-metadata-jvm:0.7.0"
-    const val ARTIFACT_SHA256 = "693575c17a041a0370b44a233969350f95d27c9bb47b14ebbbd1c80d2d3b1de8"
+    const val ARTIFACT_PIN = "dev.brikk.house:brikk-sql-metadata-jvm:0.21.0"
+    const val ARTIFACT_SHA256 = "506ea02a67bbf983122a978fb3fb0657ff6d606a801820b0e247aa509f5678b2"
 
     private const val DIFFERENTIAL_PROBE_PROVENANCE = "REPORT-doris-differential-probe-2026-07-13.md#batch7-array"
 
@@ -141,14 +152,12 @@ internal object DorisPushdownEvidence {
     )
 
     /**
-     * Registry-IDENTICAL for the scalar rendering (`json_unquote(json_extract(...))` matches
-     * Trino's unquoted scalar text — the 0.7.0 entry documents the generator fix that
-     * introduced the wrap). The connector's own P5 probe found two cells the registry tuple
-     * does not cover, both handled by rule-side SCOPE guards (not rendering changes, so the
-     * treatment stays DIRECT, same policy as ARRAY_POSITION's never-pushed NULL needles):
+     * Registry-CONDITIONALLY_EQUIVALENT after the 484/4.1.5 paired refresh. The unquote
+     * wrapper alone is NOT a semantic guard. The rule's explicit admission contract rejects
+     * unsafe paths/literals and keeps this rewrite in the top-level predicate tier only:
      * non-scalar path values (Trino NULL vs Doris JSON text -> literals starting `{`/`[`
      * never push; `<>`/IS-NULL forms never push) and independent number canonicalization
-     * (Doris `1e+30`/`-0` vs Trino `1E+30`/`0` -> numeric-looking literals never push).
+     * (Doris `1e+30`/`-0` vs Trino 484 `1.0E30`/`0` -> numeric-looking literals never push).
      * R-02 additionally restricts paths to dotted fields: subscript traversal differs on
      * scalar/object intermediates, regardless of the output-literal guards.
      */
@@ -156,16 +165,16 @@ internal object DorisPushdownEvidence {
         trinoFunction = "json_extract_scalar(json, varchar-path) = varchar-literal",
         registrySource = "json_extract_scalar",
         expectedTarget = "json_unquote",
-        expectedVerdict = HazardVerdict.IDENTICAL,
-        expectedProvenance = "REPORT-doris-differential-probe-2026-07-13.md#batch12-bucketb-trino; " +
-            "generator fixed in BUGS-doris-generator-mappings-2026-07-13",
+        expectedVerdict = HazardVerdict.CONDITIONALLY_EQUIVALENT,
+        expectedProvenance = "trino-484-doris-4.1.5-json.md#path-semantics",
         dorisRendering = "(json_unquote(json_extract(`col`, ?)) = ?)  -- equality only, guarded literal/path shapes",
-        treatment = Treatment.DIRECT,
+        treatment = Treatment.GUARDED_ADMISSION,
         hazard = "non-scalar path values: Trino NULL vs Doris JSON text ('{...}'/'[...]') -> " +
             "equality-only with {/[-prefixed literals excluded; number text canonicalization " +
-            "diverges (1e+30 vs 1E+30, -0 vs 0) -> numeric-looking literals excluded; " +
+            "diverges (1e+30 vs 1.0E30, -0 vs 0) -> numeric/non-finite-looking literals excluded; " +
             "subscripts diverge on non-array intermediates -> dotted-field paths only",
         liveProof = "TestDorisP5Batch",
+        admissionGuard = AdmissionGuard.JSON_SCALAR_EQUALITY,
     )
 
     /**
@@ -278,7 +287,10 @@ internal object DorisPushdownEvidence {
         listOf("year", "month", "day", "hour", "minute", "second").map(::temporalExtract)
 
     /**
-     * Registry-IDENTICAL, and the connector's divergence hunt CONFIRMED it: the Unicode
+     * Historical registry-IDENTICAL claim, NOT a current 4.1.5 certification. The golden
+     * recheck found upper(ß), lower(ΑΣ), and lower(İ) divergences; release is blocked until
+     * case-fold admission is corrected (REPORT-trino-484-doris-4.1.5-lock.md).
+     * The original divergence hunt below had confirmed the Unicode
      * special-mapping adversary battery (µ->Μ, ß unchanged, ΑΣ->ασ no-final-sigma,
      * Kelvin->k, Å->å, ſ->S, DZ digraphs, İ->i, roman numerals, fullwidth) maps IDENTICALLY
      * on both engines — Doris matches Trino's simple+special mapping on every probed
@@ -371,6 +383,26 @@ internal object DorisPushdownEvidence {
         // structural self-check: the rule's rendering really uses the pinned target function
         if (!evidence.dorisRendering.contains(evidence.expectedTarget)) {
             fail(evidence, "rendering '${evidence.dorisRendering}' does not use pinned target '${evidence.expectedTarget}'")
+        }
+        verifyConditionalTreatment(evidence)
+    }
+
+    private fun verifyConditionalTreatment(evidence: Evidence) {
+        if (evidence.expectedVerdict == HazardVerdict.CONDITIONALLY_EQUIVALENT) {
+            when (evidence.treatment) {
+                Treatment.GUARDED_WRAPPER -> {
+                    if (evidence.guard.isNullOrBlank() || !evidence.dorisRendering.contains(evidence.guard)) {
+                        fail(evidence, "conditional rendering must carry its declared guard/wrapper")
+                    }
+                }
+                Treatment.GUARDED_ADMISSION -> {
+                    val contract = evidence.admissionGuard
+                    if (contract == null || contract.registrySource != evidence.registrySource || contract.target != evidence.expectedTarget) {
+                        fail(evidence, "conditional admission must name its matching closed guard contract")
+                    }
+                }
+                else -> fail(evidence, "conditional evidence requires guarded treatment")
+            }
         }
     }
 

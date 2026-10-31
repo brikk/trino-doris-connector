@@ -18,13 +18,18 @@ fixes all of that:
 - **Read-only by construction**: writes, DDL, and procedure escape hatches are denied inside
   the connector before any SQL reaches Doris.
 
-Built and tested against **Apache Doris 4.1.4.1**, **Trino 483**, and MySQL Connector/J 9.7.0.
+This development branch targets **Apache Doris 4.1.5**, **Trino 484**, and MySQL Connector/J 26.7.0.
 
-Compose/CI use digest-pinned final release images. The
-[upgrade qualification](dev-docs/REPORT-doris-4.1.4.1-upgrade.md) records **345/346**
-tests passing in the last full run: the known, unused trace-ID cancellation pin
-timed out and passed in isolation. Production QueryId cancellation and the real-server
-smoke passed. Historical 4.1.3 probe evidence is preserved.
+Compose/CI and native FE/BE version checks lock **Doris 4.1.5** as the golden
+validation baseline, with released metadata **0.21.0**. The
+[golden-stack qualification](dev-docs/REPORT-trino-484-doris-4.1.5-lock.md) records
+**351 passed, one failed, five optional multi-FE skips**, plus successful JSON and
+real-server installation checks. **Not release-ready:** Unicode LOWER/UPPER
+pushdown now gives wrong answers on 4.1.5; R-04/R-05 were also reproduced.
+The opt-in slow cancellation suite was not run. Historical
+[484 / 4.1.4.1 qualification](dev-docs/REPORT-trino-484-upgrade.md),
+[Trino 483 / Doris upgrade qualification](dev-docs/REPORT-doris-4.1.4.1-upgrade.md)
+and historical 4.1.3 probe evidence are preserved.
 
 ## Features
 
@@ -64,7 +69,7 @@ Predicates and query shapes the connector pushes into Doris:
 | `date(dt_col)` / `CAST(dt_col AS DATE)` / `date_trunc('unit', dt_col)` | `CAST(col AS DATE)` / `date_trunc(col, 'unit')` | projection position, composes with GROUP BY + aggregates into one remote statement; units second/minute/hour/day/month/quarter/year (`week` excluded: year-0 truncation differs) |
 | `coalesce` / `nullif` (exact types + varchar) | `coalesce(...)` / `nullif(...)` | projection, predicate, GROUP BY keys; compositions push as a unit |
 | `year/month/day/hour/minute/second(dt_col)` | same-named functions | projection/GROUP BY (comparisons already unwrap to ranges upstream) |
-| `lower(x)` / `upper(x)` | `lower(x)` / `upper(x)` | case mapping proven identical across a Unicode adversary battery |
+| `lower(x)` / `upper(x)` | `lower(x)` / `upper(x)` | **4.1.5 release blocker:** Unicode mappings differ from Trino; currently pushed, awaiting a guarded/local fallback |
 | `length(x)` | `char_length(x)` | character count on both engines — never Doris `length()` (bytes) |
 | `starts_with(col, 'p')` | `col LIKE 'p%'` (metacharacters escaped) | index-eligible prefix scan |
 | `NOT` / `AND` / `OR` | composed remote predicates | over value-identical operands (e.g. `array_position` / `cardinality` comparisons) |
@@ -131,7 +136,7 @@ aggregates (`count`/`min`/`max`/`sum(DECIMAL≤18)`/`count DISTINCT`/`min_by`/`m
 `any_value`), GROUP BY / DISTINCT / HAVING / LIMIT / TopN, and opt-in cost-aware JOINs.
 Dynamic filters from local joins also reach the remote scans.
 
-Engine-limited at Trino 483 (cannot reach any connector): `CASE`/`IF` expressions and
+Engine-limited at Trino 484 (cannot reach any connector): `CASE`/`IF` expressions and
 conditional aggregation (`count_if`, `FILTER (WHERE ...)`, `sum(CASE ...)`) — these stay in
 Trino by engine design, over a pushed scan. Deliberately not pushed: `avg` (Doris semantics
 diverge — write `sum(x)/count(x)`, which pushes and stays exact), FLOAT/DOUBLE
@@ -180,7 +185,7 @@ Prerequisites: JDK 25 (via [mise](https://mise.jdx.dev)) and Docker (for the liv
 
 ```bash
 mise install        # JDK 25, from ./mise.toml
-./compose/up.sh     # local Doris 4.1.4.1 cluster the tests run against
+./compose/up.sh     # local Doris 4.1.5 cluster the tests run against
                     # (FE MySQL on 127.0.0.1:9130, HTTP on 8130, root / no password)
 ./gradlew build     # compile + lint + full test suite + plugin assembly + assembly verification
 ```
@@ -196,7 +201,8 @@ The build assembles a standard Trino plugin directory (a directory of jars):
 cp -r build/trino-plugin/trino-doris-<version> "$TRINO_HOME/plugin/"
 ```
 
-Restart the coordinator and workers after copying.
+Restart the coordinator and workers after copying. Build and deploy against the same
+Trino version; a 483 plugin is not a 484-compatible release.
 
 ### Releases (prebuilt plugin)
 
@@ -253,7 +259,7 @@ GRANT SELECT_PRIV ON *.* TO 'trino_ro';
 
 ## Try it: manual Trino smoke sandbox
 
-[`compose/trino/`](./compose/trino) is a one-command **manual sandbox** — a single Trino 483
+[`compose/trino/`](./compose/trino) is a one-command **manual sandbox** — a single Trino 484
 coordinator with this plugin installed and dynamic catalog management enabled, so you can log
 in and add your own Doris server at runtime:
 
