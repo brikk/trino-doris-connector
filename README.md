@@ -75,7 +75,7 @@ Predicates and query shapes the connector pushes into Doris:
 | `length(x)` | `char_length(x)` | character count on both engines — never Doris `length()` (bytes) |
 | `starts_with(col, 'p')` | `col LIKE 'p%'` (metacharacters escaped) | index-eligible prefix scan |
 | `NOT` / `AND` / `OR` | composed remote predicates | over value-identical operands (e.g. `array_position` / `cardinality` comparisons) |
-| `JOIN` (opt-in: `join-pushdown.enabled=true`) | `INNER/LEFT/RIGHT JOIN` as one remote statement | **off by default**; equality, `IS NOT DISTINCT FROM` (Doris `<=>`), and range conditions on non-text exact keys (numerics, decimal incl. LARGEINT, date, datetime, boolean); FULL OUTER and text/float keys stay in Trino; `join-pushdown.strategy=AUTOMATIC` (default) decides by table statistics, `EAGER` always pushes |
+| `JOIN` (opt-in: `join-pushdown.enabled=true`) | eligible `INNER JOIN` as one remote statement | **off by default**; non-text exact keys; LEFT/RIGHT/FULL joins stay local to protect outer-join nullability; `AUTOMATIC` decides by statistics, `EAGER` bypasses only the cost gate, not safety restrictions |
 | `LIMIT n` | `LIMIT n` | |
 | `ORDER BY ... LIMIT n` (TopN) | `ORDER BY ... NULLS FIRST/LAST LIMIT n` | non-text sort keys, incl. IPADDRESS (byte-order identical) (plus native VARCHAR/STRING keys in `BINARY`/`FULL` string modes); all four NULL orderings render natively |
 | String predicates and `LIKE` | mode-dependent | see [String pushdown modes](#string-pushdown-modes) |

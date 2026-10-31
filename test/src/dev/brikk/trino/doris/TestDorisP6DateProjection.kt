@@ -97,7 +97,7 @@ class TestDorisP6DateProjection : AbstractTestQueryFramework() {
             .setSystemProperty("allow_pushdown_into_connectors", "false")
             .build()
         val sql = "SELECT date(l.dt_6), date_trunc('day', r.dt_6) " +
-            "FROM doris.p6_dates.renamed l LEFT JOIN doris.p6_dates.renamed r ON l.id = r.id"
+            "FROM doris.p6_dates.renamed l JOIN doris.p6_dates.renamed r ON l.id = r.id"
         assertThat(query(eager, sql)).isFullyPushedDown()
         assertThat(rows(eager, sql)).isEqualTo(rows(unpushed, sql))
         val execution = getDistributedQueryRunner().executeWithPlan(eager, sql)
@@ -105,7 +105,7 @@ class TestDorisP6DateProjection : AbstractTestQueryFramework() {
         val remote = DorisTestCluster.awaitAuditLogStatements(marker, 60_000)
             .single { it.contains("p6_dates") }.substringAfter("|Stmt=")
         // Join outputs retain the physical name with a generated suffix, not the planner symbol "dt".
-        assertThat(remote).contains("LEFT JOIN")
+        assertThat(remote).contains("INNER JOIN")
             .containsPattern("CAST\\(`dt_6_\\d+` AS DATE\\)")
             .containsPattern("date_trunc\\(`dt_6_\\d+`, 'day'\\)")
     }

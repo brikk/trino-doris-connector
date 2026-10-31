@@ -21,7 +21,7 @@ import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.TestInstance
 
 /**
- * P5 cost-aware join pushdown (PLAN §6.5): OFF by default; INNER/LEFT/RIGHT on the exact
+ * P5 cost-aware join pushdown (PLAN §6.5): OFF by default; INNER on the exact
  * non-text key set; `IS NOT DISTINCT FROM` -> `<=>` (truth table live-proven); FULL OUTER
  * and text/approximate keys excluded. Differentials run pushed (EAGER) vs local (default
  * OFF) over NULL keys, duplicate keys, and empty sides — the local plan is the ground
@@ -73,7 +73,10 @@ class TestDorisP5JoinPushdown : AbstractTestQueryFramework() {
     fun testInnerLeftRightEqualityDifferentials() {
         for (joinKind in listOf("JOIN", "LEFT JOIN", "RIGHT JOIN")) {
             val sql = "SELECT l.lv, r.rv FROM doris.p5_join.l l $joinKind doris.p5_join.r r ON l.k = r.k"
-            assertPushedAndIdentical(sql)
+            if (joinKind == "JOIN") assertPushedAndIdentical(sql) else {
+                assertThat(query(eager, sql)).joinIsNotFullyPushedDown()
+                assertThat(rows(eager, sql)).isEqualTo(rows(session, sql))
+            }
         }
         // exact semantics pins: NULL keys never match; duplicates multiply (2x2)
         val inner = rows(eager, "SELECT l.lv, r.rv FROM doris.p5_join.l l JOIN doris.p5_join.r r ON l.k = r.k")
@@ -86,26 +89,28 @@ class TestDorisP5JoinPushdown : AbstractTestQueryFramework() {
     }
 
     @Test
-    fun testIsNotDistinctFromPushesViaNullSafeEquals() {
+    fun testOuterNullSafeJoinStaysLocal() {
         // Doris rejects IS NOT DISTINCT FROM syntax; the QueryBuilder renders <=> —
         // truth-table proven identical (NULL<=>NULL=1, NULL<=>1=0). LEFT JOIN shape:
         // for INNER joins the engine plans IS NOT DISTINCT FROM as cross-join + filter,
         // which never reaches applyJoin (pinned by the engine, not a connector choice).
         val sql = "SELECT l.lv, r.rv FROM doris.p5_join.l l LEFT JOIN doris.p5_join.r r ON l.k IS NOT DISTINCT FROM r.k"
-        assertPushedAndIdentical(sql)
+        assertThat(query(eager, sql)).joinIsNotFullyPushedDown()
+        assertThat(rows(eager, sql)).isEqualTo(rows(session, sql))
         // the NULL keys DO match each other under this operator
         assertThat(rows(eager, sql)).anySatisfy { assertThat(it).contains("lnull").contains("rnull") }
-        assertThat(remoteStatements(eager, sql).single()).contains("<=>")
+        assertThat(remoteStatements(eager, sql)).allSatisfy { assertThat(it).doesNotContain("JOIN", "<=>") }
     }
 
     @Test
-    fun testNonEquiConditionsPush() {
+    fun testOuterNonEquiConditionsStayLocal() {
         // range/inequality operators render natively; NULL keys drop on both engines
         // (probed); LEFT JOIN keeps the condition in the join (INNER non-equi is planned
         // as cross+filter by the engine and never reaches applyJoin)
         for (op in listOf("<", "<=", ">", ">=", "<>")) {
             val sql = "SELECT l.lv, r.rv FROM doris.p5_join.l l LEFT JOIN doris.p5_join.r r ON l.k $op r.k"
-            assertPushedAndIdentical(sql)
+            assertThat(query(eager, sql)).joinIsNotFullyPushedDown()
+            assertThat(rows(eager, sql)).isEqualTo(rows(session, sql))
         }
     }
 
@@ -120,9 +125,11 @@ class TestDorisP5JoinPushdown : AbstractTestQueryFramework() {
     @Test
     fun testEmptySideDifferentials() {
         for (joinKind in listOf("JOIN", "LEFT JOIN", "RIGHT JOIN")) {
-            assertPushedAndIdentical(
-                "SELECT l.lv, e.ev FROM doris.p5_join.l l $joinKind doris.p5_join.e e ON l.k = e.k",
-            )
+            val sql = "SELECT l.lv, e.ev FROM doris.p5_join.l l $joinKind doris.p5_join.e e ON l.k = e.k"
+            if (joinKind == "JOIN") assertPushedAndIdentical(sql) else {
+                assertThat(query(eager, sql)).joinIsNotFullyPushedDown()
+                assertThat(rows(eager, sql)).isEqualTo(rows(session, sql))
+            }
         }
     }
 

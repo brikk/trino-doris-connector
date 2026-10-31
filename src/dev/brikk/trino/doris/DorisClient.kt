@@ -251,8 +251,8 @@ class DorisClient @Inject constructor(
      * P5 cost-aware join pushdown (PLAN §6.5; OFF by default via `join-pushdown.enabled`).
      * Joins arrive on the LEGACY path only (complex join pushdown is force-disabled in
      * [DorisClientModule] — no variable-comparison rewrite rules exist). Shape gates:
-     * - INNER / LEFT / RIGHT only; FULL OUTER excluded (unproven against Doris's nereids
-     *   planner for the subquery-join shape — conservative v1 per plan).
+     * - INNER only. Outer joins stay local until effective output nullability can be
+     *   propagated; retaining base NOT NULL flags makes min_by/max_by unsafe (R-04).
      * - AUTOMATIC strategy consults [JdbcJoinPushdownUtil.shouldPushDownJoinCostAware],
      *   which feeds on the engine estimates derived from [getTableStatistics] — tables
      *   without statistics yield unknown sizes and stay LOCAL under AUTOMATIC (fail-soft
@@ -269,7 +269,7 @@ class DorisClient @Inject constructor(
         leftAssignments: Map<JdbcColumnHandle, String>,
         statistics: JoinStatistics,
     ): Optional<PreparedQuery> {
-        if (joinType == JoinType.FULL_OUTER) {
+        if (joinType != JoinType.INNER) {
             return Optional.empty()
         }
         return JdbcJoinPushdownUtil.implementJoinCostAware(session, joinType, leftSource, rightSource, statistics) {

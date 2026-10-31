@@ -32,9 +32,31 @@ JAVA_HOME=~/.local/share/mise/installs/java/25 ./gradlew test \
 Log: `/tmp/opencode/trino-484-step1-rerun.log`; XML:
 `/tmp/opencode/trino-484-safety/step1-xml/`.
 
+## Step 2 — conservative outer-join restriction
+
+The legacy join admission gate now accepts only INNER joins, even under EAGER.
+The complex join path remains disabled. LEFT/RIGHT/FULL joins stay in Trino,
+so an outer join cannot propagate a falsely non-null synthetic payload into a
+pushed min_by/max_by. Base-table and matched INNER JOIN aggregates remain fully
+pushed. This is a conservative restriction, not a claim to have implemented
+general effective-nullability propagation.
+
+Focused validation: **24 tests passed, zero failures/errors/skips**, plus detekt:
+R-04's four counterexamples now return NULL, all supported-key INNER join/cost/
+composition controls pass, outer/null-safe/non-equi/empty-side cases stay local,
+and date projection identity still works through a pushed INNER join.
+
+```sh
+JAVA_HOME=~/.local/share/mise/installs/java/25 ./gradlew test \
+  --tests '*TestDorisOuterJoinSafety' --tests '*TestDorisP5JoinPushdown' \
+  --tests '*TestDorisP6DateProjection' detekt --no-daemon --console=plain
+```
+
+Log: `/tmp/opencode/trino-484-step2.log`; XML:
+`/tmp/opencode/trino-484-safety/step2-xml/`.
+
 ## Remaining approved work
 
-2. Decline LEFT/RIGHT joins, preserving eligible INNER joins/base aggregates.
 3. Bind cancellation to the scan's physical statement/session, not a busy HA
    connection proxy; verify real-driver failure/cleanup/failover schedules.
 4. Full golden-stack, cancellation/multi-FE, and assembled-plugin qualification.
