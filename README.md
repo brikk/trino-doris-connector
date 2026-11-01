@@ -28,6 +28,10 @@ in a separate replay**, plus eleven resolution probes and an extracted-plugin
 server smoke. Unicode case folding and outer joins stay local; HA read attempts
 are physically pinned. These are staged results, not one no-skip combined run.
 No release has been published; other pre-existing review findings remain separate.
+The [subsequent release-hardening batch](dev-docs/REPORT-trino-484-release-hardening.md)
+also passed a clean single-FE run (370 passed, five overlay skips), tooling/assembly
+guards and current-plugin server smoke. The [remaining runtime/configuration
+triage](dev-docs/TRIAGE-trino-484-remaining-review.md) keeps six R findings open.
 Historical [pre-fix 4.1.5 measurements](dev-docs/REPORT-trino-484-doris-4.1.5-lock.md),
 [484 / 4.1.4.1 qualification](dev-docs/REPORT-trino-484-upgrade.md),
 [Trino 483 / Doris upgrade qualification](dev-docs/REPORT-doris-4.1.4.1-upgrade.md)

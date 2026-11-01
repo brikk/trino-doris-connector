@@ -5,6 +5,16 @@ after [safety qualification](REPORT-trino-484-release-safety.md), not a release
 publication decision. Trino 484 / Doris 4.1.5-release-917b20be838 / Connector/J
 26.7.0 / metadata 0.21.0 / Kotlin 2.4.10 / JDK 25 remain fixed.
 
+**Approved hardening batch completed and qualified.** R-06/R-07, R-12–R-14
+and R-16 are resolved. The clean single-FE build passed **370 tests** with slow
+cancellation enabled, zero failures/errors and five overlay-only skips. Tooling,
+actual Gradle guards, archives and current-plugin server smoke also passed.
+The six remaining R findings are triaged and stay open; no release version was
+chosen, tag created, release branch pushed or GitHub release published.
+
+Implementation milestones pushed to `trino-484`: `15399fe` (R-06/R-07),
+`22b1fae` (R-12–R-14), `d57b33b` (R-16 / remaining triage).
+
 ## Milestone 1 — R-06 / R-07
 
 All nine published ports across single-FE, three-FE and manual Trino Compose
@@ -111,11 +121,53 @@ permission to upgrade or re-enable either rule.
 
 ## Final qualification
 
-A clean single-FE build with slow cancellation enabled is running. This section
-will record its completed result separately from the focused/tooling/diagnostic
-checks. The optional three-FE overlay is not being run simultaneously; its
-port bindings are covered by rendering and the prior safety qualification stays
-historical evidence, not a new overlay replay.
+A clean single-FE build with **slow cancellation enabled** completed successfully
+in **16m04s**: **375 discovered, 370 passed, zero failures/errors, five skips**
+across 50 suites. Compilation, detekt, resolved Trino compatibility and exact
+79-JAR assembly verification passed. Existing deprecation warnings remain.
+The R-16 regression and all 14 string tests also passed in this full run.
+
+All five skips belong to `TestDorisMultiFeFailover` (four integration cases plus
+its framework naming check). The overlay was **not replayed in this batch**;
+its port bindings are covered by rendering, and prior safety qualification is
+historical evidence, not a new no-skip or cross-FE result. The initial quota
+failure and corrected test assumption above are not counted as green runs.
+
+| Check | Completed result |
+|---|---|
+| Full clean single-FE build, slow cancellation ON | 370 passed / 5 overlay skips / 0 failed or errors |
+| Focused string suite + detekt | 14 passed / 0 skipped |
+| Tooling contracts | 4 passed (including six rendered Compose configurations) |
+| Actual Gradle guard regressions | 3 passed, covering 13 Gradle invocations |
+| Open-finding diagnostic replay | 5 passed, confirming defects rather than closing them |
+| Real current-plugin Trino 484 smoke | 9 SQL operations passed |
+| ZIP/TAR checksum and extraction | Both pass; 79 byte-identical JARs each |
+
+Full-run log/XML and skipped-case inventory are retained under
+`~/.cache/trino-doris-484-hardening/`: `full-single-fe.log`,
+`full-single-fe-xml/`, and `full-single-fe-summary.json`. Exact local command:
+
+```sh
+JAVA_HOME=~/.local/share/mise/installs/java/25 \
+JAVA_TOOL_OPTIONS="-Djava.io.tmpdir=$HOME/.cache/trino-doris-484-hardening/tmp" \
+./gradlew clean build -PwithCancellation --no-daemon --console=plain \
+  '-Dorg.gradle.jvmargs=-Xmx1024m -XX:MaxMetaspaceSize=512m -Dfile.encoding=UTF-8' \
+  -Pkotlin.compiler.execution.strategy=in-process
+```
+
+ZIP and TAR development archives were generated from the fresh verified
+assembly. Both SHA-256 sidecars pass `sha256sum --check`; extraction reproduces
+all 79 input JARs byte-for-byte. The fresh assembly is also byte-identical to
+the snapshot already exercised in the nine-operation real-server smoke. These
+are local `484-0.2.0-SNAPSHOT` qualification artifacts, not a selected release
+version or published assets. Evidence: `archives.log` and `artifacts/` under the
+disk-backed scratch directory.
+
+After qualification, the validation single-FE FE/BE and manual Trino containers
+were stopped; volumes, fixture data and local evidence were retained. The
+overlay stayed stopped and unrelated workloads were not stopped. Publication
+still requires a separate user decision/version and resolution or explicit
+disposition of the remaining findings; this report does not authorize it.
 
 ## Validation environment
 
