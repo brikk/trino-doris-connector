@@ -22,8 +22,8 @@ services:
       #     plugin path. This is the FIRST production-shaped load of the plugin:
       #     Trino's PluginManager ServiceLoader-scans /usr/lib/trino/plugin/*,
       #     exactly as a real install — not the in-JVM test classpath. up.sh runs
-      #     `./gradlew pluginAssemble` to (re)create this dir if it is missing or
-      #     --rebuild is passed.
+      #     `./gradlew prepareManualPlugin` to assemble/verify the exact current
+      #     version on every startup, then snapshots it before mounting.
       - ${TRINO_DORIS_PLUGIN_DIR:?run ./up.sh, which assembles the plugin and exports this}:/usr/lib/trino/plugin/trino-doris:ro
       # (b) Config override enabling dynamic catalogs. See etc/config.properties
       #     for why we replace the file instead of using the image's

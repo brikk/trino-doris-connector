@@ -14,14 +14,18 @@ real operator drops the assembled dir into a real Trino.
 ## Quick start
 
 ```sh
-./up.sh              # assemble plugin if missing, start Trino, wait healthy, print cheat sheet
-./up.sh --rebuild    # force `./gradlew pluginAssemble` even if the dir already exists
+./up.sh              # assemble/verify current plugin, start Trino, wait healthy, print cheat sheet
+./up.sh --rebuild    # additionally rerun build tasks
 ./down.sh            # tear down (containers + volumes)
 ```
 
 `up.sh` uses the repo-root gradle wrapper with **mise JDK 25**
-(`JAVA_HOME=~/.local/share/mise/installs/java/25`) to run `pluginAssemble`, mounts
-the resulting `build/trino-plugin/trino-doris-<version>` dir **read-only** into
+(`JAVA_HOME=~/.local/share/mise/installs/java/25`, or your supplied `JAVA_HOME`) to
+run `prepareManualPlugin` on every startup. This assembles and verifies the
+current version, writes its exact path to `build/manual-plugin-path.txt`, and
+never chooses an older versioned directory by discovery order. Gradle's normal
+up-to-date checks apply; `--rebuild` forces tasks to rerun. The script snapshots
+that verified directory and mounts the snapshot **read-only** into
 `/usr/lib/trino/plugin/trino-doris`, and waits until
 `docker exec trino-doris-manual trino --execute 'SELECT 1'` succeeds.
 

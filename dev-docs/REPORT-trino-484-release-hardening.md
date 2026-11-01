@@ -35,6 +35,51 @@ supplementary case retained as an error-parity assertion; no production guard
 was relaxed. Final log/XML: `~/.cache/trino-doris-484-hardening/r06-r07-final.log`
 and `r06-r07-xml/`. The rendered Compose regression also passes.
 
+## Milestone 2 — R-12 / R-13 / R-14
+
+- `pluginAssemble` is now `Sync` over its **owned versioned output**, with
+  duplicate-filename rejection. An inventory-aware up-to-date check also catches
+  externally added files. Verification compares exact names and bytes against
+  resolved runtime inputs plus the connector JAR, retaining the existing
+  parent-first/Guice/ServiceLoader checks. Other versioned directories are not
+  silently deleted.
+- Version labels must follow `<trino>-<major>.<minor>.<patch>` with an optional
+  SemVer prerelease, no build metadata or paths. Gradle rejects mismatched ABI
+  labels and checks **resolved Trino compile artifacts**, not just the catalog
+  string. `validateReleaseVersion` additionally rejects SNAPSHOT publication.
+  The workflow validates before live setup and carries branch-derived values in
+  quoted environment variables instead of interpolating them into shell source.
+- Manual startup always calls `prepareManualPlugin` (assembly + verification),
+  consumes the exact path written by that successful invocation, then snapshots
+  it. It never discovers the first versioned directory. A failed verification
+  stops startup even if an old path file exists. `--rebuild` forces build tasks
+  to rerun but uses the same exact-path contract.
+
+**Three actual-Gradle regression cases passed** (13 invocations): stale-file
+rejection and incremental Sync repair without clean/version change, corrupted
+JAR rejection/repair, stable/prerelease acceptance, malformed/wrong-ABI/SNAPSHOT
+rejection, and an intentionally forced wrong resolved SPI despite a matching
+catalog label. The forced SPI is diagnostic-only; no dependency pin was edited.
+
+**Four tooling tests passed**, including all Compose renderings, release-label
+injection/malformed cases, and startup orchestration with spaces in the path,
+old-before-current directories, both startup modes and failed verification.
+Both sets are wired into CI/release as explicit pre-live gates; plain Gradle
+`build` does not silently run Python or start Docker.
+
+The real default startup selected the exact current **79-JAR** assembly despite
+a deliberately stale sibling directory. Snapshot hashes match every verified
+input. Fresh Trino 484 passed **nine SQL operations**, including BINARY-mode
+accented/CJK escape results with retained filters, ASCII escape control, and
+the AVG counterexample. Docker inspection confirms `127.0.0.1:18080` only.
+The manual container was stopped after smoke; volumes/fixtures were retained.
+
+Evidence under `~/.cache/trino-doris-484-hardening/`:
+`packaging-guards.log`, `manual-up.log`, `manual-smoke.{log,json}` and
+`manual-inventory.json`. Bash syntax and workflow YAML parsing were checked;
+no release output remains interpolated into workflow shell source. These are
+local workflow-contract checks, not an actual GitHub publication run.
+
 ## Validation environment
 
 The initial focused attempt failed during Kotlin incremental-cache backup with

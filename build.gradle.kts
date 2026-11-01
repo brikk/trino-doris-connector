@@ -1,3 +1,4 @@
+import java.nio.file.Files
 import java.util.zip.ZipFile
 
 plugins {
@@ -7,10 +8,45 @@ plugins {
 }
 
 // Default dev version. CI release flow (.github/workflows/release.yml) overrides this with
-// -Pversion=<derived-from-branch> (e.g. release-484-2 -> 484-2). A plain Gradle script
+// -Pversion=<derived-from-branch> (e.g. release-484-0.2.0 -> 484-0.2.0). A plain Gradle script
 // assignment would clobber the -P property (proven: it runs after Gradle applies project
 // properties), so honor an explicit -Pversion when present and fall back to the dev default.
 version = (findProperty("version") as? String)?.takeIf { it != "unspecified" } ?: "484-0.2.0-SNAPSHOT"
+
+// Version labels are also directory/archive names. Reject unsafe spellings before
+// configuring any task output, not just in the GitHub publication step.
+val numericVersion = "(?:0|[1-9][0-9]*)"
+val prereleaseIdentifier = "(?:$numericVersion|[0-9]*[A-Za-z-][0-9A-Za-z-]*)"
+val pluginVersionPattern = Regex("^([1-9][0-9]*)-$numericVersion\\.$numericVersion\\.$numericVersion(?:-$prereleaseIdentifier(?:\\.$prereleaseIdentifier)*)?$")
+val versionMatch = requireNotNull(pluginVersionPattern.matchEntire(version.toString())) {
+    "Plugin version must be <trino>-<major>.<minor>.<patch> with an optional SemVer prerelease (no paths or build metadata)"
+}
+val compiledTrinoVersion = libs.versions.trino.get()
+require(versionMatch.groupValues[1] == compiledTrinoVersion) {
+    "Plugin version $version claims Trino ${versionMatch.groupValues[1]}, but the build targets Trino $compiledTrinoVersion"
+}
+
+val verifyTrinoCompatibility by tasks.registering {
+    doLast {
+        // Check the resolved compile artifacts too: a catalog label alone is not
+        // proof if a future dependency override changes the actual compiled ABI.
+        val trinoArtifacts = configurations.compileClasspath.get().resolvedConfiguration.resolvedArtifacts
+            .filter { it.moduleVersion.id.group == "io.trino" }
+        check(trinoArtifacts.any { it.name == "trino-spi" }) { "Compiled Trino SPI is missing" }
+        check(trinoArtifacts.all { it.moduleVersion.id.version == compiledTrinoVersion }) {
+            "Resolved Trino compile dependencies do not all match $compiledTrinoVersion: " +
+                trinoArtifacts.map { it.moduleVersion.id }
+        }
+    }
+}
+
+tasks.register("validateReleaseVersion") {
+    dependsOn(verifyTrinoCompatibility)
+    doLast {
+        check(!version.toString().contains("SNAPSHOT", ignoreCase = true)) { "Cannot publish a SNAPSHOT release" }
+        logger.lifecycle("Release version $version matches compiled Trino $compiledTrinoVersion")
+    }
+}
 
 // Idiomatic-Kotlin quality gate, same setup as trino-ducklake.
 detekt {
@@ -135,11 +171,20 @@ tasks.test {
 }
 
 // Same plugin-dir assembly as trino-ducklake: jar + runtimeClasspath (dir of jars, NOT shaded).
-val pluginAssemble by tasks.registering(Copy::class) {
-    dependsOn(tasks.jar)
-    into(layout.buildDirectory.dir("trino-plugin/trino-doris-$version"))
+val pluginDirectory = layout.buildDirectory.dir("trino-plugin/trino-doris-$version")
+val pluginAssemble by tasks.registering(Sync::class) {
+    dependsOn(tasks.jar, verifyTrinoCompatibility)
+    into(pluginDirectory)
+    duplicatesStrategy = DuplicatesStrategy.FAIL
     from(tasks.jar)
     from(configurations.runtimeClasspath)
+    // Gradle can ignore newly added files in an output directory for ordinary
+    // up-to-date checks. Force reconciliation when its inventory has drifted.
+    outputs.upToDateWhen {
+        val expected = (configurations.runtimeClasspath.get().files + tasks.jar.get().archiveFile.get().asFile)
+            .map { it.name }.toSet()
+        pluginDirectory.get().asFile.listFiles().orEmpty().map { it.name }.toSet() == expected
+    }
 }
 
 // G12 guard mirroring the assembly-proof check: the assembled plugin dir must not bundle any
@@ -147,9 +192,21 @@ val pluginAssemble by tasks.registering(Copy::class) {
 // exactly one unshaded Airlift guice jar.
 val verifyPluginAssembly by tasks.registering {
     dependsOn(pluginAssemble)
-    val pluginDir = layout.buildDirectory.dir("trino-plugin/trino-doris-$version")
+    val pluginDir = pluginDirectory
     doLast {
-        val jars = pluginDir.get().asFile.listFiles().orEmpty().map { it.name }.sorted()
+        val inputs = configurations.runtimeClasspath.get().files + tasks.jar.get().archiveFile.get().asFile
+        val expectedNames = inputs.map { it.name }.sorted()
+        check(expectedNames.distinct().size == inputs.size) { "Duplicate assembly input filenames: $expectedNames" }
+        val assembled = pluginDir.get().asFile.listFiles().orEmpty()
+        val jars = assembled.map { it.name }.sorted()
+        check(jars == expectedNames && assembled.all { it.isFile && it.extension == "jar" }) {
+            "Plugin inventory differs from resolved inputs; expected $expectedNames, got $jars"
+        }
+        for (input in inputs) {
+            check(Files.mismatch(input.toPath(), pluginDir.get().file(input.name).asFile.toPath()) == -1L) {
+                "Plugin JAR differs from resolved input: ${input.name}"
+            }
+        }
         check(jars.isNotEmpty()) { "plugin dir is empty: ${pluginDir.get()}" }
 
         val forbiddenModules = listOf(
@@ -199,6 +256,16 @@ val verifyPluginAssembly by tasks.registering {
         }
 
         logger.lifecycle("verifyPluginAssembly OK: ${jars.size} jars, no provided/parent-first SPI jars, ServiceLoader registration present")
+    }
+}
+
+// A machine-readable path from the SAME verified build; never choose the first
+// versioned directory on disk. Always rewrite it after successful verification.
+tasks.register("prepareManualPlugin") {
+    dependsOn(verifyPluginAssembly)
+    doLast {
+        layout.buildDirectory.file("manual-plugin-path.txt").get().asFile
+            .writeText(pluginDirectory.get().asFile.absolutePath + "\n")
     }
 }
 

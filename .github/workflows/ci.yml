@@ -60,8 +60,11 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
 
-      - name: Check development port bindings
+      - name: Check development and release tooling contracts
         run: python3 -m unittest discover -s test/tooling -v
+
+      - name: Check incremental assembly and release ABI guards
+        run: python3 -m unittest discover -s test/qualification -v
 
       # docker compose v2 (`docker compose`, not `docker-compose`) is preinstalled on
       # ubuntu-latest. up.sh pins platform to linux/amd64 (matches the x86_64 runner, so
