@@ -19,6 +19,7 @@ import io.trino.sql.planner.plan.TopNNode
 import io.trino.testing.AbstractTestQueryFramework
 import io.trino.testing.QueryRunner
 import org.assertj.core.api.Assertions.assertThat
+import org.assertj.core.api.Assertions.assertThatThrownBy
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.TestInstance
 
@@ -251,6 +252,34 @@ class TestDorisP4StringPushdown : AbstractTestQueryFramework() {
     }
 
     // --- helpers ---
+
+    @Test
+    fun testNonAsciiLikeEscapesStayLocalInEveryMode() {
+        DorisTestCluster.requireGoldenVersion()
+        // Independently pin the native rejection, rather than treating a local
+        // result differential as proof of what the golden Doris server accepts.
+        assertThatThrownBy { DorisTestCluster.queryScalar("SELECT 'a_b' LIKE '%é_%' ESCAPE 'é'") }
+            .hasMessageContaining("single ascii character")
+        for (mode in DorisStringPushdownMode.entries) {
+            val pushed = modeSession(mode)
+            val local = Session.builder(pushed).setSystemProperty("allow_pushdown_into_connectors", "false").build()
+            for (escape in listOf("é", "中")) {
+                val predicate = "v LIKE '%${escape}_%' ESCAPE '$escape'"
+                val sql = "SELECT id FROM doris.p4_strings.t WHERE $predicate"
+                assertThat(ids(pushed, predicate)).describedAs("$mode $escape").isEqualTo(listOf(16))
+                assertThat(ids(pushed, predicate)).isEqualTo(ids(local, predicate))
+                assertThat(query(pushed, sql)).isNotFullyPushedDown(FilterNode::class.java)
+                assertThat(remoteSql(pushed, sql)).doesNotContain("ESCAPE")
+            }
+            // Trino 484 itself rejects a supplementary escape (two UTF-16 chars).
+            // Preserve that local error instead of advertising it as a valid match.
+            val invalid = "SELECT id FROM doris.p4_strings.t WHERE v LIKE '%😀_%' ESCAPE '😀'"
+            for (executionSession in listOf(pushed, local)) {
+                assertThatThrownBy { computeActual(executionSession, invalid) }
+                    .hasMessageContaining("Escape string must be a single character")
+            }
+        }
+    }
 
     private fun remoteSql(session: Session, sql: String): String {
         val execution = getDistributedQueryRunner().executeWithPlan(session, sql)

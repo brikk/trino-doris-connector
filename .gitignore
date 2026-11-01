@@ -39,6 +39,9 @@ out/
 # Kotlin daemon session metadata (Kotlin 2.x creates this at the project root)
 .kotlin/
 
+### Python tooling tests ###
+__pycache__/
+
 ### Compose runtime confs ###
 # Doris's init_fe.sh / init_be.sh APPEND priority_networks to the mounted
 # fe.conf / be.conf at every boot; up.sh stages throwaway runtime copies from

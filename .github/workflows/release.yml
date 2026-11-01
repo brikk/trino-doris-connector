@@ -79,6 +79,9 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
 
+      - name: Check development port bindings
+        run: python3 -m unittest discover -s test/tooling -v
+
       - name: Bring up Doris 4.1.5 cluster
         run: ./compose/up.sh
 

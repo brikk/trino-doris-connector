@@ -33,8 +33,9 @@ Trino HTTP + CLI: **http://localhost:18080** (host `18080` → container `8080`)
 docker exec -it trino-doris-manual trino
 ```
 
-Or connect **externally** — the sandbox publishes plain HTTP on host port `18080` with
-**no authentication configured** (no authenticator at all, not merely a blank password):
+Or connect from the **same host** — the sandbox publishes plain HTTP on
+**127.0.0.1:18080 only**, with **no authentication configured** (no authenticator
+at all, not merely a blank password). Use `localhost` for `<host>` below:
 
 - CLI: `trino --server http://<host>:18080 --user whoever`
 - Web UI: `http://<host>:18080` (any username)
@@ -50,6 +51,14 @@ Or connect **externally** — the sandbox publishes plain HTTP on host port `180
   JDBC driver's authentication path, and that path **hard-requires SSL** regardless of
   the password being empty. `sessionUser=` sets your identity without touching the
   credential path, which is the only shape that works against a no-auth server.
+
+For remote access prefer an SSH tunnel to `127.0.0.1:18080`. Deliberate sharing
+requires `TRINO_BIND_ADDRESS=<specific-host-IP> ./up.sh` on an isolated trusted
+network, or an authenticated/TLS deployment configured separately. Setting
+`0.0.0.0` exposes every IPv4 interface. This sandbox is not a secure multi-user
+service: anyone who can reach it can query its catalogs and create new ones.
+Do not add production credentials to a shared unauthenticated sandbox. Local
+users and Docker-network peers are not isolated by the loopback port binding.
 
 ```sql
 -- YOUR OWN external Doris server (host.docker.internal reaches a Doris on THIS

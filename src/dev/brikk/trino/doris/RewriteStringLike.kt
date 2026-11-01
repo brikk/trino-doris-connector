@@ -44,7 +44,8 @@ import java.util.Optional
  *   Doris `'a\\b'` matches the literal `a\b`).
  * - With an explicit `ESCAPE 'x'`, Doris honors ONLY the declared escape char (backslash
  *   becomes literal — probed), matching Trino's ESCAPE contract, so the 3-arg form pushes
- *   with the pattern untouched.
+ *   with the pattern untouched only for a single non-NUL ASCII escape. Doris 4.1.5
+ *   rejects non-ASCII escape characters that Trino accepts (R-07).
  * - Patterns/escapes containing a NUL byte are never pushed (the probe's NUL under-return).
  *
  * Guards: the value must be a Variable over a native `varchar`/`string` Doris column (CHAR is
@@ -83,7 +84,8 @@ internal class RewriteStringLike(
         }
 
         val escape = varcharConstant(expression.arguments[2]) ?: return Optional.empty()
-        if (escape.toStringUtf8().contains('\u0000')) {
+        val escapeText = escape.toStringUtf8()
+        if (escapeText.length != 1 || escapeText[0] !in '\u0001'..'\u007f') {
             return Optional.empty()
         }
         return Optional.of(

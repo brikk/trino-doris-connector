@@ -21,6 +21,20 @@ dedicated `172.30.81.0/24` network with host ports:
 
 Both clusters can run simultaneously without colliding.
 
+### Development network safety
+
+All published Doris ports (including the multi-FE overlay) bind to **127.0.0.1**
+by default. Root has no password: this is a disposable development cluster, not
+a secure shared service. Docker-network peers can still reach container ports;
+loopback publishing does not isolate containers or other local users.
+
+Prefer an SSH tunnel for access from another machine. For deliberate sharing on
+an isolated trusted network, `DORIS_BIND_ADDRESS=<specific-host-IP> ./up.sh`
+(or `./multi-fe/up.sh`) opts into that interface. `0.0.0.0` exposes all IPv4
+interfaces and is not recommended. Configure authentication and firewall rules
+before sharing; never expose passwordless root to an untrusted network.
+Recreate existing containers to apply a changed binding.
+
 ## Usage
 
 ```sh

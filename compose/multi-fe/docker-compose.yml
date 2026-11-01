@@ -53,8 +53,8 @@ services:
       FE_SERVERS: fe1:172.30.82.10:9010,fe2:172.30.82.11:9010,fe3:172.30.82.12:9010
       FE_ID: "1"
     ports:
-      - "9131:9030"   # FE1 MySQL protocol (host 9131 -> container 9030)
-      - "8131:8030"   # FE1 HTTP
+      - "${DORIS_BIND_ADDRESS:-127.0.0.1}:9131:9030"   # Loopback unless explicitly shared
+      - "${DORIS_BIND_ADDRESS:-127.0.0.1}:8131:8030"
     volumes:
       # Per-node gitignored runtime copy of fe.conf (init_fe.sh appends
       # priority_networks on first init); staged fresh by up.sh from the tracked
@@ -79,8 +79,8 @@ services:
       FE_SERVERS: fe1:172.30.82.10:9010,fe2:172.30.82.11:9010,fe3:172.30.82.12:9010
       FE_ID: "2"
     ports:
-      - "9132:9030"
-      - "8132:8030"
+      - "${DORIS_BIND_ADDRESS:-127.0.0.1}:9132:9030"
+      - "${DORIS_BIND_ADDRESS:-127.0.0.1}:8132:8030"
     volumes:
       - ./.fe2.conf.runtime:/opt/apache-doris/fe/conf/fe.conf
       - fe2-meta:/opt/apache-doris/fe/doris-meta
@@ -100,8 +100,8 @@ services:
       FE_SERVERS: fe1:172.30.82.10:9010,fe2:172.30.82.11:9010,fe3:172.30.82.12:9010
       FE_ID: "3"
     ports:
-      - "9133:9030"
-      - "8133:8030"
+      - "${DORIS_BIND_ADDRESS:-127.0.0.1}:9133:9030"
+      - "${DORIS_BIND_ADDRESS:-127.0.0.1}:8133:8030"
     volumes:
       - ./.fe3.conf.runtime:/opt/apache-doris/fe/conf/fe.conf
       - fe3-meta:/opt/apache-doris/fe/doris-meta

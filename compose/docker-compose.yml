@@ -27,8 +27,8 @@ services:
       FE_SERVERS: fe1:172.30.81.10:9010
       FE_ID: "1"
     ports:
-      - "9130:9030"   # FE MySQL protocol  (host 9130 -> container 9030)
-      - "8130:8030"   # FE HTTP            (host 8130 -> container 8030)
+      - "${DORIS_BIND_ADDRESS:-127.0.0.1}:9130:9030"   # Passwordless dev FE: loopback by default
+      - "${DORIS_BIND_ADDRESS:-127.0.0.1}:8130:8030"
     volumes:
       # fe.conf with heap dropped to 2g + priority_networks pinned. Doris's
       # start_fe.sh sources fe.conf for JAVA_OPTS_FOR_JDK_17, so an env-var
