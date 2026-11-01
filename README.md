@@ -22,13 +22,13 @@ This development branch targets **Apache Doris 4.1.5**, **Trino 484**, and MySQL
 
 Compose/CI and native FE/BE version checks lock **Doris 4.1.5** as the golden
 validation baseline, with released metadata **0.21.0**. The
-[golden-stack qualification](dev-docs/REPORT-trino-484-doris-4.1.5-lock.md) records
-**351 passed, one failed, five optional multi-FE skips**, plus successful JSON and
-real-server installation checks. This is the historical pre-fix run. Unicode
-LOWER/UPPER now stay local; R-04/R-05 fixes and final qualification are tracked
-in the [release-safety implementation](dev-docs/REPORT-trino-484-release-safety.md).
-**Not release-ready until those checks finish.**
-The opt-in slow cancellation suite was not run. Historical
+[release-safety qualification](dev-docs/REPORT-trino-484-release-safety.md) passed
+**368 single-FE tests** with slow cancellation enabled and **five overlay checks
+in a separate replay**, plus eleven resolution probes and an extracted-plugin
+server smoke. Unicode case folding and outer joins stay local; HA read attempts
+are physically pinned. These are staged results, not one no-skip combined run.
+No release has been published; other pre-existing review findings remain separate.
+Historical [pre-fix 4.1.5 measurements](dev-docs/REPORT-trino-484-doris-4.1.5-lock.md),
 [484 / 4.1.4.1 qualification](dev-docs/REPORT-trino-484-upgrade.md),
 [Trino 483 / Doris upgrade qualification](dev-docs/REPORT-doris-4.1.4.1-upgrade.md)
 and historical 4.1.3 probe evidence are preserved.

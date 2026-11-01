@@ -2,7 +2,11 @@
 
 Date: 2026-10-31. Worktree/branch: `trino-484`.
 
-**Version lock established; release remains blocked.** The full default run has
+**Historical pre-fix measurements.** The subsequent approved fixes and final
+staged qualification are in the [release-safety report](REPORT-trino-484-release-safety.md).
+The observations below are preserved, not current unresolved status claims.
+
+**Pre-fix assessment: version lock established; release blocked.** The full default run has
 351 passes, one Unicode case-fold failure, and five optional overlay skips.
 Subsequent opt-in probes reproduce **both R-04 and R-05** on this exact stack.
 Neither production issue is fixed by this work. Measurements are Linux/amd64;

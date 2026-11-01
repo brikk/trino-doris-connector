@@ -3,6 +3,9 @@
 These diagnostic sources are **not part of the default build**. They assert the
 correctness/non-blocking behavior we want, so an unfixed finding deliberately
 produces a red probe run; it must not be reported as a green release gate.
+The R-05 diagnostic now inherits the durable production-driver regression suite
+that also runs in the default build. Both diagnostic classes pass after the
+approved safety fixes; historical red measurements are retained in the reports.
 
 After qualifying the digest-pinned Trino 484 / Doris 4.1.5 baseline:
 
