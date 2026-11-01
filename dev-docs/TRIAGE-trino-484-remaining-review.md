@@ -5,6 +5,12 @@ release-hardening batches, plus the operational K findings they touch. This
 is triage, **not implementation or closure** of those findings. The golden
 Trino 484 / Doris 4.1.5 / Connector/J 26.7.0 stack stays fixed.
 
+**Subsequent R-10 resolution:** connector scan SQL now begins with its token;
+matching requires that exact leading UUID comment. The literal false-positive
+is rejected, and 37 cancellation checks pass. See
+[cancellation/harness safety](REPORT-trino-484-cancellation-harness-safety.md).
+Other findings below retain their original open status until explicitly updated.
+
 ## Open findings and next acceptance criteria
 
 | Finding | Current exposure | Next scoped remedy / acceptance criteria |

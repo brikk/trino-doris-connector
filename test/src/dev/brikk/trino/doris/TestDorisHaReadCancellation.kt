@@ -112,7 +112,7 @@ open class TestDorisHaReadCancellation {
         // Only this test retains the HA owner. Production exposes only the pinned view.
         DorisReadDriver.pin(owner).use { connection ->
             val marker = "trino_statement_id=${UUID.randomUUID()}"
-            val raw = connection.prepareStatement("SELECT sleep(4) /*$marker*/")
+            val raw = connection.prepareStatement("/*$marker*/ SELECT sleep(4)")
             val captured = raw.unwrap(JdbcStatement::class.java).query.session
             owner.isReadOnly = false
             val current = owner.unwrap(JdbcConnection::class.java).session
@@ -150,7 +150,7 @@ open class TestDorisHaReadCancellation {
         val executor = Executors.newFixedThreadPool(3) { task -> Thread(task, "r05-worker").apply { isDaemon = true } }
         try {
             readConnection(url).use { connection ->
-                val raw = connection.prepareStatement("SELECT sleep(4) /*$marker*/")
+                val raw = connection.prepareStatement("/*$marker*/ SELECT sleep(4)")
                 raw.unwrap(JdbcStatement::class.java).enableStreamingResults()
                 val statement = DorisPreparedStatement(raw, connection) { finished -> helper.cancel(session, marker, finished) }
                 val execution = executor.submit<String> {

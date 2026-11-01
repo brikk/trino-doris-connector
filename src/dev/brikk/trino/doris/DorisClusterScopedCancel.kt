@@ -43,7 +43,7 @@ import java.util.concurrent.atomic.AtomicInteger
  * in dev.sort.doris.cancel — production-hardened against a real LB'd cluster; re-proven
  * live on Doris 4.1.3 single-FE and the 3-FE overlay, `NOTES-cancel-cluster-scoped.md`):
  *
- *  1. Each built scan receives a fresh `/*trino_statement_id=<uuid>*/` comment. The
+ *  1. Each built scan starts with a fresh `/*trino_statement_id=<uuid>*/` comment. The
  *     Trino query-id comment remains for tracing, but is NOT a cancellation key: Trino
  *     closes scans early for LIMIT as well as on failure, without cancelling sibling scans.
  *     The probe proved SHOW FULL PROCESSLIST Info is untruncated and cluster-wide on 4.1.3.
@@ -271,21 +271,27 @@ internal class DorisClusterScopedCancel(
 
         /**
          * A row we may kill: RUNNING (not an idle `Sleep` connection), carrying OUR marker,
-         * and not the helper's own SHOW/KILL statement. Match the complete marker comment,
-         * not a query-id prefix; production callers use a unique per-statement token.
+         * and not the helper's own SHOW/KILL statement. The connector places its unique
+         * token at the SQL boundary, BEFORE all generated SQL and tracing comments.
+         * Never search arbitrary text: even an exact comment can occur inside an audit
+         * search's string literal, quoted identifier, line comment or outer block comment.
          */
         internal fun isRunningCancelCandidate(command: String?, info: String?, marker: String): Boolean {
-            if (command?.trim().equals("Sleep", ignoreCase = true)) {
+            if (command == null || command.trim().equals("Sleep", ignoreCase = true) || !STATEMENT_MARKER.matches(marker)) {
                 return false
             }
-            val sql = info ?: return false
-            if (sql.trimStart().startsWith(SHOW_FULL_PROCESSLIST, ignoreCase = true) ||
-                sql.trimStart().startsWith("KILL QUERY", ignoreCase = true)
-            ) {
+            val sql = info?.trimStart() ?: return false
+            val prefix = "/*$marker*/ "
+            if (!sql.startsWith(prefix)) {
                 return false
             }
-            return sql.contains("/*$marker*/")
+            val statement = sql.removePrefix(prefix).trimStart()
+            return statement.isNotEmpty() &&
+                !statement.startsWith(SHOW_FULL_PROCESSLIST, ignoreCase = true) &&
+                !statement.startsWith("KILL QUERY", ignoreCase = true)
         }
+
+        private val STATEMENT_MARKER = Regex("trino_statement_id=[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 
         /** "Unknown query id" (any hop of the cause chain) == the query already finished. */
         internal fun isUnknownQueryId(throwable: Throwable?): Boolean {

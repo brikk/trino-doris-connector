@@ -55,13 +55,13 @@ class TestDorisClusterScopedCancel {
     fun testRunningCancelCandidateClassification() {
         val marker = "trino_statement_id=00000000-0000-0000-0000-000000000001"
         // running row carrying the marker: candidate
-        assertThat(DorisClusterScopedCancel.isRunningCancelCandidate("Query", "SELECT ... /*$marker*/", marker)).isTrue()
+        assertThat(DorisClusterScopedCancel.isRunningCancelCandidate("Query", "/*$marker*/ SELECT ...", marker)).isTrue()
         // idle pooled connections never match
-        assertThat(DorisClusterScopedCancel.isRunningCancelCandidate("Sleep", "SELECT ... /*$marker*/", marker)).isFalse()
+        assertThat(DorisClusterScopedCancel.isRunningCancelCandidate("Sleep", "/*$marker*/ SELECT ...", marker)).isFalse()
         // the helper's own statements never match
-        assertThat(DorisClusterScopedCancel.isRunningCancelCandidate("Query", "  show full processlist /*$marker*/", marker)).isFalse()
+        assertThat(DorisClusterScopedCancel.isRunningCancelCandidate("Query", "  /*$marker*/ show full processlist", marker)).isFalse()
         assertThat(
-            DorisClusterScopedCancel.isRunningCancelCandidate("Query", """  kill query "x" /*$marker*/""", marker),
+            DorisClusterScopedCancel.isRunningCancelCandidate("Query", """  /*$marker*/ kill query "x"""", marker),
         ).isFalse()
         // other queries' markers never match
         assertThat(
@@ -70,9 +70,32 @@ class TestDorisClusterScopedCancel {
         assertThat(DorisClusterScopedCancel.isRunningCancelCandidate("Query", "SELECT '$marker'", marker)).isFalse()
         assertThat(DorisClusterScopedCancel.isRunningCancelCandidate("Query", "SELECT 1 /*prefix_$marker*/", marker)).isFalse()
         assertThat(
-            DorisClusterScopedCancel.isRunningCancelCandidate("Query", "SELECT 'KILL QUERY', 'SHOW FULL PROCESSLIST' /*$marker*/", marker),
+            DorisClusterScopedCancel.isRunningCancelCandidate("Query", "/*$marker*/ SELECT 'KILL QUERY', 'SHOW FULL PROCESSLIST'", marker),
         ).isTrue()
         assertThat(DorisClusterScopedCancel.isRunningCancelCandidate("Query", null, marker)).isFalse()
+    }
+
+    @Test
+    fun testOnlyTheConnectorOwnedLeadingCommentIsACandidate() {
+        val marker = "trino_statement_id=00000000-0000-0000-0000-000000000001"
+        for (sql in listOf(
+            "SELECT '/*$marker*/'", "SELECT \"/*$marker*/\"", "SELECT `/*$marker*/`",
+            "SELECT 'escaped \\\' /*$marker*/'", "SELECT 'doubled '' /*$marker*/'",
+            "-- /*$marker*/\nSELECT 1", "# /*$marker*/\nSELECT 1", "/* audit /*$marker*/ */ SELECT 1",
+            "SELECT 1 /*$marker*/", "/*trino_statement_id=00000000-0000-0000-0000-000000000002*/ SELECT '/*$marker*/'",
+            "/*$marker*/", "/*$marker*/ ", "/*$marker*/SELECT 1",
+        )) {
+            assertThat(DorisClusterScopedCancel.isRunningCancelCandidate("Query", sql, marker)).describedAs(sql).isFalse()
+        }
+        assertThat(DorisClusterScopedCancel.isRunningCancelCandidate(null, "/*$marker*/ SELECT 1", marker)).isFalse()
+        assertThat(DorisClusterScopedCancel.isRunningCancelCandidate("Query", "/*bad*/ SELECT 1", "bad")).isFalse()
+        for (sql in listOf(
+            "/*$marker*/ SELECT 1", " \n/*$marker*/ SELECT 'O\\'Reilly', '/*not_a_token*/'",
+            "/*$marker*/ /* user-configured tracing comment */ SELECT 1 /*trino_query_id=q*/",
+            "/*$marker*/ WITH t AS (SELECT 1) SELECT * FROM t",
+        )) {
+            assertThat(DorisClusterScopedCancel.isRunningCancelCandidate("Query", sql, marker)).describedAs(sql).isTrue()
+        }
     }
 
     @Test
@@ -140,13 +163,15 @@ class TestDorisClusterScopedCancel {
                     // Completion DURING an empty scan must not terminate that iteration.
                     // Finished execution can still leave visible, as-yet-unkillable server rows.
                     if (scan == 1) finished.set(true)
-                    val rows = scans[scan]
+                    // Always include an unrelated audit-search row with the exact
+                    // comment inside a literal. The real helper must never kill it.
+                    val rows = scans[scan] + "deadbeef-badc0ffee"
                     var row = -1
                     jdbcProxy(ResultSet::class.java) { operation, columns ->
                         when (operation) {
                             "next" -> ++row < rows.size
                             "getString" -> when (columns[0]) {
-                                "Info" -> "SELECT sleep(30) /*$marker*/"
+                                "Info" -> if (row == rows.lastIndex) "SELECT '/*$marker*/'" else "/*$marker*/ SELECT sleep(30)"
                                 "Command" -> "Query"
                                 "QueryId" -> rows[row]
                                 else -> throw AssertionError("unexpected column: ${columns[0]}")
@@ -215,7 +240,7 @@ class TestDorisClusterScopedCancel {
             pool.submit<String> {
                 runCatching {
                     openRoot().use { connection ->
-                        connection.createStatement().use { it.execute("SELECT sleep(30) /*$queryMarker*/ /*$marker*/") }
+                        connection.createStatement().use { it.execute("/*$marker*/ SELECT sleep(30) /*$queryMarker*/") }
                     }
                 }.exceptionOrNull()?.message ?: "completed"
             }

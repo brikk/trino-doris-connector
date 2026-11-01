@@ -58,11 +58,11 @@ class TestDorisRemainingReview : AbstractTestQueryFramework() {
     }
 
     @Test
-    fun testR10MarkerInsideUnrelatedSqlLiteralIsStillACandidate() {
+    fun testR10MarkerInsideUnrelatedSqlLiteralIsNotACandidate() {
         val marker = "trino_statement_id=${UUID.randomUUID()}"
         val candidate = DorisClusterScopedCancel.isRunningCancelCandidate("Query", "SELECT '/*$marker*/'", marker)
-        assertThat(candidate).isTrue()
-        println("R10|marker-inside-literal-is-candidate=$candidate|no-live-kill-issued")
+        assertThat(candidate).isFalse()
+        println("R10|marker-inside-literal-is-candidate=$candidate|fixed-leading-comment-boundary|no-live-kill-issued")
     }
 
     @Test

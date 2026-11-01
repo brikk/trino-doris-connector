@@ -494,6 +494,7 @@ class TestDorisScanCancellation {
             val matches = Regex("/\\*trino_statement_id=([0-9a-f-]+)\\*/").findAll(sql).toList()
             assertThat(matches).hasSize(1)
             val match = matches.single()
+            assertThat(match.range.first).describedAs("connector-owned token is the leading SQL comment").isZero()
             assertThat(UUID.fromString(match.groupValues[1]).toString()).isEqualTo(match.groupValues[1])
             return match.value
         }

@@ -41,7 +41,7 @@ class TestDorisCancelVisibility {
         val oldLevel = logger.level
         logger.level = Level.ALL
         logger.addHandler(handler)
-        val marker = "trino_statement_id=visibility_test"
+        val marker = "trino_statement_id=00000000-0000-0000-0000-000000000001"
         val killed = mutableListOf<String>()
         var aborts = 0
         val session = TestingConnectorSession.builder().build()
@@ -123,7 +123,7 @@ class TestDorisCancelVisibility {
                     proxy(ResultSet::class.java) { operation, columns ->
                         when (operation) {
                             "next" -> row.also { row = false }
-                            "getString" -> mapOf("Info" to "SELECT 1 /*$marker*/", "Command" to "Query", "QueryId" to "a-b")[columns[0]]
+                            "getString" -> mapOf("Info" to "/*$marker*/ SELECT 1", "Command" to "Query", "QueryId" to "a-b")[columns[0]]
                             "close" -> null
                             else -> error("Unexpected helper result call: $operation")
                         }

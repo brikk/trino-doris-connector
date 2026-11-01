@@ -19,6 +19,11 @@ Probe evidence (4.1.3):
   the variable was renamed from `show_all_fe_connection` and default-flipped in 4.x).
 
 The original implementation used the Trino query-id comment as its cancellation key.
+
+**R-10 update (2026-11-01):** the per-statement comment now starts the SQL.
+Cancellation requires that exact leading UUID token; copies inside literals,
+identifiers, audit searches or trailing comments are not candidates. See
+`REPORT-trino-484-cancellation-harness-safety.md` for regression qualification.
 The 2026-09-05 E-03/E-04/E-05 correction replaces that key with a fresh
 `/*trino_statement_id=<uuid>*/` for each `DorisClient.buildSql` call, including retries.
 Trino also closes individual scans early (for example, a local LIMIT); closing one does
@@ -31,8 +36,8 @@ Neither marker needs a session_context bind or an extra connection-time round tr
 2. `SET fetch_all_fe_for_system_table = true` (best-effort). Failure logs a WARN with its
    cause and statement marker once per connector instance; visible-query cancellation and
    socket fallback continue. Doris 4.1.3 default and session toggling are live-verified.
-3. `SHOW FULL PROCESSLIST` -> rows where `Command != Sleep`, `Info` contains the complete
-   statement-marker comment and does not start with the helper's SHOW/KILL -> `QueryId` (regex-validated:
+3. `SHOW FULL PROCESSLIST` -> running rows where `Info` starts with the exact
+   statement-marker comment and its statement is not the helper's SHOW/KILL -> `QueryId` (regex-validated:
    `[0-9a-f]{1,16}-[0-9a-f]{1,16}`).
 4. `KILL QUERY "<QueryId>"` per match — Doris forwards FE-to-FE. Cross-FE proof: query
    owned by fe2, helper on fe3, kill returned in 22ms, victim released with
