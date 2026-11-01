@@ -23,6 +23,10 @@ class ComposeBindingsTest(unittest.TestCase):
                         ["docker", "compose", "-f", str(ROOT / "compose" / filename),
                          "config", "--format", "json"], env=env, check=True, capture_output=True, text=True)
                     config = json.loads(result.stdout)
+                    for service in config["services"].values():
+                        if service["image"].startswith("apache/doris:"):
+                            self.assertEqual(service["labels"]["dev.brikk.trino-doris.test-cluster"],
+                                             "multi-fe" if filename.startswith("multi-fe/") else "single-fe")
                     ports = [p for s in config["services"].values() for p in s.get("ports", [])]
                     self.assertEqual(len(ports), count)
                     self.assertTrue(all(p["host_ip"] == (address or "127.0.0.1") for p in ports))

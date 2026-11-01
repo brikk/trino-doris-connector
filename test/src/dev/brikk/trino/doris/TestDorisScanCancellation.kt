@@ -41,7 +41,6 @@ import org.assertj.core.api.Assertions.assertThatThrownBy
 import org.junit.jupiter.api.Test
 import java.lang.reflect.Proxy
 import java.sql.Connection
-import java.sql.DriverManager
 import java.sql.PreparedStatement
 import java.sql.ResultSet
 import java.sql.SQLException
@@ -70,7 +69,7 @@ class TestDorisScanCancellation {
         val client = DorisClient(
             BaseJdbcConfig(), config,
             ConnectionFactory {
-                DriverManager.getConnection("${DorisQueryRunner.JDBC_URL}/?user=root&connectTimeout=5000&socketTimeout=40000")
+                DorisTestSafety.connectSingle("${DorisQueryRunner.JDBC_URL}/?user=root&connectTimeout=5000&socketTimeout=40000")
             },
             DorisQueryBuilder(RemoteQueryModifier.NONE), TESTING_TYPE_MANAGER,
             DefaultIdentifierMapping(), RemoteQueryModifier.NONE,

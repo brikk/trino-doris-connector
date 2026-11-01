@@ -77,3 +77,4 @@ docker exec trino-doris-fe mysql -h127.0.0.1 -P9030 -uroot -e "
 
 log "Cluster is up. FE mysql: 127.0.0.1:9130 (root, no password) | HTTP: 127.0.0.1:8130"
 log "Tear down with: ./up.sh --down"
+log "Destructive fixture tests require explicit opt-in (repo root): DORIS_TEST_ALLOW_MUTATION=1 ./gradlew build"

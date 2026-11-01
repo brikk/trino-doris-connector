@@ -62,6 +62,7 @@ class TestDorisP2bInvertedIndexEvidence : AbstractTestQueryFramework() {
     }
 
     private fun explainRemote(remoteSql: String): String {
+        DorisTestSafety.requireSingle()
         val process = ProcessBuilder(
             "docker", "exec", "trino-doris-fe",
             "mysql", "-h127.0.0.1", "-P9030", "-uroot", "-e", "EXPLAIN $remoteSql",

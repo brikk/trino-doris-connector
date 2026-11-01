@@ -28,10 +28,12 @@ in a separate replay**, plus eleven resolution probes and an extracted-plugin
 server smoke. Unicode case folding and outer joins stay local; HA read attempts
 are physically pinned. These are staged results, not one no-skip combined run.
 No release has been published; other pre-existing review findings remain separate.
-The [subsequent release-hardening batch](dev-docs/REPORT-trino-484-release-hardening.md)
-also passed a clean single-FE run (370 passed, five overlay skips), tooling/assembly
-guards and current-plugin server smoke. The [remaining runtime/configuration
-triage](dev-docs/TRIAGE-trino-484-remaining-review.md) keeps six R findings open.
+The [latest cancellation/harness follow-up](dev-docs/REPORT-trino-484-cancellation-harness-safety.md)
+passed 378 single-FE tests with slow cancellation enabled and five overlay checks
+in a separate authorized replay, plus permission/identity safeguards and real-plugin
+smoke. R-10 and R-15 are resolved; [remaining runtime/configuration triage](dev-docs/TRIAGE-trino-484-remaining-review.md)
+keeps R-08/R-09/R-11/R-17 open. The earlier
+[release-hardening batch](dev-docs/REPORT-trino-484-release-hardening.md) remains documented.
 Historical [pre-fix 4.1.5 measurements](dev-docs/REPORT-trino-484-doris-4.1.5-lock.md),
 [484 / 4.1.4.1 qualification](dev-docs/REPORT-trino-484-upgrade.md),
 [Trino 483 / Doris upgrade qualification](dev-docs/REPORT-doris-4.1.4.1-upgrade.md)
@@ -202,12 +204,25 @@ Prerequisites: JDK 25 (via [mise](https://mise.jdx.dev)) and Docker (for the liv
 mise install        # JDK 25, from ./mise.toml
 ./compose/up.sh     # local Doris 4.1.5 cluster the tests run against
                     # (FE MySQL on 127.0.0.1:9130, HTTP on 8130, root / no password)
-./gradlew build     # compile + lint + default live suite + verified plugin assembly
+DORIS_TEST_ALLOW_MUTATION=1 ./gradlew build   # compile + lint + destructive disposable-cluster tests + verified assembly
 ```
 
 Tear the test cluster down with `./compose/up.sh --down`.
+Live tests deliberately DROP/rebuild fixture schemas and recreate test accounts. They require the explicit
+`DORIS_TEST_ALLOW_MUTATION=1` opt-in **and** verified disposable Compose ownership,
+network/port/image identity, and a matching native FE/BE roster and ClusterId.
+Use `./compose/up.sh` to recreate older containers without the disposable label;
+it preserves volumes. Matching ports or Doris versions alone never authorize
+fixture setup. Pure unit tests such as
+`./gradlew test --tests '*TestDorisTestSafety'` need neither opt-in nor Docker.
+These permissions are test-harness-only; they do not enable connector writes.
+
 The slow tagged cancellation suite requires `-PwithCancellation`; the multi-FE
 checks require the optional overlay. They are not part of one default CI gate.
+Overlay tests additionally require `DORIS_TEST_ALLOW_FAILOVER=1`, because they
+stop/restart a follower. Without that flag they skip without probing ports;
+with an explicit request, an unsafe/unavailable target fails rather than skips.
+CI/release explicitly authorize fixture mutation, not failover, in their job environment.
 Tooling guards run separately with `python3 -m unittest discover -s test/tooling -v`
 and `python3 -m unittest discover -s test/qualification -v` (actual Gradle assembly/
 release regressions, no live Doris needed).

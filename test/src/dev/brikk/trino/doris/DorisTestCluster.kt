@@ -14,7 +14,6 @@
 package dev.brikk.trino.doris
 
 import java.sql.Connection
-import java.sql.DriverManager
 import java.util.concurrent.TimeUnit
 
 /**
@@ -53,7 +52,7 @@ object DorisTestCluster {
     }
 
     fun openConnection(user: String): Connection =
-        DriverManager.getConnection("${DorisQueryRunner.JDBC_URL}/?user=$user")
+        DorisTestSafety.connectSingle("${DorisQueryRunner.JDBC_URL}/?user=$user")
 
     /** Scalar query oracle as root (side-effect checks, processlist polling). */
     fun queryScalar(sql: String): String? {
@@ -116,6 +115,7 @@ object DorisTestCluster {
      * fires. Same docker-exec substrate as the audit-log helper.
      */
     fun feLogShowsCancellation(dorisQueryId: String): Boolean {
+        DorisTestSafety.requireSingle()
         val process = ProcessBuilder(
             "docker", "exec", FE_CONTAINER,
             "sh", "-c",
@@ -132,6 +132,7 @@ object DorisTestCluster {
      * observed), so callers poll via [awaitAuditLogStatements].
      */
     fun auditLogStatements(marker: String): List<String> {
+        DorisTestSafety.requireSingle()
         val process = ProcessBuilder(
             "docker", "exec", FE_CONTAINER,
             "sh", "-c", "grep -F -- ${shellQuote(marker)} $AUDIT_LOG_PATH || true",

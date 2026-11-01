@@ -20,7 +20,6 @@ import io.airlift.testing.Closeables.closeAllSuppress
 import io.trino.testing.DistributedQueryRunner
 import io.trino.testing.TestingSession.testSessionBuilder
 import java.sql.Connection
-import java.sql.DriverManager
 
 /**
  * Query-runner bootstrap against the ALREADY-RUNNING digest-pinned Doris 4.1.5 compose
@@ -46,7 +45,7 @@ object DorisQueryRunner {
     fun dynamicCatalogBuilder(): Builder = Builder(createDorisCatalog = false)
 
     /** Opens a direct JDBC connection to the Doris FE for fixture setup / oracle queries. */
-    fun openDirectConnection(): Connection = DriverManager.getConnection("$JDBC_URL/?user=$USER")
+    fun openDirectConnection(): Connection = DorisTestCluster.openRootConnection()
 
     class Builder internal constructor(
         private val createDorisCatalog: Boolean,
@@ -69,6 +68,9 @@ object DorisQueryRunner {
 
         @Throws(Exception::class)
         override fun build(): DistributedQueryRunner {
+            // Validate the current endpoint even when the JVM-once fixture fingerprint
+            // is already cached; matching ports/version alone do not authorize writes.
+            openDirectConnection().use { }
             // every live suite comes through here: guarantee the base fixtures exist even on
             // a completely fresh cluster (CI). Idempotent + JVM-once, so dev runs stay fast.
             DorisFixtures.ensureBaseFixtures()

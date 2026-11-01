@@ -20,7 +20,6 @@ import io.trino.testing.QueryRunner
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.TestInstance
-import java.sql.DriverManager
 import java.util.concurrent.TimeUnit
 
 /**
@@ -93,7 +92,7 @@ class TestDorisP5Statistics : AbstractTestQueryFramework() {
 
     @Test
     fun testProbePinTrinoRoCanReadEveryStatisticsSource() {
-        DriverManager.getConnection("${DorisQueryRunner.JDBC_URL}/?user=trino_ro").use { connection ->
+        DorisTestCluster.openConnection("trino_ro").use { connection ->
             val statement = connection.createStatement()
             statement.executeQuery(
                 "SELECT TABLE_ROWS FROM information_schema.tables WHERE TABLE_SCHEMA = 'p5_stats' AND TABLE_NAME = 't'",

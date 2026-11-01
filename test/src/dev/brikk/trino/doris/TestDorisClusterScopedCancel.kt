@@ -19,7 +19,6 @@ import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.Test
 import java.lang.reflect.Proxy
 import java.sql.Connection
-import java.sql.DriverManager
 import java.sql.ResultSet
 import java.sql.SQLException
 import java.sql.Statement
@@ -352,7 +351,7 @@ class TestDorisClusterScopedCancel {
     companion object {
         private val SESSION: ConnectorSession = TestingConnectorSession.builder().build()
 
-        private fun openRoot(): Connection = DriverManager.getConnection("${DorisQueryRunner.JDBC_URL}/?user=root")
+        private fun openRoot(): Connection = DorisTestCluster.openRootConnection()
 
         private fun <T> jdbcProxy(type: Class<T>, handler: (String, Array<out Any?>) -> Any?): T =
             type.cast(Proxy.newProxyInstance(type.classLoader, arrayOf(type)) { _, method, args ->

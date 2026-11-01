@@ -34,6 +34,9 @@ jobs:
     name: gated build + plugin release
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    env:
+      # Explicit destructive-fixture authorization for this job's disposable cluster.
+      DORIS_TEST_ALLOW_MUTATION: '1'
 
     steps:
       - name: Checkout

@@ -18,14 +18,15 @@ script and `--tests '*TestDorisRemainingReview'`; it is not a default release ga
 After qualifying the digest-pinned Trino 484 / Doris 4.1.5 baseline:
 
 ```sh
-JAVA_HOME=~/.local/share/mise/installs/java/25 ./gradlew \
+DORIS_TEST_ALLOW_MUTATION=1 JAVA_HOME=~/.local/share/mise/installs/java/25 ./gradlew \
   -I dev-docs/probes/review-probes.init.gradle test \
   --tests '*TestDorisR04Review' --tests '*TestDorisR05Review' \
   --no-daemon --console=plain
 ```
 
 Both probes use the connector's stock validation target at `127.0.0.1:9130`.
-They require the golden native FE/BE version before running. R-04 recreates only
+They require explicit mutation opt-in, disposable Compose identity and the golden
+native FE/BE version before running. R-04 recreates only
 its `r04_484_review.l` and `.r` fixture tables. Do not point this harness at a
 production server. No multi-FE failover or unrelated container is stopped.
 

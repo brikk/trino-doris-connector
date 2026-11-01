@@ -69,15 +69,28 @@ Proven on 4.1.3: `SELECT`/`SHOW` work; `INSERT`/`DELETE`/`UPDATE` fail with
 
 ## Fixture databases
 
-`p0_probe` is provisioned AUTOMATICALLY by the test harness (`DorisFixtures`, wired into
+Live fixture access requires **`DORIS_TEST_ALLOW_MUTATION=1`**. The common harness
+boundary checks the disposable-purpose label, Compose project/service, immutable
+container IDs, pinned image/network/ports and native FE/BE roster plus ClusterId
+before returning a connection. A matching version or reachable port is insufficient.
+`./up.sh` installs the labels on the owned stack, preserving volumes; this does
+not itself opt into running destructive tests. From the repository root:
+
+```sh
+DORIS_TEST_ALLOW_MUTATION=1 ./gradlew build
+```
+
+`p0_probe` is provisioned automatically by the authorized test harness (`DorisFixtures`, wired into
 every query-runner build): a fresh cluster gets the full byte-exact replica of the original
 P0 evidence fixtures (scalars/arrays/mapstruct/opaque/scalars_view + the 1M-row `nums`,
 seeded in ~250ms via the `numbers()` TVF) on first suite run; complete fixtures are detected
-by row-count fingerprint and skipped. Tests never mutate it. The suites own and recreate
+by row-count fingerprint and skipped. **A mismatched fingerprint or failed count
+query can DROP and rebuild `p0_probe`.** Test accounts such as `trino_ro` are
+also recreated. The suites own and recreate
 `p1_smoke`, `p1_readonly`, `p1_ro_smoke`, `p1_cancel` (`p1_cancel.big` is ~500 MB on the
 wire but near-zero on disk), `p2_*`, `p3_*`, `p4_*`, and `p5_batch`. **No manual fixture
-step exists anymore** — `./up.sh` + `./gradlew build` from zero is the supported path (this
-is what CI does).
+step exists anymore** — `./up.sh` + `DORIS_TEST_ALLOW_MUTATION=1 ./gradlew build` from zero is the supported path (this
+is what CI explicitly authorizes).
 
 ## Manual Trino smoke sandbox (`trino/`, user-facing)
 
@@ -126,10 +139,23 @@ runs three FEs + a BE and is memory-hungry).
 
 - **Usage:**
 
-  ```sh
+   ```sh
   ./multi-fe/up.sh      # up 3 FEs + BE, wait for HA convergence + BE alive
   ./multi-fe/down.sh    # tear down (containers + volumes) — frees the memory
+   ```
+
+- **Test authorization:** an available overlay never enables failover by itself.
+  From the repository root, explicitly authorize both capabilities:
+
+  ```sh
+  DORIS_TEST_ALLOW_MUTATION=1 DORIS_TEST_ALLOW_FAILOVER=1 \
+    ./gradlew test --tests '*TestDorisMultiFeFailover'
   ```
+
+  The guard binds JDBC metadata to the Compose-owned ClusterId and FE/BE roster.
+  Stop/start revalidates ownership and uses the original immutable container ID,
+  refusing an unknown or replaced container. An explicitly requested but unsafe/
+  unavailable overlay fails loud; no opt-in means skip without reachability probes.
 
 - **Multi-host failover URL:** `jdbc:mysql://127.0.0.1:9131,127.0.0.1:9132,127.0.0.1:9133/`
   (plain comma-list). Verdicts, timings, and the production-URL recommendation (TCP

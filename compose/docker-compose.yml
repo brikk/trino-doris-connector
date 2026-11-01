@@ -22,6 +22,8 @@ services:
     image: apache/doris:fe-4.1.5@sha256:bd0149d76fd02429ee4ab751f34c16948fbf761a886070489fdebf7b2069305c
     container_name: trino-doris-fe
     hostname: trino-doris-fe
+    labels:
+      dev.brikk.trino-doris.test-cluster: single-fe
     platform: ${DORIS_FE_PLATFORM:-linux/amd64}
     environment:
       FE_SERVERS: fe1:172.30.81.10:9010
@@ -57,6 +59,8 @@ services:
     image: apache/doris:be-4.1.5@sha256:10d282e1bd685f8c0d71b3b42bbd0841bbb20909de2cd847923f00378b6b9a11
     container_name: trino-doris-be
     hostname: trino-doris-be
+    labels:
+      dev.brikk.trino-doris.test-cluster: single-fe
     # Host is x86_64 Linux — pin amd64 (image is multi-arch; wrong arch under
     # emulation crashes the BE's ELF symbol-index init).
     platform: ${DORIS_BE_PLATFORM:-linux/amd64}

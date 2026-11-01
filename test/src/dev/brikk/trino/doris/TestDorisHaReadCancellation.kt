@@ -9,7 +9,6 @@ import org.junit.jupiter.api.Test
 import java.lang.management.ManagementFactory
 import java.lang.reflect.Proxy
 import java.sql.Connection
-import java.sql.DriverManager
 import java.sql.SQLException
 import java.util.UUID
 import java.util.concurrent.CountDownLatch
@@ -107,7 +106,7 @@ open class TestDorisHaReadCancellation {
     @Test
     fun testPreparedScanKeepsItsPhysicalTargetAfterLogicalRoutingChanges() {
         val url = "jdbc:mysql:replication://127.0.0.1:9130,172.30.81.10:9030/"
-        val owner = DriverManager.getConnection(url, properties())
+        val owner = DorisTestSafety.connectSingle(url, properties())
         owner.isReadOnly = true
         // Only this test retains the HA owner. Production exposes only the pinned view.
         DorisReadDriver.pin(owner).use { connection ->
@@ -188,7 +187,9 @@ open class TestDorisHaReadCancellation {
         }
     }
 
-    private fun readConnection(url: String): Connection = requireNotNull(DorisReadDriver().connect(url, properties()))
+    private fun readConnection(url: String): Connection = DorisTestSafety.openSingle {
+        requireNotNull(DorisReadDriver().connect(url, properties()))
+    }
 
     private fun assertBindings(connection: Connection) {
         connection.prepareStatement("SELECT ? AS n, ? AS s").use { statement ->

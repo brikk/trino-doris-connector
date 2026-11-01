@@ -31,6 +31,8 @@ name: trino-doris-mfe
 # by host:port in the metadata group.
 
 x-fe-common: &fe-common
+  labels:
+    dev.brikk.trino-doris.test-cluster: multi-fe
   # Keep release digests aligned with ../docker-compose.yml (multi-arch indexes).
   image: apache/doris:fe-4.1.5@sha256:bd0149d76fd02429ee4ab751f34c16948fbf761a886070489fdebf7b2069305c
   platform: ${DORIS_FE_PLATFORM:-linux/amd64}
@@ -114,6 +116,8 @@ services:
     image: apache/doris:be-4.1.5@sha256:10d282e1bd685f8c0d71b3b42bbd0841bbb20909de2cd847923f00378b6b9a11
     container_name: trino-doris-mfe-be
     hostname: trino-doris-mfe-be
+    labels:
+      dev.brikk.trino-doris.test-cluster: multi-fe
     platform: ${DORIS_BE_PLATFORM:-linux/amd64}
     depends_on:
       doris-fe1:

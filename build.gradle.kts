@@ -138,6 +138,9 @@ configurations.named("runtimeClasspath") {
 }
 
 tasks.test {
+    // Explicit harness permissions are inputs, not defaults silently enabling writes.
+    inputs.property("dorisTestMutationOptIn", providers.environmentVariable("DORIS_TEST_ALLOW_MUTATION").orElse("unset"))
+    inputs.property("dorisTestFailoverOptIn", providers.environmentVariable("DORIS_TEST_ALLOW_FAILOVER").orElse("unset"))
     // The @Tag("cancellation") suite (TestDorisCancellation) is deliberately slow — it
     // submits a send-blocked cross-join and waits for Doris's server-side timeout sweep —
     // and flakes on shared/2-core CI runners. Cancellation is a works-or-obviously-broken
