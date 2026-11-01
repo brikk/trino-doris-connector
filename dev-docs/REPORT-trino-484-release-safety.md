@@ -2,6 +2,7 @@
 
 Golden stack stays fixed: Trino 484, Doris 4.1.5-release-917b20be838 (digest-pinned
 FE/BE), Connector/J 26.7.0, released metadata 0.21.0, Kotlin 2.4.10, JDK 25.
+Implementation checkpoints: 2026-10-31 through 2026-11-01.
 Baseline checkpoint: `acbbfab`; the historical failing measurements remain in
 `REPORT-trino-484-doris-4.1.5-lock.md`. No release is authorized by these steps.
 
@@ -55,10 +56,59 @@ JAVA_HOME=~/.local/share/mise/installs/java/25 ./gradlew test \
 Log: `/tmp/opencode/trino-484-step2.log`; XML:
 `/tmp/opencode/trino-484-safety/step2-xml/`.
 
-## Remaining approved work
+## Step 3 — physically pinned read attempts
 
-3. Bind cancellation to the scan's physical statement/session, not a busy HA
-   connection proxy; verify real-driver failure/cleanup/failover schedules.
-4. Full golden-stack, cancellation/multi-FE, and assembled-plugin qualification.
+`DorisReadDriver` retains Connector/J's ordinary URL host selection at connect
+time, resolves nested HA wrappers while idle, and detaches the selected native
+connection from mutable HA routing **before any statement is prepared/bound**.
+It verifies that the native safe proxy and execution lock now belong to the
+physical connection, failing closed if that contract cannot be established.
+The pinned view delegates reads/abort to that physical connection and retains
+the original HA owner for complete close/pool cleanup. It runs below
+DriverConnectionFactory's OpenTelemetry wrappers, retaining instrumentation.
+
+This intentionally makes each read connection one physical attempt. Replication/
+load-balancing selection applies when opening a connection, not to later
+per-statement routing/read-only toggles. Failed attempts end; fresh connections
+retain normal host selection/failover, and Trino owns query retries. No busy
+proxy lookup, JDBC unwrap, or routing call is performed during cancellation.
+The existing bounded cluster QueryId helper and no-numeric-ID-kill wrapper stay
+in place. The helper-only DorisCancelDriver remains separate.
+
+Important rejected approach: merely unwrapping a prepared statement and saving
+its session is insufficient. The 26.7.0 statement can still execute through a
+mutable connection wrapper after a routing change. A real identity probe caught
+that mismatch; the production fix instead pins the connection before preparation.
+
+Focused validation: **30 tests passed**, including driver cancellation helpers,
+controlled page-source races and concurrent cleanup. Real factory integration:
+**36 tests passed**, plus detekt and assembly verification, including static/
+dynamic catalogs, scalar reads, prepared parameter fidelity in client/server
+modes and the actual new production read driver.
+
+The HA regressions cover single/comma-list/load-balancing/replication URLs with
+helper disabled/failing and adopted streaming; execute-phase cancel is now
+**0–1ms** in the integration run rather than ~4s. Concurrent cancel/close took
+**1ms / 1ms**. These are observations, not general latency SLAs. A fresh
+connection skips an unavailable first host. A replica-prepared scan keeps its
+captured physical connection even after the retained logical owner's route is
+changed; abort releases that scan while the other current connection survives.
+Closing the pinned view also closes the original HA owner.
+
+Expected post-abort streaming ResultSet.close SQLExceptions remain recorded
+separately; no claim of exception-free driver teardown is made. Measurements
+use plain TCP/same-FE aliases to isolate locks; custom sockets/TLS and cross-FE
+forwarding are not inferred from them. Step 4 provides the separate overlay proof.
+
+Logs: `/tmp/opencode/trino-484-step3-final.log` and
+`/tmp/opencode/trino-484-step3-integration.log`; XML under
+`/tmp/opencode/trino-484-safety/step3-xml/` and `step3-integration-xml/`.
+The opt-in R-05 probe now reuses this durable production-driver regression suite.
+
+## Step 4 — qualification pending
+
+Full golden-stack build, cancellation/multi-FE checks, and assembled-plugin smoke
+remain to be run after the implementation checkpoints. No green full-suite or
+release-readiness claim is made from focused tests alone.
 
 Major steps are committed and pushed to `trino-484`, never a release branch.

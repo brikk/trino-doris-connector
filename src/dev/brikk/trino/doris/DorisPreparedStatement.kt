@@ -21,7 +21,7 @@ import java.sql.ResultSet
 import java.sql.SQLException
 import java.util.concurrent.CountDownLatch
 
-/** One execution per scan. Cancellation must not acquire the driver's busy connection lock. */
+/** One execution per scan. Production connections are physically pinned by [DorisReadDriver]. */
 internal class DorisPreparedStatement(
     private val delegate: PreparedStatement,
     private val connection: Connection,
@@ -77,6 +77,8 @@ internal class DorisPreparedStatement(
                 } finally {
                     // Also covers execute-phase close, where Trino never calls abortReadConnection.
                     // Do not call delegate.cancel(): Connector/J sends an LB-unsafe connection-ID kill.
+                    // The captured read connection delegates abort to its physical connection,
+                    // never the mutable HA owner. No unwrap/routing operation happens here.
                     connection.abort(directExecutor())
                 }
             }

@@ -18,7 +18,6 @@ import com.google.inject.Provides
 import com.google.inject.Scopes
 import com.google.inject.Singleton
 import com.google.inject.multibindings.OptionalBinder.newOptionalBinder
-import com.mysql.cj.jdbc.Driver
 import io.airlift.configuration.AbstractConfigurationAwareModule
 import io.airlift.configuration.ConfigBinder.configBinder
 import io.opentelemetry.api.OpenTelemetry
@@ -109,7 +108,7 @@ class DorisClientModule : AbstractConfigurationAwareModule() {
         // opt-in because Flight needs direct BE reachability (hard behind k8s/NAT). Metadata,
         // pushdown, and SQL generation stay on this JDBC plane either way. NOT scheduled;
         // see dev-docs/TODO-adbc-arrow-flight.md for the gate.
-        return DriverConnectionFactory.builder(Driver(), config.connectionUrl, credentialProvider)
+        return DriverConnectionFactory.builder(DorisReadDriver(), config.connectionUrl, credentialProvider)
             .setConnectionProperties(connectionProperties(dorisConfig))
             .setOpenTelemetry(openTelemetry)
             .build()

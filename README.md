@@ -37,6 +37,9 @@ and historical 4.1.3 probe evidence are preserved.
 
 - One Doris statement per table scan — Doris runs its own distributed execution and streams
   results back; large results are streamed, not buffered in the Trino worker.
+- Read connections retain URL host selection/failover at connect time, then pin one physical
+  FE connection for the attempt. There is no in-flight HA statement rerouting; retries open
+  fresh connections. Physical abort does not wait for the busy HA routing proxy.
 - Scan cancellation resolves a unique statement-id comment in the cluster-wide processlist
   and kills by QueryId, which Doris forwards to the owning FE (`doris.cluster-scoped-cancel`,
   default on). This covers execution before the first result and early scan closure without
