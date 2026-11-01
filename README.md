@@ -88,7 +88,7 @@ Predicates and query shapes the connector pushes into Doris:
 | `min_by(a, b)` / `max_by(a, b)` | same-named | exact-type keys; value column must be NOT NULL (Doris skips NULL-value rows where Trino keeps them — verified) |
 | `any_value(x)` | `any_value(x)` | nondeterministic on both engines; NULL-handling verified identical |
 | `approx_distinct(x)` | `approx_count_distinct(x)` | **opt-in** (`doris.approximate-pushdown`, default off): the HLL sketches differ, so estimates won't match local results |
-| `avg(x)` | *not pushed* | Doris avg semantics diverge (scale truncation / lossy accumulation); write `sum(x)/count(x)` instead — both push and the division stays Trino-exact |
+| `avg(x)` | *not pushed* | evaluated in Trino: Doris scale/accumulation semantics differ; `sum(x)/count(x)` is not a generally equivalent replacement |
 | `GROUP BY` (with the above) | `GROUP BY ...` | exact-type and native VARCHAR/STRING keys (byte-exact grouping verified; CHAR and FLOAT/DOUBLE keys stay local); NULL grouping verified identical |
 | `SELECT DISTINCT ...` | remote `GROUP BY` | same key rules as GROUP BY; composes with WHERE and LIMIT |
 | `HAVING` | outer `WHERE` over the pushed GROUP BY subquery | verified end-to-end |
@@ -101,7 +101,7 @@ Deliberately **not** pushed (kept in Trino to guarantee correct results):
 - `sum`/`avg` outside the table above — Doris wraps integer/decimal/LARGEINT sum overflow
   silently and truncates decimal averages where Trino rounds; these run in Trino so overflow
   still fails loudly and results stay Trino-exact.
-- Anything whose Doris semantics differ from Trino's (e.g. `element_at`, `length`): unknown or
+- Anything without a proven equivalent rewrite (e.g. `element_at`, `lower`, `upper`): unknown or
   unproven expressions always stay in Trino. Partially-pushable filters are split — the safe
   conjuncts go remote, the rest are evaluated in Trino.
 
@@ -125,7 +125,8 @@ render identically on this version. The remaining hazards are handled per mode: 
 trailing-space data (Doris compares stored bytes, Trino compares trimmed values) keeps CHAR
 out of `GUARDED` value pushdown and CHAR sort keys out of TopN in every mode; `LIKE`
 patterns have backslashes doubled (Doris's default escape is `\`, Trino's no-escape `LIKE`
-treats `\` literally), and explicit `ESCAPE` clauses pass through; `GUARDED` additionally
+treats `\` literally). Explicit escapes pass through only for one non-NUL ASCII
+character; unsupported escapes stay local in every mode. `GUARDED` additionally
 keeps predicates whose values contain a 0x00 byte local as defense-in-depth. `BINARY` is
 the mode whose contract is probe-verified byte semantics; `FULL` is caller-asserted.
 
@@ -136,7 +137,7 @@ strings (tiered GUARDED), IN lists up to `domain-compaction-threshold` (default 
 per-query `domain_compaction_threshold`; larger lists ship as ranges with the exact filter
 retained), LIKE-prefix/`starts_with`, JSON equality, array predicates (`contains`,
 `arrays_overlap`, `array_position`, `cardinality`), scalar expressions
-(`coalesce`/`nullif`/temporal extraction/`lower`/`upper`/`length`/date projections),
+(`coalesce`/`nullif`/temporal extraction/`length`/date projections),
 aggregates (`count`/`min`/`max`/`sum(DECIMAL≤18)`/`count DISTINCT`/`min_by`/`max_by`/
 `any_value`), GROUP BY / DISTINCT / HAVING / LIMIT / TopN, and opt-in cost-aware JOINs.
 Dynamic filters from local joins also reach the remote scans.
@@ -144,8 +145,13 @@ Dynamic filters from local joins also reach the remote scans.
 Engine-limited at Trino 484 (cannot reach any connector): `CASE`/`IF` expressions and
 conditional aggregation (`count_if`, `FILTER (WHERE ...)`, `sum(CASE ...)`) — these stay in
 Trino by engine design, over a pushed scan. Deliberately not pushed: `avg` (Doris semantics
-diverge — write `sum(x)/count(x)`, which pushes and stays exact), FLOAT/DOUBLE
+diverge; keep `avg(x)` for Trino's semantics), FLOAT/DOUBLE
 equality/ordering, `approx_distinct` unless `doris.approximate-pushdown` is opted in.
+
+Keep `avg(x)` rather than rewriting it for pushdown. For BIGINT values 1 and 2,
+Trino returns `avg(x) = 1.5`, but `sum(x)/count(x) = 1` through integer division.
+Decimal types, rounding and overflow add further differences, and the connector's
+SUM eligibility is itself restricted.
 
 ### Type mapping
 
@@ -192,22 +198,31 @@ Prerequisites: JDK 25 (via [mise](https://mise.jdx.dev)) and Docker (for the liv
 mise install        # JDK 25, from ./mise.toml
 ./compose/up.sh     # local Doris 4.1.5 cluster the tests run against
                     # (FE MySQL on 127.0.0.1:9130, HTTP on 8130, root / no password)
-./gradlew build     # compile + lint + full test suite + plugin assembly + assembly verification
+./gradlew build     # compile + lint + default live suite + verified plugin assembly
 ```
 
 Tear the test cluster down with `./compose/up.sh --down`.
+The slow tagged cancellation suite requires `-PwithCancellation`; the multi-FE
+checks require the optional overlay. They are not part of one default CI gate.
+Tooling guards run separately with `python3 -m unittest discover -s test/tooling -v`
+and `python3 -m unittest discover -s test/qualification -v` (actual Gradle assembly/
+release regressions, no live Doris needed).
 
 ## Installing into Trino
 
 The build assembles a standard Trino plugin directory (a directory of jars):
 
 ```bash
-./gradlew pluginAssemble    # -> build/trino-plugin/trino-doris-<version>/
+./gradlew verifyPluginAssembly    # -> build/trino-plugin/trino-doris-<version>/
 cp -r build/trino-plugin/trino-doris-<version> "$TRINO_HOME/plugin/"
 ```
 
 Restart the coordinator and workers after copying. Build and deploy against the same
 Trino version; a 483 plugin is not a 484-compatible release.
+For upgrades, replace the previous Doris plugin directory on every node; do not
+accumulate versioned Doris plugin directories under Trino's plugin root. Local
+assembly synchronizes its owned output and verifies exact JAR inventory/bytes
+against resolved inputs, including after dependency removal or upgrade.
 
 ### Releases (prebuilt plugin)
 
@@ -223,7 +238,11 @@ unzip trino-doris-v483-0.1.0.zip -d "$TRINO_HOME/plugin/"   # -> $TRINO_HOME/plu
 ```
 
 Then restart the coordinator and workers. Each release is cut from a `release-<version>`
-branch and only published if the full live-test suite passes in CI.
+branch (or `release/<version>`) and only published after the default live-test
+gate passes in CI. Version labels must be `<trino>-<major>.<minor>.<patch>` with
+an optional non-SNAPSHOT SemVer prerelease; path components and build metadata
+are rejected. The label must match the actual resolved Trino compile dependency,
+not merely a user-supplied project version. These safeguards do not authorize a release.
 
 ## Configuring a catalog
 

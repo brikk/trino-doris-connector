@@ -80,6 +80,43 @@ Evidence under `~/.cache/trino-doris-484-hardening/`:
 no release output remains interpolated into workflow shell source. These are
 local workflow-contract checks, not an actual GitHub publication run.
 
+## Milestone 3 — R-16 and remaining triage
+
+Removed both blanket `AVG → SUM/COUNT` recommendations from the README. AVG
+continues to execute in Trino. A durable BIGINT 1/2 regression pins average
+`1.5` versus integer division `1`; the real-server smoke independently returned
+those values. Decimal result types, rounding, overflow and SUM admission do not
+inherit an equivalence claim. Related stale README LOWER/UPPER/length and
+default-versus-optional test-lane descriptions were corrected while editing.
+
+The [remaining triage](TRIAGE-trino-484-remaining-review.md) covers every open
+runtime/configuration/harness R finding: **R-08/R-09/R-10/R-11/R-15/R-17 remain
+open**. Five opt-in diagnostic tests passed, reproducing statistics-cache policy
+leakage in both directions, false-positive marker classification, duration
+normalization/ranges and URL protocol/effective-database gaps. Passing these
+diagnostics confirms defects, not release safety. R-09 capacity and R-15 target
+authorization remain source-confirmed; no load-throughput or destructive-target
+failure was newly exercised.
+
+I recommend resolving R-10 cancellation identity and R-15 destructive harness
+authorization before publication, alongside the documented next acceptance
+criteria for the remaining configuration and helper-scheduling issues. No fixes
+to those six IDs were silently included or declared done by this batch.
+
+Unicode evidence was forwarded to
+[brikk-sql#1](https://github.com/brikk/brikk-sql/issues/1), with versioned
+counterexamples, column-backed tests and consumer mitigation. Metadata remains
+0.21.0, and LOWER/UPPER remain local in every mode. An upstream issue is not
+permission to upgrade or re-enable either rule.
+
+## Final qualification
+
+A clean single-FE build with slow cancellation enabled is running. This section
+will record its completed result separately from the focused/tooling/diagnostic
+checks. The optional three-FE overlay is not being run simultaneously; its
+port bindings are covered by rendering and the prior safety qualification stays
+historical evidence, not a new overlay replay.
+
 ## Validation environment
 
 The initial focused attempt failed during Kotlin incremental-cache backup with

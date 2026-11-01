@@ -42,6 +42,15 @@ class TestDorisP4Aggregates : AbstractTestQueryFramework() {
         .setCatalogSessionProperty(DorisQueryRunner.CATALOG, "aggregation_pushdown_enabled", "false")
         .build()
 
+    @Test
+    fun testAverageCannotBeReplacedByGeneralSumCountDivision() {
+        val row = computeActual(
+            "SELECT avg(x),sum(x)/count(x) FROM (VALUES BIGINT '1', BIGINT '2') t(x)",
+        ).materializedRows.single()
+        assertThat(row.getField(0)).isEqualTo(1.5)
+        assertThat(row.getField(1)).isEqualTo(1L) // integer division, not an equivalent AVG
+    }
+
     /** Differential: pushdown-enabled results must be row-identical to the local (disabled) plan. */
     private fun assertSameAsLocal(sql: String, description: String = sql) {
         val pushed = computeActual(sql).materializedRows.sortedBy { it.toString() }

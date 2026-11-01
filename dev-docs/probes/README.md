@@ -1,11 +1,19 @@
-# Opt-in R-04 / R-05 rechecks
+# Opt-in review diagnostics
 
-These diagnostic sources are **not part of the default build**. They assert the
+R-04/R-05 diagnostic sources are **not part of the default build**. They assert the
 correctness/non-blocking behavior we want, so an unfixed finding deliberately
 produces a red probe run; it must not be reported as a green release gate.
 The R-05 diagnostic now inherits the durable production-driver regression suite
 that also runs in the default build. Both diagnostic classes pass after the
 approved safety fixes; historical red measurements are retained in the reports.
+
+`TestDorisRemainingReview` is different: it deliberately pins **open** R-08,
+R-10, R-11 and R-17 defects for current-stack triage. A passing run reproduces
+those defects, not their resolution. It uses a UUID-named scratch schema on the
+identified local golden cluster and never issues a live KILL or failover stop.
+See [remaining review triage](../TRIAGE-trino-484-remaining-review.md) for results,
+source-only findings and qualifications. Run it explicitly with the same init
+script and `--tests '*TestDorisRemainingReview'`; it is not a default release gate.
 
 After qualifying the digest-pinned Trino 484 / Doris 4.1.5 baseline:
 
