@@ -107,8 +107,17 @@ The opt-in R-05 probe now reuses this durable production-driver regression suite
 
 ## Step 4 — qualification pending
 
-Full golden-stack build, cancellation/multi-FE checks, and assembled-plugin smoke
-remain to be run after the implementation checkpoints. No green full-suite or
-release-readiness claim is made from focused tests alone.
+The first full run with the three-FE overlay UP and `-PwithCancellation` ran
+**373 tests: 372 passed, one failed, zero errors/skips**, in 16m01s. All
+cancellation, multi-FE, and new safety regressions passed. The single failure
+was an older derived-key test still expecting `lower(v)` grouping pushdown.
+It now uses eligible `nullif(v,'absent')` for the positive control and explicitly
+requires LOWER grouping/DISTINCT to remain local. A focused rerun of that test
+and the complete Unicode fallback suite passed; production admission was not
+relaxed. Original XML is retained in `full-qualification-xml/`.
+
+The full qualification will be rerun before a green full-suite claim. Local
+ZIP/TAR checksum and extraction round-trips passed; final extracted-plugin
+server smoke remains pending. No publication is performed by these checks.
 
 Major steps are committed and pushed to `trino-484`, never a release branch.

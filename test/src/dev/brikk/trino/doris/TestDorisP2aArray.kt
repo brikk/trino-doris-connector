@@ -15,6 +15,7 @@ package dev.brikk.trino.doris
 
 import io.trino.Session
 import io.trino.sql.planner.plan.AggregationNode
+import io.trino.sql.planner.plan.ProjectNode
 import io.trino.sql.planner.plan.TopNNode
 import io.trino.testing.AbstractTestQueryFramework
 import io.trino.testing.QueryRunner
@@ -271,7 +272,7 @@ class TestDorisP2aArray : AbstractTestQueryFramework() {
     fun testNativeAndDerivedStringKeysStillPush() {
         for (mode in DorisStringPushdownMode.entries) {
             val text = textSession(mode)
-            for (expression in listOf("v", "s", "lower(v)", "coalesce(s, 'absent')")) {
+            for (expression in listOf("v", "s", "nullif(v, 'absent')", "coalesce(s, 'absent')")) {
                 assertThat(query(text, "SELECT $expression, count(*) FROM doris.p2_array.text_ordering GROUP BY 1"))
                     .isFullyPushedDown()
                 assertThat(query(text, "SELECT DISTINCT $expression FROM doris.p2_array.text_ordering")).isFullyPushedDown()
@@ -281,6 +282,14 @@ class TestDorisP2aArray : AbstractTestQueryFramework() {
                 } else {
                     assertThat(query(text, topN)).ordered().isNotFullyPushedDown(TopNNode::class.java)
                 }
+            }
+            // Case folding is no longer an eligible derived key on 4.1.5. Its
+            // local projection and grouping must remain above the remote scan.
+            for (sql in listOf(
+                "SELECT lower(v),count(*) FROM doris.p2_array.text_ordering GROUP BY 1",
+                "SELECT DISTINCT lower(v) FROM doris.p2_array.text_ordering",
+            )) {
+                assertThat(query(text, sql)).isNotFullyPushedDown(AggregationNode::class.java, ProjectNode::class.java)
             }
             // Text-mapped payloads do not prevent pushdown when the keys themselves are exact.
             assertThat(query(text, "SELECT a_vc FROM doris.p2_array.text_ordering ORDER BY id LIMIT 2"))
