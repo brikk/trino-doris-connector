@@ -1,7 +1,5 @@
 package dev.brikk.trino.doris
 
-import com.mysql.cj.conf.ConnectionUrl
-import com.mysql.cj.jdbc.NonRegisteringDriver
 import io.airlift.units.Duration
 import io.trino.Session
 import io.trino.testing.AbstractTestQueryFramework
@@ -11,7 +9,6 @@ import org.assertj.core.api.Assertions.assertThatThrownBy
 import org.junit.jupiter.api.AfterAll
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.TestInstance
-import java.util.Properties
 import java.util.UUID
 
 /** Diagnostic pins for OPEN findings, not assertions that these behaviors are safe. */
@@ -82,20 +79,17 @@ class TestDorisRemainingReview : AbstractTestQueryFramework() {
     }
 
     @Test
-    fun testR17UnsupportedProtocolAndEffectiveDatabaseStillPassValidation() {
+    fun testR17UnsupportedProtocolAndEffectiveDatabaseAreRejected() {
         val mysqlx = DorisJdbcConfig().also { it.setConnectionUrl("mysqlx://fe:9030") }
-        assertThat(mysqlx.isUrlValid()).isTrue()
-        assertThat(NonRegisteringDriver().connect("mysqlx://fe:9030", Properties())).isNull()
+        assertThat(mysqlx.isUrlValid()).isFalse()
         for (url in listOf(
             "jdbc:mysql://fe:9030/?DBNAME=hidden_db",
             "jdbc:mysql://address=(host=fe)(port=9030)(DBNAME=hidden_db)/",
         )) {
             val config = DorisJdbcConfig().also { it.setConnectionUrl(url) }
             assertThat(config.isUrlValid()).isTrue()
-            assertThat(config.isUrlWithoutDatabase()).isTrue()
-            val database = ConnectionUrl.getConnectionUrlInstance(url, Properties()).mainHost.database
-            assertThat(database).isEqualTo("hidden_db")
-            println("R17|accepted=$url|effective-db=$database")
+            assertThat(config.isUrlWithoutDatabase()).isFalse()
+            println("R17|rejected-database-setting=$url|no-connection-or-transform")
         }
     }
 }

@@ -102,6 +102,14 @@ class TestDorisDynamicCatalog : AbstractTestQueryFramework() {
             """CREATE CATALOG doris_bad USING doris WITH ("connection-url" = 'jdbc:mysql://example:9030/somedb', "connection-user" = 'root')""",
             "Database (catalog) must not be specified",
         )
+        for (url in listOf("mysqlx://example:9030", "jdbc:mysql://example:9030/?DBNAME=hidden_db",
+            "jdbc:mysql://address=(host=example)(port=9030)(DBNAME=hidden_db)/",
+            "jdbc:mysql://example:9030/?propertiesTransform=java.lang.String", "jdbc:mysql://example:9030/?useConfigs=maxPerformance")) {
+            assertCreateCatalogFails(
+                "CREATE CATALOG doris_bad USING doris WITH (\"connection-url\"='$url',\"connection-user\"='root')",
+                if (url.contains("DBNAME")) "Database (catalog) must not be specified" else "Invalid JDBC URL for the Doris connector",
+            )
+        }
         // Missing required property also fails at CREATE.
         assertCreateCatalogFails(
             """CREATE CATALOG doris_bad USING doris WITH ("connection-user" = 'root')""",

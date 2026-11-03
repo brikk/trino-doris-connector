@@ -16,7 +16,9 @@ passed; an available overlay without failover permission stayed skipped.
 **Subsequent R-11 resolution (2026-11-03):** one timeout range/round-up policy
 now governs catalog/session validation and connection/scan rendering; 24 focused
 checks pass. See [runtime contracts](REPORT-trino-484-runtime-contracts.md).
-**R-08/R-09/R-17 remain open.**
+**Subsequent R-17 resolution (2026-11-03):** pure parser/type admission rejects
+X Protocol, effective DBNAME and URL indirection without DNS/transform loading;
+19 focused checks pass. **R-08/R-09 remain open.**
 
 ## Open findings and next acceptance criteria
 
@@ -27,7 +29,7 @@ checks pass. See [runtime contracts](REPORT-trino-484-runtime-contracts.md).
 | R-10 cancellation candidate identity | **Resolved in 6cc9824:** the exact UUID comment must lead connector-owned SQL. Literal, identifier, nested-comment and audit-search decoys do not match. | 37 focused checks pass, including production-helper no-wrong-KILL, genuine scans, retries and sibling controls. Deliberately forged leading tokens are not a cryptographic authentication guarantee. |
 | R-11 duration validation | **Resolved:** connect 1–2147483647ms, query 1–2147483647s or unset; fractions round up identically in all paths. | Sub-unit/out-of-range catalog/session values fail before use; bounds, native sessions and actual scan setup pass. DNS/credentials/TLS absolute deadlines remain separate K-04/K-05 risks. |
 | R-15 destructive target authorization | **Resolved:** common fixture access requires explicit mutation permission, current disposable Compose ownership/original IDs, and native ClusterId/FE/BE identity. Failover additionally needs its own explicit permission. | Seven pure guards, real fixture refusal, full single-FE build and separate real-overlay permission/failover replay pass. Lifecycle actions re-inspect and use immutable IDs, not mutable names or reachability. |
-| R-17 URL contract | Raw Connector/J URL acceptance is broader than the ordinary JDBC path; checking only the textual path misses effective DBNAME properties. | Admit supported JDBC types, reject X Protocol and effective global/per-host databases without DNS, connection or user-supplied property-transform execution during validation. Cover case/encoding, nested HA forms and side-effect freedom. |
+| R-17 URL contract | **Resolved:** supported JDBC families only; decoded path/global/per-host DBNAME checks. Nonempty profiles/transforms rejected without loading. | Case/encoding/HA/SRV/IPv6/malformed/side-effect sentinel and real catalog validation pass. This is not a sandbox for arbitrary custom driver code at connection time. |
 
 R-10 and R-15 are resolved within their documented guardrail scope.
 R-08/R-11/R-17 are concrete configuration-contract defects, not reasons to bump

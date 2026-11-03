@@ -38,3 +38,30 @@ Focused qualification: **24 passed, zero failures/errors/skips**, detekt and
 sessions and the real scan setup seam, not only policy-helper unit assertions.
 Logs/XML: `~/.cache/trino-doris-484-final-runtime/r11-qualified.log`, `r11-xml/`.
 The live checks explicitly opt into the R-15 disposable-cluster guard.
+
+## R-17 — supported JDBC URL types and effective database settings
+
+Validation uses Connector/J 26.7.0's lexical `ConnectionUrlParser` and pure type
+classification only. It does not construct `ConnectionUrl`, load a transform or
+profile, resolve SRV/DNS, or connect. Normal single/failover/load-balance/
+replication JDBC and their SRV forms remain supported; X Protocol is rejected.
+
+The no-database check covers the decoded path and decoded global/per-host
+properties, with case-insensitive DBNAME recognition. Any nonempty DBNAME is
+rejected, even amid conflicting case variants; empty DBNAME remains permitted.
+Incidental text in credentials/other values is not mistaken for a property.
+Malformed percent encoding/host syntax fails closed instead of escaping validation.
+
+Nonempty `propertiesTransform` and `useConfigs` are deliberately unsupported
+at the catalog URL boundary: their effective settings cannot be verified without
+executing/loading them. This is a conservative compatibility restriction, not
+a claim that arbitrary custom driver code is sandboxed. The internal helper
+driver's independent property-preservation tests are not a catalog admission rule.
+
+Regressions cover protocol families, IPv6, missing/encoded/malformed inputs,
+global/per-host/encoded/mixed-case DBNAME, incidental text, config mutation,
+non-resolving SRV validation, and a transform-constructor/invocation sentinel.
+CREATE CATALOG exercises the same restrictions against the real module wiring.
+Focused qualification: **19 passed, zero failures/errors/skips**, detekt and
+79-JAR assembly verification passed. Log/XML:
+`~/.cache/trino-doris-484-final-runtime/r17-focused.log`, `r17-xml/`.

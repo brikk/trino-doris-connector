@@ -296,6 +296,12 @@ WITH (
 
 Configuration is validated at `CREATE CATALOG` time (a malformed URL fails the statement);
 host reachability is checked lazily on first use. `DROP CATALOG doris;` removes it.
+MySQL JDBC single-host, failover, load-balancing, replication and DNS-SRV forms
+are admitted without DNS lookup during validation; X Protocol (`mysqlx://`) is
+not. Database paths and nonempty global/per-host `DBNAME` settings are rejected,
+including encoded/case variants. Nonempty `propertiesTransform` and `useConfigs`
+URL settings are unsupported: validation never loads user code or configuration
+profiles that could change the effective database.
 
 ### Recommended: a SELECT-only Doris account
 
