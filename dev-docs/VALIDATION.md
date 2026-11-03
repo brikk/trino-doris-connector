@@ -1,5 +1,14 @@
 # Validation
 
+## Trino 483 compatibility release
+
+This branch derives from published `v484-0.4.0` (`f4a1da9`). The maintainer
+explicitly authorized reuse of the completed Doris 4.1.5 qualification and
+requested **no requalification**. The [483 adaptation](TRINO-483.md) receives
+compilation, resolved-ABI, assembly and archive checks only, including test-source
+compilation without execution. The measurements below remain **484 results**;
+they are not relabeled as a new 483 full/live run. No CI automation is changed.
+
 ## Qualified state
 
 Source checkpoint **`5915a25`** is qualified on Trino 484, Doris

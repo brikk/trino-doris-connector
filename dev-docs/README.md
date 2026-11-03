@@ -3,6 +3,7 @@
 The public [README](../README.md) describes using the connector. This directory
 contains the current development reference, not a chronological work log.
 
+- [Trino 483 compatibility](TRINO-483.md): minimal adaptation and reused qualification.
 - [Development](DEVELOPMENT.md): build/test commands, disposable clusters,
   explicit permissions, resource management and diagnostics.
 - [Architecture and invariants](ARCHITECTURE.md): read-only layers, mapping and
