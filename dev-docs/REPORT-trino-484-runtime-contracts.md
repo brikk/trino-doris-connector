@@ -91,3 +91,47 @@ An initial test compile typo (`Estimate.of` needs a Double) was corrected before
 the successful run. Mixed-age estimates and malformed statistics isolation
 (K-02/K-03) remain separate; this is a policy/cache-boundary fix, not a freshness
 guarantee or a general upstream cache rewrite.
+
+## R-09 — scheduled cancellation probes
+
+The helper no longer sleeps through a 15-second retry loop while holding a
+worker/connection. Each attempt opens one helper, widens visibility, makes one
+processlist/KILL probe, then closes JDBC resources before scheduling the next
+attempt. The original dispatch deadline is passed to **every** connection open;
+retry delay/queue time never renews it. A single retry scheduler performs no JDBC
+work in production; the existing eight-worker, bounded-queue executor does probes.
+
+A shared 72-request admission budget counts running, queued **and delayed**
+logical requests across catalogs. Rejections remain non-blocking/best-effort,
+and terminal failure, release or expiry returns admission exactly once. Delayed
+work cannot grow an unbounded timer queue while worker slots happen to be free.
+At most eight helper connections are active, and their watchdog stays armed
+through resource close. The independent physical-abort fallback is unchanged.
+
+Observation state persists across probes: an empty result before a token has
+ever been seen is not proof of release, even when the scan execution has ended.
+Completion is sampled before scanning. Unassigned/invalid QueryIds, repeated
+early no-op kills, sibling isolation, strict leading-token admission and original
+queue deadlines remain covered. Tests now count per-probe resource closes,
+distinct from completion of the whole logical request.
+
+This trades reconnect/setup work for useful worker/connection capacity. It is
+not a connection-rate benchmark, a guarantee of admission above the fixed bound,
+or an absolute DNS/authentication/custom-socket deadline (K-04/K-05 remain).
+
+New production-dispatcher stress models exercise three rounds of eight absent
+finished scans plus a live ninth; 72 delayed requests plus rejected overflow;
+unchanged deadlines across reconnects; and worker/scheduler rejection cleanup.
+Focused qualification: **42 passed, zero failures/errors/skips**, including slow
+cancellation, detekt and 79-JAR assembly verification. Log/XML:
+`~/.cache/trino-doris-484-final-runtime/r09-qualified.log`, `r09-xml/`.
+Initial scaffolding corrections split an overly complex fake and moved its
+remote-state reset after logical-request completion. No production deadline,
+admission bound, delayed-visibility guard or assertion threshold was loosened.
+
+## Final staged qualification pending
+
+Implementation milestones are committed/pushed in the approved order. The final
+clean single-FE build, separate overlay replay, tooling guards and packaged-plugin
+smoke will be recorded here. Focused passes above are not presented as a completed
+aggregate run. No release is authorized by any of these checks.

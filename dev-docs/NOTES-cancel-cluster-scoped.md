@@ -32,6 +32,13 @@ Neither marker needs a session_context bind or an extra connection-time round tr
 
 ## The working sequence (live-proven, 4.1.3)
 
+**R-09 update (2026-11-03):** probes now close helpers and release workers
+before a scheduled retry. Observation state and the original 15s deadline span
+reconnections. A shared 72-request limit includes delayed work; eight absent
+tokens no longer park all eight workers. The sequence below is historical
+mechanism evidence; see `REPORT-trino-484-runtime-contracts.md` for current
+scheduling stress/qualification and its connection-setup tradeoff.
+
 1. Async helper connection (same URL; ANY FE — probed helper-on-fe3).
 2. `SET fetch_all_fe_for_system_table = true` (best-effort). Failure logs a WARN with its
    cause and statement marker once per connector instance; visible-query cancellation and

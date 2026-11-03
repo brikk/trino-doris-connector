@@ -20,14 +20,18 @@ checks pass. See [runtime contracts](REPORT-trino-484-runtime-contracts.md).
 X Protocol, effective DBNAME and URL indirection without DNS/transform loading;
 19 focused checks pass. **Subsequent R-08 resolution (2026-11-03):** metadata
 policy now precedes both caches; real-cache and live policy tests pass (29
-focused checks). **R-09 remains open.**
+focused checks). **Subsequent R-09 resolution (2026-11-03):** scheduled closed-
+resource probes preserve the original window/visibility guards while a shared
+admission bound includes delayed requests; 42 focused/stress checks pass.
+All four requested runtime R findings are resolved within their documented scope;
+the operational K and separate review follow-ups below remain distinct.
 
 ## Open findings and next acceptance criteria
 
 | Finding | Current exposure | Next scoped remedy / acceptance criteria |
 |---|---|---|
 | R-08 statistics session switch | **Resolved:** the metadata guard precedes shared and per-transaction caches. Disabled sessions neither read nor populate statistics; enabled caching remains intact. | Both directions, positive TTL, missing-value caching on/off, cross-transaction hits and catalog-default overrides pass. Mixed-age/malformed estimates remain K-02/K-03, not cache-policy fixes. |
-| R-09 helper capacity | Source still parks each executing helper in a 500ms sleep/retry loop for up to 15s until its token has been seen. Eight never-visible/early-finished attempts can consume the eight workers while genuine cancels queue. No new throughput benchmark is claimed. | Schedule delayed probes without holding scarce workers or an idle connection. Keep one original dispatch deadline, bounded outstanding work, delayed-visibility protection, and sibling isolation; test fairness under eight absent tokens plus a live ninth token. |
+| R-09 helper capacity | **Resolved:** closed-resource probes release workers between scheduled retries. The original deadline/observed-state guard persist; 72 total requests bound running, queued and delayed work. | Three 8-absent/live-9th rounds, delayed saturation, rejection cleanup and unchanged reconnect deadlines pass, alongside existing visibility/sibling/watchdog tests. This is not a throughput or absolute pre-connect deadline guarantee. |
 | R-10 cancellation candidate identity | **Resolved in 6cc9824:** the exact UUID comment must lead connector-owned SQL. Literal, identifier, nested-comment and audit-search decoys do not match. | 37 focused checks pass, including production-helper no-wrong-KILL, genuine scans, retries and sibling controls. Deliberately forged leading tokens are not a cryptographic authentication guarantee. |
 | R-11 duration validation | **Resolved:** connect 1–2147483647ms, query 1–2147483647s or unset; fractions round up identically in all paths. | Sub-unit/out-of-range catalog/session values fail before use; bounds, native sessions and actual scan setup pass. DNS/credentials/TLS absolute deadlines remain separate K-04/K-05 risks. |
 | R-15 destructive target authorization | **Resolved:** common fixture access requires explicit mutation permission, current disposable Compose ownership/original IDs, and native ClusterId/FE/BE identity. Failover additionally needs its own explicit permission. | Seven pure guards, real fixture refusal, full single-FE build and separate real-overlay permission/failover replay pass. Lifecycle actions re-inspect and use immutable IDs, not mutable names or reachability. |

@@ -27,6 +27,7 @@ import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.Semaphore
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 
@@ -149,7 +150,7 @@ class TestDorisClusterScopedCancel {
         )
         val scanCount = AtomicInteger()
         val finished = AtomicBoolean()
-        val closed = CountDownLatch(1)
+        val closed = CountDownLatch(scans.size)
         val events = CopyOnWriteArrayList<String>()
         val sql = CopyOnWriteArrayList<String>()
         val statement = jdbcProxy(Statement::class.java) { method, args ->
@@ -200,15 +201,11 @@ class TestDorisClusterScopedCancel {
         assertThat(closed.await(10, TimeUnit.SECONDS)).describedAs("production helper released its connection").isTrue()
         assertThat(scanCount.get()).isEqualTo(scans.size)
         assertThat(events).containsExactlyElementsOf(scans.indices.flatMap { listOf("finished ${it >= 2}", "scan $it") })
-        assertThat(sql).containsExactly(
-            "SET fetch_all_fe_for_system_table = true",
-            "SHOW FULL PROCESSLIST", "SHOW FULL PROCESSLIST", "SHOW FULL PROCESSLIST",
-            "SHOW FULL PROCESSLIST", "SHOW FULL PROCESSLIST",
-            "SHOW FULL PROCESSLIST", "SHOW FULL PROCESSLIST",
-            "SHOW FULL PROCESSLIST", """KILL QUERY "$queryId"""",
-            "SHOW FULL PROCESSLIST", """KILL QUERY "$queryId"""",
-            "SHOW FULL PROCESSLIST",
-        )
+        val expectedSql = scans.flatMap { rows ->
+            listOf("SET fetch_all_fe_for_system_table = true", "SHOW FULL PROCESSLIST") +
+                rows.filter(DorisClusterScopedCancel::isValidQueryId).map { """KILL QUERY "$it"""" }
+        }
+        assertThat(sql).containsExactlyElementsOf(expectedSql)
     }
 
     // --- live probe pins (single-FE cluster) ---
@@ -219,6 +216,7 @@ class TestDorisClusterScopedCancel {
         val queryMarker = "trino_query_id=${SESSION.queryId}"
         val markers = List(2) { "trino_statement_id=${UUID.randomUUID()}" }
         val helpersClosed = CountDownLatch(2)
+        val slots = Semaphore(2)
         val cancel = DorisClusterScopedCancel(
             DorisCancelConnectionFactory { _, _ ->
                 val connection = openRoot()
@@ -233,6 +231,7 @@ class TestDorisClusterScopedCancel {
                 }
             },
             enabled = true,
+            requestSlots = slots,
         )
         val pool = Executors.newFixedThreadPool(2)
         val victims = markers.map { marker ->
@@ -264,7 +263,7 @@ class TestDorisClusterScopedCancel {
                     assertThat(queryIds).doesNotHaveDuplicates()
                     cancelOnce(0)
                     assertThat(victims[0].get(20, TimeUnit.SECONDS)).contains("cancel query by user")
-                    awaitTrue("helper A finished verifying release") { helpersClosed.count == 1L }
+                    awaitTrue("request A finished verifying release") { slots.availablePermits() == 2 }
                     assertThat(runningQueryIds(statement, markers[0])).isEmpty()
                     assertThat(runningQueryIds(statement, markers[1])).contains(queryIds[1])
                     assertThat(victims[1].isDone).describedAs("sibling with the same Trino query id remains live").isFalse()
@@ -280,6 +279,7 @@ class TestDorisClusterScopedCancel {
                     cancelOnce(1)
                     assertThat(victims[1].get(20, TimeUnit.SECONDS)).contains("cancel query by user")
                     assertThat(helpersClosed.await(20, TimeUnit.SECONDS)).isTrue()
+                    awaitTrue("both logical requests released admission") { slots.availablePermits() == 2 }
                     assertThat(runningQueryIds(statement, markers[1])).isEmpty()
                 }
             }

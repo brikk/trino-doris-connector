@@ -1,0 +1,199 @@
+package dev.brikk.trino.doris
+
+import com.google.common.util.concurrent.MoreExecutors.directExecutor
+import io.trino.testing.TestingConnectorSession
+import org.assertj.core.api.Assertions.assertThat
+import org.junit.jupiter.api.Test
+import java.lang.reflect.Proxy
+import java.sql.Connection
+import java.sql.ResultSet
+import java.sql.SQLException
+import java.sql.Statement
+import java.util.UUID
+import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executor
+import java.util.concurrent.RejectedExecutionException
+import java.util.concurrent.Semaphore
+import java.util.concurrent.TimeUnit.SECONDS
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
+
+/** Strict, deterministic JDBC models exercise the production dispatcher, not a copied retry loop. */
+class TestDorisCancelScheduling {
+    private val session = TestingConnectorSession.builder().build()
+
+    @Test
+    fun testEightAbsentFinishedScansDoNotStarveALiveNinthRequest() {
+        repeat(3) {
+            val executor = DorisClusterScopedCancel.newExecutor()
+            val scheduler = DorisClusterScopedCancel.newRetryScheduler()
+            val slots = Semaphore(72)
+            val model = Model(liveMarker = marker(), firstCloses = 8)
+            val cancel = DorisClusterScopedCancel(model.factory, true, executor, 5000, scheduler, slots)
+            try {
+                repeat(8) { cancel.cancel(session, marker()) { true } }
+                assertThat(model.closed.await(2, SECONDS)).describedAs("absent probes closed before retry window ends").isTrue()
+                cancel.cancel(session, requireNotNull(model.liveMarker)) { true }
+                assertThat(model.killed.await(2, SECONDS)).describedAs("live ninth request gets a worker before absent requests expire").isTrue()
+                assertThat(slots.tryAcquire(72, 8, SECONDS)).describedAs("all logical requests release admission").isTrue()
+                assertThat(model.active.get()).isZero()
+                assertThat(model.maximumActive.get()).isLessThanOrEqualTo(8)
+                assertThat(model.failures).isEmpty()
+                assertThat(scheduler.queue).isEmpty()
+            } finally {
+                scheduler.shutdownNow()
+                executor.shutdownNow()
+                assertThat(scheduler.awaitTermination(5, SECONDS)).isTrue()
+                assertThat(executor.awaitTermination(5, SECONDS)).isTrue()
+            }
+        }
+    }
+
+    @Test
+    fun testDelayedRequestsRemainBoundedEvenWhenWorkersAndConnectionsAreFree() {
+        val executor = DorisClusterScopedCancel.newExecutor()
+        val scheduler = DorisClusterScopedCancel.newRetryScheduler()
+        val slots = Semaphore(72)
+        val model = Model(firstCloses = 72)
+        val cancel = DorisClusterScopedCancel(model.factory, true, executor, 5000, scheduler, slots)
+        try {
+            repeat(72) { cancel.cancel(session, marker()) { true } }
+            assertThat(model.closed.await(2, SECONDS)).isTrue()
+            assertThat(slots.availablePermits()).isZero()
+            assertThat(scheduler.queue.size).isLessThanOrEqualTo(72)
+            val rejected = DorisClusterScopedCancel.killsRejected.get()
+            cancel.cancel(session, marker()) { true }
+            assertThat(DorisClusterScopedCancel.killsRejected.get()).isEqualTo(rejected + 1)
+            assertThat(model.maximumActive.get()).isLessThanOrEqualTo(8)
+            assertThat(slots.tryAcquire(72, 8, SECONDS)).isTrue()
+            assertThat(model.active.get()).isZero()
+            assertThat(model.failures).isEmpty()
+        } finally {
+            scheduler.shutdownNow()
+            executor.shutdownNow()
+            assertThat(scheduler.awaitTermination(5, SECONDS)).isTrue()
+            assertThat(executor.awaitTermination(5, SECONDS)).isTrue()
+        }
+    }
+
+    @Test
+    fun testReconnectedProbesKeepTheOriginalDeadlineAndDoNotRenewTheWindow() {
+        val executor = DorisClusterScopedCancel.newExecutor()
+        val scheduler = DorisClusterScopedCancel.newRetryScheduler()
+        val slots = Semaphore(1)
+        val model = Model()
+        try {
+            DorisClusterScopedCancel(model.factory, true, executor, 1600, scheduler, slots).cancel(session, marker()) { true }
+            assertThat(slots.tryAcquire(1, 4, SECONDS)).isTrue()
+            assertThat(model.deadlines.size).isGreaterThanOrEqualTo(2)
+            assertThat(model.deadlines.distinct()).hasSize(1)
+            assertThat(model.active.get()).isZero()
+            assertThat(model.failures).isEmpty()
+        } finally {
+            scheduler.shutdownNow()
+            executor.shutdownNow()
+            assertThat(scheduler.awaitTermination(5, SECONDS)).isTrue()
+            assertThat(executor.awaitTermination(5, SECONDS)).isTrue()
+        }
+    }
+
+    @Test
+    fun testWorkerOrSchedulerRejectionReleasesAdmissionAndNeverEscapes() {
+        for (rejectWorker in listOf(false, true)) {
+            val scheduler = DorisClusterScopedCancel.newRetryScheduler().also { it.shutdown() }
+            val slots = Semaphore(1)
+            val model = Model()
+            val executor = if (rejectWorker) Executor { throw RejectedExecutionException("scripted worker rejection") } else directExecutor()
+            val before = DorisClusterScopedCancel.killsRejected.get()
+            DorisClusterScopedCancel(model.factory, true, executor, 5000, scheduler, slots).cancel(session, marker()) { true }
+            assertThat(slots.availablePermits()).isEqualTo(1)
+            assertThat(model.active.get()).isZero()
+            assertThat(model.deadlines).hasSize(if (rejectWorker) 0 else 1)
+            assertThat(DorisClusterScopedCancel.killsRejected.get()).isEqualTo(before + 1)
+            assertThat(model.failures).isEmpty()
+        }
+    }
+
+    private class Model(val liveMarker: String? = null, firstCloses: Int = 1) {
+        val closed = CountDownLatch(firstCloses)
+        val killed = CountDownLatch(1)
+        val active = AtomicInteger()
+        val maximumActive = AtomicInteger()
+        val failures = CopyOnWriteArrayList<Throwable>()
+        val deadlines = CopyOnWriteArrayList<Long>()
+        private val running = AtomicBoolean(liveMarker != null)
+        val factory = DorisCancelConnectionFactory { _, deadline ->
+            deadlines.add(deadline)
+            val count = active.incrementAndGet()
+            maximumActive.updateAndGet { maxOf(it, count) }
+            connection()
+        }
+
+        private fun connection(): Connection {
+            val didClose = AtomicBoolean()
+            return proxy(Connection::class.java) { method, _ ->
+                when (method) {
+                    "createStatement" -> statement()
+                    "setNetworkTimeout", "abort" -> null
+                    "close" -> {
+                        check(didClose.compareAndSet(false, true)) { "Connection closed twice" }
+                        active.decrementAndGet()
+                        closed.countDown()
+                        null
+                    }
+                    else -> error("Unexpected helper connection call: $method")
+                }
+            }
+        }
+
+        private fun statement(): Statement = proxy(Statement::class.java) { method, arguments ->
+            when (method) {
+                "execute" -> {
+                    val sql = arguments[0] as String
+                    if (sql != "SET fetch_all_fe_for_system_table = true") {
+                        check(sql == "KILL QUERY \"a-b\"") { "Wrong/unvalidated kill: $sql" }
+                        running.set(false)
+                        killed.countDown()
+                    }
+                    false
+                }
+                "executeQuery" -> {
+                    check(arguments[0] == "SHOW FULL PROCESSLIST")
+                    processlist()
+                }
+                "close" -> null
+                else -> error("Unexpected helper statement call $method")
+            }
+        }
+
+        private fun processlist(): ResultSet {
+            var row = running.get()
+            return proxy(ResultSet::class.java) { operation, columns ->
+                when (operation) {
+                    "next" -> row.also { row = false }
+                    "getString" -> when (columns[0]) {
+                        "Info" -> "/*$liveMarker*/ SELECT 1"
+                        "Command" -> "Query"
+                        "QueryId" -> "a-b"
+                        else -> error("Unexpected processlist column")
+                    }
+                    "close" -> null
+                    else -> error("Unexpected processlist call $operation")
+                }
+            }
+        }
+
+        private fun <T> proxy(type: Class<T>, handler: (String, Array<out Any?>) -> Any?): T =
+            type.cast(Proxy.newProxyInstance(type.classLoader, arrayOf(type)) { _, method, args ->
+                try {
+                    handler(method.name, args ?: emptyArray())
+                } catch (failure: Throwable) {
+                    if (failure !is SQLException) failures.add(failure)
+                    throw failure
+                }
+            })
+    }
+
+    private fun marker(): String = "trino_statement_id=${UUID.randomUUID()}"
+}

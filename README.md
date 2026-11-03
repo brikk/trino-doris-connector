@@ -70,6 +70,11 @@ and historical 4.1.3 probe evidence are preserved.
   statistics caches: it neither exposes warmed estimates nor caches unknown
   statistics for later enabled sessions. Enabled sessions retain normal caching.
 
+Cancellation helpers use short probes with closed connections between scheduled
+retries, retaining the original deadline and delayed-visibility protection.
+Running, queued and delayed requests share a bounded budget per plugin classloader;
+retry delays do not occupy the eight worker threads or idle helper connections.
+
 ### Pushdown
 
 Predicates and query shapes the connector pushes into Doris:

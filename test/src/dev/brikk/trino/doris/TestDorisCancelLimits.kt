@@ -29,6 +29,7 @@ import java.util.concurrent.Executor
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.ThreadPoolExecutor
+import java.util.concurrent.Semaphore
 import java.util.concurrent.TimeUnit.MILLISECONDS
 import java.util.concurrent.TimeUnit.SECONDS
 import java.util.concurrent.atomic.AtomicInteger
@@ -55,6 +56,7 @@ class TestDorisCancelLimits {
             },
             enabled = true,
             executor = executor,
+            requestSlots = Semaphore(72),
         )
         val aborts = AtomicInteger()
         val rawCancels = AtomicInteger()

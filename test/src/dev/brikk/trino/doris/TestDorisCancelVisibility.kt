@@ -27,6 +27,9 @@ import java.util.logging.Handler
 import java.util.logging.Level
 import java.util.logging.LogRecord
 import java.util.logging.Logger
+import java.util.concurrent.Semaphore
+import java.util.concurrent.TimeUnit.SECONDS
+import java.util.concurrent.atomic.AtomicBoolean
 
 class TestDorisCancelVisibility {
     @Test
@@ -46,10 +49,13 @@ class TestDorisCancelVisibility {
         var aborts = 0
         val session = TestingConnectorSession.builder().build()
         val failedSet = SQLException("access denied for session variable", "42000")
-        val factory = DorisCancelConnectionFactory { _, _ -> helper(marker, killed, failedSet) }
-        val cancel = DorisClusterScopedCancel(factory, enabled = true, executor = directExecutor())
+        val running = AtomicBoolean(true)
+        val slots = Semaphore(1)
+        val factory = DorisCancelConnectionFactory { _, _ -> helper(marker, killed, failedSet, running) }
+        val cancel = DorisClusterScopedCancel(factory, enabled = true, executor = directExecutor(), requestSlots = slots)
         try {
             repeat(2) {
+                running.set(true)
                 val result = proxy(ResultSet::class.java) { _, _ -> null }
                 val raw = proxy(PreparedStatement::class.java) { method, _ ->
                     when (method) {
@@ -67,6 +73,7 @@ class TestDorisCancelVisibility {
                     it.executeQuery()
                     it.cancel()
                 }
+                awaitRequest(slots)
             }
             assertThat(aborts).isEqualTo(2)
             assertThat(killed).hasSize(2)
@@ -74,10 +81,14 @@ class TestDorisCancelVisibility {
             assertThat(warnings.single().message).contains("fetch_all_fe_for_system_table", "best-effort", "once per connector")
             assertThat(warnings.single().thrown).isSameAs(failedSet)
             // A separate catalog must not have its warning suppressed by the first one.
-            DorisClusterScopedCancel(factory, enabled = true, executor = directExecutor()).cancel(session, marker) { true }
+            running.set(true)
+            DorisClusterScopedCancel(factory, enabled = true, executor = directExecutor(), requestSlots = slots).cancel(session, marker) { true }
+            awaitRequest(slots)
             assertThat(warnings).hasSize(2)
-            DorisClusterScopedCancel({ _, _ -> helper(marker, killed, null) }, enabled = true, executor = directExecutor())
+            running.set(true)
+            DorisClusterScopedCancel({ _, _ -> helper(marker, killed, null, running) }, enabled = true, executor = directExecutor(), requestSlots = slots)
                 .cancel(session, marker) { true }
+            awaitRequest(slots)
             assertThat(warnings).hasSize(2)
             assertThat(killed).hasSize(4)
         } finally {
@@ -102,8 +113,7 @@ class TestDorisCancelVisibility {
     }
 
     @Suppress("CyclomaticComplexMethod") // Strict JDBC script for both SET failure and successful kill.
-    private fun helper(marker: String, killed: MutableList<String>, failedSet: SQLException?): Connection {
-        var running = true
+    private fun helper(marker: String, killed: MutableList<String>, failedSet: SQLException?, running: AtomicBoolean): Connection {
         val statement = proxy(Statement::class.java) { method, args ->
             when (method) {
                 "execute" -> {
@@ -113,13 +123,13 @@ class TestDorisCancelVisibility {
                     } else {
                         assertThat(sql).isEqualTo("KILL QUERY \"a-b\"")
                         killed.add(sql)
-                        running = false
+                        running.set(false)
                     }
                     false
                 }
                 "executeQuery" -> {
                     assertThat(args[0]).isEqualTo("SHOW FULL PROCESSLIST")
-                    var row = running
+                    var row = running.get()
                     proxy(ResultSet::class.java) { operation, columns ->
                         when (operation) {
                             "next" -> row.also { row = false }
@@ -140,6 +150,11 @@ class TestDorisCancelVisibility {
                 else -> error("Unexpected helper connection call: $method")
             }
         }
+    }
+
+    private fun awaitRequest(slots: Semaphore) {
+        assertThat(slots.tryAcquire(1, 5, SECONDS)).describedAs("logical cancellation request finished").isTrue()
+        slots.release()
     }
 
     private fun <T> proxy(type: Class<T>, handler: (String, Array<out Any?>) -> Any?): T =
