@@ -29,6 +29,7 @@ import io.trino.plugin.jdbc.JdbcClient
 import io.trino.plugin.jdbc.JdbcJoinPushdownConfig
 import io.trino.plugin.jdbc.JdbcJoinPushdownSessionProperties
 import io.trino.plugin.jdbc.JdbcMetadataConfig
+import io.trino.plugin.jdbc.JdbcMetadataFactory
 import io.trino.plugin.jdbc.JdbcModule.bindSessionPropertiesProvider
 import io.trino.plugin.jdbc.QueryBuilder
 import io.trino.plugin.jdbc.credential.CredentialProvider
@@ -73,6 +74,8 @@ class DorisClientModule : AbstractConfigurationAwareModule() {
         newOptionalBinder(binder, QueryBuilder::class.java)
             .setBinding().to(DorisQueryBuilder::class.java).`in`(Scopes.SINGLETON)
         bindSessionPropertiesProvider(binder, DorisSessionProperties::class.java)
+        newOptionalBinder(binder, JdbcMetadataFactory::class.java)
+            .setBinding().to(DorisJdbcMetadataFactory::class.java).`in`(Scopes.SINGLETON)
         configBinder(binder).bindConfig(DorisJdbcConfig::class.java)
         configBinder(binder).bindConfig(DorisConfig::class.java)
         install(DecimalModule.withNumberMapping(DecimalModule.MappingToNumber.UNSUPPORTED))

@@ -66,6 +66,9 @@ and historical 4.1.3 probe evidence are preserved.
   `statistics_enabled`): row counts and column NDV/nulls/size/ranges from Doris's statistics
   store. The connector only reads statistics — Doris auto-analyze (on by default) or your own
   `ANALYZE TABLE` keeps them fresh; missing statistics simply mean unknown estimates.
+  `statistics_enabled=false` is enforced before shared and transaction-level
+  statistics caches: it neither exposes warmed estimates nor caches unknown
+  statistics for later enabled sessions. Enabled sessions retain normal caching.
 
 ### Pushdown
 

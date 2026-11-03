@@ -39,7 +39,7 @@ class TestDorisRemainingReview : AbstractTestQueryFramework() {
     }
 
     @Test
-    fun testR08PositiveTtlCacheIgnoresSessionSwitchInBothDirections() {
+    fun testR08PositiveTtlCacheHonorsSessionSwitchInBothDirections() {
         val disabled = Session.builder(session).setCatalogSessionProperty("doris", "statistics_enabled", "false").build()
         fun count(session: Session, table: String): Any? =
             computeActual(session, "SHOW STATS FOR doris.$schema.$table").materializedRows
@@ -47,11 +47,11 @@ class TestDorisRemainingReview : AbstractTestQueryFramework() {
         val warm = count(session, "warm_enabled")
         val disabledAfterWarm = count(disabled, "warm_enabled")
         assertThat(warm).isEqualTo(1.0)
-        assertThat(disabledAfterWarm).isEqualTo(warm)
+        assertThat(disabledAfterWarm).isNull()
         val coldDisabled = count(disabled, "warm_disabled")
         val enabledAfterDisabled = count(session, "warm_disabled")
         assertThat(coldDisabled).isNull()
-        assertThat(enabledAfterDisabled).isNull()
+        assertThat(enabledAfterDisabled).isEqualTo(1.0)
         println("R08|enabled-first=$warm|disabled-after=$disabledAfterWarm|disabled-first=$coldDisabled|enabled-after=$enabledAfterDisabled")
     }
 

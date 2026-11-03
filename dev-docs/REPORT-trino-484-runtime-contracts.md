@@ -65,3 +65,29 @@ CREATE CATALOG exercises the same restrictions against the real module wiring.
 Focused qualification: **19 passed, zero failures/errors/skips**, detekt and
 79-JAR assembly verification passed. Log/XML:
 `~/.cache/trino-doris-484-final-runtime/r17-focused.log`, `r17-xml/`.
+
+## R-08 — statistics policy above both caches
+
+The pinned 484 factory adds a per-transaction `CachingJdbcClient` above the
+shared catalog cache. `DorisJdbcMetadataFactory` preserves those upstream
+caches/listeners/identity settings and inserts the session policy at the outer
+metadata statistics boundary. Disabled sessions return unknown **before either
+cache or delegate is consulted**, preventing both warmed-estimate leakage and
+disabled-first missing-value poisoning. Enabled sessions retain their normal
+cache behavior. The existing below-cache guard remains defense in depth.
+
+Unit tests use both real caching layers and a counted delegate, proving enabled
+hits are preserved across metadata transactions and disabled requests never
+reach the delegate or insert empty results (missing-value caching on and off).
+Live tests use positive TTL/missing caching in both directions and a separate
+catalog defaulting to disabled with explicit enabled-session overrides. They
+also pin unknown column estimates and unchanged data results. Existing statistics,
+join cost/INNER controls and read-only guards are included in qualification.
+
+Focused qualification: **29 passed, zero failures/errors/skips**, detekt and
+79-JAR assembly verification passed. Log/XML:
+`~/.cache/trino-doris-484-final-runtime/r08-qualified.log`, `r08-xml/`.
+An initial test compile typo (`Estimate.of` needs a Double) was corrected before
+the successful run. Mixed-age estimates and malformed statistics isolation
+(K-02/K-03) remain separate; this is a policy/cache-boundary fix, not a freshness
+guarantee or a general upstream cache rewrite.
