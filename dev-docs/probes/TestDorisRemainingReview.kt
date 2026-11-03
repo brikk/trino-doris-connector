@@ -7,6 +7,7 @@ import io.trino.Session
 import io.trino.testing.AbstractTestQueryFramework
 import io.trino.testing.QueryRunner
 import org.assertj.core.api.Assertions.assertThat
+import org.assertj.core.api.Assertions.assertThatThrownBy
 import org.junit.jupiter.api.AfterAll
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.TestInstance
@@ -66,17 +67,18 @@ class TestDorisRemainingReview : AbstractTestQueryFramework() {
     }
 
     @Test
-    fun testR11TimeoutValuesRemainUnvalidatedAndNormalizeDifferently() {
+    fun testR11TimeoutBoundsAndSharedNormalization() {
         for (duration in listOf("0ms", "0.1ms", "30d")) {
-            val config = DorisConfig().setConnectTimeout(Duration.valueOf(duration))
-            val value = DorisClientModule.connectionProperties(config).getProperty("connectTimeout").toLong()
-            assertThat(value == 0L || value > Int.MAX_VALUE).isTrue()
-            println("R11|connect=$duration|driver-ms=$value")
+            assertThatThrownBy { DorisConfig().setConnectTimeout(Duration.valueOf(duration)) }
+                .isInstanceOf(IllegalArgumentException::class.java)
         }
-        val query = DorisConfig().setQueryTimeout(Duration.valueOf("100ms"))
+        assertThatThrownBy { DorisConfig().setQueryTimeout(Duration.valueOf("100ms")) }
+            .isInstanceOf(IllegalArgumentException::class.java)
+        val query = DorisConfig().setQueryTimeout(Duration.valueOf("1.1s"))
         val initial = DorisClientModule.connectionProperties(query).getProperty("sessionVariables")
-        assertThat(initial).isEqualTo("query_timeout=0")
-        println("R11|query=100ms|open=$initial|scan-source-clamps-to-at-least-one-second")
+        assertThat(initial).isEqualTo("query_timeout=2")
+        assertThat(DorisTimeouts.querySeconds(query.getQueryTimeout()!!)).isEqualTo(2)
+        println("R11|invalid-ranges-rejected|query=1.1s|open=$initial|scan=2")
     }
 
     @Test

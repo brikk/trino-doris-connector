@@ -37,8 +37,9 @@ class DorisConfig {
     fun getQueryTimeout(): Duration? = queryTimeout
 
     @Config("doris.query-timeout")
-    @ConfigDescription("Doris session variable query_timeout (seconds granularity), applied per connection session")
+    @ConfigDescription("Doris query_timeout: 1s to 2147483647s, rounded up to whole seconds consistently at connection and scan setup")
     fun setQueryTimeout(queryTimeout: Duration?): DorisConfig {
+        queryTimeout?.let(DorisTimeouts::querySeconds)
         this.queryTimeout = queryTimeout
         return this
     }
@@ -117,8 +118,9 @@ class DorisConfig {
     fun getConnectTimeout(): Duration = connectTimeout
 
     @Config("doris.connect-timeout")
-    @ConfigDescription("Connector/J connectTimeout for connections to the Doris FE")
+    @ConfigDescription("Connector/J connectTimeout: 1ms to 2147483647ms, rounded up to whole milliseconds")
     fun setConnectTimeout(connectTimeout: Duration): DorisConfig {
+        DorisTimeouts.connectMillis(connectTimeout)
         this.connectTimeout = connectTimeout
         return this
     }

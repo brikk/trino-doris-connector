@@ -15,6 +15,7 @@
  */
 package dev.brikk.trino.doris
 
+import io.airlift.units.Duration
 import io.trino.plugin.base.mapping.DefaultIdentifierMapping
 import io.trino.plugin.jdbc.BaseJdbcConfig
 import io.trino.plugin.jdbc.ConnectionFactory
@@ -281,14 +282,28 @@ class TestDorisScanCancellation {
         }
     }
 
-    private class FakeJdbc : AutoCloseable {
+    @Test
+    fun testCatalogAndSessionTimeoutsUseTheSameScanNormalization() {
+        val config = DorisConfig().setQueryTimeout(Duration.valueOf("1.1s"))
+        for ((override, seconds) in listOf(null to 2, "3.1s" to 4, "2147483647s" to Int.MAX_VALUE)) {
+            FakeJdbc(config, override).use { jdbc ->
+                val scan = jdbc.scan()
+                jdbc.buildSql(scan)
+                assertThat(scan.sessionSql).containsExactly("SET query_timeout = $seconds")
+            }
+        }
+    }
+
+    private class FakeJdbc(
+        private val config: DorisConfig = DorisConfig().setClusterScopedCancel(true),
+        timeoutOverride: String? = null,
+    ) : AutoCloseable {
         val executor = Executors.newSingleThreadExecutor { Thread(it, "scan-test-execute").apply { isDaemon = true } }
         val closer = Executors.newSingleThreadExecutor { Thread(it, "scan-test-close").apply { isDaemon = true } }
-        private val config = DorisConfig().setClusterScopedCancel(true)
         val session = TestingConnectorSession.builder().setPropertyMetadata(
             DorisSessionProperties(config).sessionProperties +
                 JdbcMetadataSessionProperties(JdbcMetadataConfig(), Optional.empty()).sessionProperties,
-        ).build()
+        ).apply { if (timeoutOverride != null) setPropertyValues(mapOf("query_timeout" to timeoutOverride)) }.build()
         private val scans = CopyOnWriteArrayList<FakeScan>()
         private val pendingConnections = ConcurrentLinkedQueue<Connection>()
         private val sources = mutableListOf<JdbcPageSource>()
@@ -395,6 +410,7 @@ class TestDorisScanCancellation {
 
     private class FakeScan(val queryId: String) {
         lateinit var sql: String
+        val sessionSql = mutableListOf<String>()
         val parameters = mutableListOf<Pair<Int, Long>>()
         val executeEntered = CountDownLatch(1)
         val releaseExecute = CountDownLatch(1)
@@ -452,6 +468,13 @@ class TestDorisScanCancellation {
         val connection: Connection = jdbcProxy(Connection::class.java) { method, args ->
             when (method) {
                 "prepareStatement" -> { sql = args[0] as String; rawStatement }
+                "createStatement" -> jdbcProxy(Statement::class.java) { operation, values ->
+                    when (operation) {
+                        "execute" -> { sessionSql.add(values[0] as String); false }
+                        "close" -> null
+                        else -> error("Unexpected session setup call: $operation")
+                    }
+                }
                 "setReadOnly" -> null
                 "isClosed" -> connectionClosed.get()
                 "abort" -> {

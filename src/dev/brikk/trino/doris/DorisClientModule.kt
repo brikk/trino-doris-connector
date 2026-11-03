@@ -155,14 +155,14 @@ class DorisClientModule : AbstractConfigurationAwareModule() {
             properties.setProperty("useUnicode", "true")
             properties.setProperty("characterEncoding", "UTF-8")
             properties.setProperty("useServerPrepStmts", "false")
-            properties.setProperty("connectTimeout", dorisConfig.getConnectTimeout().toMillis().toString())
+            properties.setProperty("connectTimeout", DorisTimeouts.connectMillis(dorisConfig.getConnectTimeout()).toString())
             sessionVariables(dorisConfig)?.let { properties.setProperty("sessionVariables", it) }
             return properties
         }
 
         private fun sessionVariables(config: DorisConfig): String? {
             val variables = buildList {
-                config.getQueryTimeout()?.let { add("query_timeout=${it.roundTo(java.util.concurrent.TimeUnit.SECONDS)}") }
+                config.getQueryTimeout()?.let { add("query_timeout=${DorisTimeouts.querySeconds(it)}") }
                 config.getExecMemLimit()?.let { add("exec_mem_limit=${it.toBytes()}") }
                 config.getTimeZone()?.let { timeZone ->
                     require(!timeZone.contains('\'') && !timeZone.contains(',')) {

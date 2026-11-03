@@ -13,6 +13,7 @@
  */
 package dev.brikk.trino.doris
 
+import io.airlift.units.Duration
 import io.trino.testing.AbstractTestQueryFramework
 import io.trino.testing.QueryRunner
 import org.assertj.core.api.Assertions.assertThat
@@ -126,6 +127,43 @@ class TestDorisDynamicCatalog : AbstractTestQueryFramework() {
         )
         assertQueryFails("SHOW SCHEMAS FROM doris_unreachable", "(?s).*(refused|failure|link).*")
         assertUpdate("DROP CATALOG doris_unreachable")
+    }
+
+    @Test
+    @Order(4)
+    fun testTimeoutRangesFailAtConfigurationAndNativeSessionRoundingAgrees() {
+        for ((property, value) in listOf(
+            "doris.connect-timeout" to "0ms", "doris.connect-timeout" to "0.1ms", "doris.connect-timeout" to "30d",
+            "doris.query-timeout" to "100ms", "doris.query-timeout" to "2147483648s",
+        )) {
+            val sql = "CREATE CATALOG doris_bad_timeout USING doris WITH (\"connection-url\"='${DorisQueryRunner.JDBC_URL}', " +
+                "\"connection-user\"='root',\"$property\"='$value')"
+            // Airlift reports setter invocation failures at the top level; the
+            // supported-range diagnostic is retained in the configuration cause.
+            org.assertj.core.api.Assertions.assertThatThrownBy { computeActual(sql) }
+                .describedAs(sql).rootCause().hasMessageContaining("must be between")
+        }
+        assertUpdate("CREATE CATALOG doris_timeout USING doris WITH (\"connection-url\"='${DorisQueryRunner.JDBC_URL}', " +
+            "\"connection-user\"='root',\"doris.query-timeout\"='1.1s')")
+        try {
+            assertThat(query("SELECT count(*) FROM doris_timeout.p0_probe.scalars_view")).matches("VALUES BIGINT '8'")
+            assertCreateCatalogFails("SET SESSION doris_timeout.query_timeout = '100ms'", "must be between")
+        } finally {
+            assertUpdate("DROP CATALOG doris_timeout")
+        }
+        for ((text, expected) in listOf("1.1s" to 2, "2147483647s" to Int.MAX_VALUE)) {
+            val props = DorisClientModule.connectionProperties(DorisConfig().setQueryTimeout(Duration.valueOf(text))).apply {
+                setProperty("user", "root")
+            }
+            DorisTestSafety.openSingle { requireNotNull(DorisReadDriver().connect(DorisQueryRunner.JDBC_URL, props)) }.use { connection ->
+                connection.createStatement().use { statement ->
+                    statement.executeQuery("SELECT @@query_timeout").use { rows ->
+                        assertThat(rows.next()).isTrue()
+                        assertThat(rows.getInt(1)).isEqualTo(expected)
+                    }
+                }
+            }
+        }
     }
 
     companion object {

@@ -58,6 +58,10 @@ and historical 4.1.3 probe evidence are preserved.
   loudly at create time.
 - Doris session controls per catalog: `doris.query-timeout`, `doris.exec-mem-limit`,
   `doris.time-zone`, `doris.connect-timeout`, plus a per-query `query_timeout` session property.
+  Connector-configured connect timeouts must be 1–2147483647ms; query timeouts
+  must be 1–2147483647s (or unset). Valid fractional values round **up** to the
+  respective unit, identically at connection and scan setup. These are not
+  absolute wall-clock deadlines for DNS, credentials or custom TLS/socket code.
 - Table statistics for the Trino optimizer (`doris.statistics.enabled`, default on; per-query
   `statistics_enabled`): row counts and column NDV/nulls/size/ranges from Doris's statistics
   store. The connector only reads statistics — Doris auto-analyze (on by default) or your own

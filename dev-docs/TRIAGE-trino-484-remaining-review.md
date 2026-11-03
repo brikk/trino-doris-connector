@@ -13,7 +13,10 @@ is rejected, and 37 cancellation checks pass. See
 permission and verified disposable identity, and lifecycle actions use original
 immutable IDs. The full single-FE run and separately authorized overlay replay
 passed; an available overlay without failover permission stayed skipped.
-**R-08/R-09/R-11/R-17 remain open.**
+**Subsequent R-11 resolution (2026-11-03):** one timeout range/round-up policy
+now governs catalog/session validation and connection/scan rendering; 24 focused
+checks pass. See [runtime contracts](REPORT-trino-484-runtime-contracts.md).
+**R-08/R-09/R-17 remain open.**
 
 ## Open findings and next acceptance criteria
 
@@ -22,7 +25,7 @@ passed; an available overlay without failover permission stayed skipped.
 | R-08 statistics session switch | Delegate check is below the shared table-statistics cache. Default zero cross-query TTL avoids the reported persistent hit, but positive TTL permits cross-session policy leakage. Optimizer estimates, not row values. | Enforce the switch above caching or partition cache identity by the policy. Test enabled→disabled and disabled→enabled, positive TTL and missing-value caching; preserve ordinary enabled hits. |
 | R-09 helper capacity | Source still parks each executing helper in a 500ms sleep/retry loop for up to 15s until its token has been seen. Eight never-visible/early-finished attempts can consume the eight workers while genuine cancels queue. No new throughput benchmark is claimed. | Schedule delayed probes without holding scarce workers or an idle connection. Keep one original dispatch deadline, bounded outstanding work, delayed-visibility protection, and sibling isolation; test fairness under eight absent tokens plus a live ninth token. |
 | R-10 cancellation candidate identity | **Resolved in 6cc9824:** the exact UUID comment must lead connector-owned SQL. Literal, identifier, nested-comment and audit-search decoys do not match. | 37 focused checks pass, including production-helper no-wrong-KILL, genuine scans, retries and sibling controls. Deliberately forged leading tokens are not a cryptographic authentication guarantee. |
-| R-11 duration validation | `DorisConfig` setters still accept zero, sub-ms and out-of-range connect values; connection initialization rounds query timeout while scan setup clamps to one second. No shared supported-range policy. | Validate catalog and session values against one documented normalization/range contract; prove 0ms, 0.1ms, max integer ms, overflow, 100ms query timeout and upper bound. Fail at configuration rather than connection/scan time. |
+| R-11 duration validation | **Resolved:** connect 1–2147483647ms, query 1–2147483647s or unset; fractions round up identically in all paths. | Sub-unit/out-of-range catalog/session values fail before use; bounds, native sessions and actual scan setup pass. DNS/credentials/TLS absolute deadlines remain separate K-04/K-05 risks. |
 | R-15 destructive target authorization | **Resolved:** common fixture access requires explicit mutation permission, current disposable Compose ownership/original IDs, and native ClusterId/FE/BE identity. Failover additionally needs its own explicit permission. | Seven pure guards, real fixture refusal, full single-FE build and separate real-overlay permission/failover replay pass. Lifecycle actions re-inspect and use immutable IDs, not mutable names or reachability. |
 | R-17 URL contract | Raw Connector/J URL acceptance is broader than the ordinary JDBC path; checking only the textual path misses effective DBNAME properties. | Admit supported JDBC types, reject X Protocol and effective global/per-host databases without DNS, connection or user-supplied property-transform execution during validation. Cover case/encoding, nested HA forms and side-effect freedom. |
 

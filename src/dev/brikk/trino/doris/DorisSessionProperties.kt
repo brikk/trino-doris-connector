@@ -17,6 +17,8 @@ import com.google.inject.Inject
 import io.airlift.units.Duration
 import io.trino.plugin.base.session.PropertyMetadataUtil.durationProperty
 import io.trino.plugin.base.session.SessionPropertiesProvider
+import io.trino.spi.StandardErrorCode.INVALID_SESSION_PROPERTY
+import io.trino.spi.TrinoException
 import io.trino.spi.connector.ConnectorSession
 import io.trino.spi.session.PropertyMetadata
 
@@ -34,9 +36,18 @@ class DorisSessionProperties @Inject constructor(dorisConfig: DorisConfig) : Ses
     private val properties: List<PropertyMetadata<*>> = listOf(
         durationProperty(
             QUERY_TIMEOUT,
-            "Per-scan Doris server-side query_timeout (seconds granularity); defaults to doris.query-timeout, " +
+            "Per-scan Doris server-side query_timeout (seconds granularity, 1s to 2147483647s, rounded up); defaults to doris.query-timeout, " +
                 "otherwise leaves the connection's session timeout unchanged",
             dorisConfig.getQueryTimeout(),
+            { timeout ->
+                if (timeout != null) {
+                    try {
+                        DorisTimeouts.querySeconds(timeout)
+                    } catch (failure: IllegalArgumentException) {
+                        throw TrinoException(INVALID_SESSION_PROPERTY, failure.message, failure)
+                    }
+                }
+            },
             false,
         ),
         PropertyMetadata.enumProperty(

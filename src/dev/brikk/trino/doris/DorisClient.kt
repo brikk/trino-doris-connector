@@ -446,7 +446,7 @@ class DorisClient @Inject constructor(
         // streaming drain phase and never fires there (P1b probe; PROBE §8/§9 for the SET
         // mechanism). Session scope only, never global (ledger §B).
         DorisSessionProperties.getQueryTimeout(session)?.let { timeout ->
-            val seconds = maxOf(1L, timeout.roundTo(java.util.concurrent.TimeUnit.SECONDS))
+            val seconds = DorisTimeouts.querySeconds(timeout)
             connection.createStatement().use { it.execute("SET query_timeout = $seconds") }
         }
         // Fresh per execution attempt: early close of this scan must never kill sibling scans.
