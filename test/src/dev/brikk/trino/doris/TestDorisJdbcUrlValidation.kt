@@ -12,8 +12,8 @@ class TestDorisJdbcUrlValidation {
         for (url in listOf(
             "jdbc:mysql://fe:9030", "JDBC:MYSQL://fe:9030/", "jdbc:mysql://fe1:9030,fe2:9030/",
             "jdbc:mysql:loadbalance://fe1:9030,fe2:9030/", "jdbc:mysql:replication://fe1:9030,fe2:9030/",
-            "jdbc:mysql+srv://does-not-exist.invalid/", "jdbc:mysql+srv:loadbalance://does-not-exist.invalid/",
-            "jdbc:mysql+srv:replication://source.invalid,replica.invalid/", "jdbc:mysql://does-not-exist.invalid/?dnsSrv=true",
+            "jdbc:mysql://does-not-exist.invalid/?dnsSrv=true", "jdbc:mysql:loadbalance://does-not-exist.invalid/?dnsSrv=true",
+            "jdbc:mysql:replication://source.invalid,replica.invalid/?dnsSrv=true",
             "jdbc:mysql://[::1]:9030/", "jdbc:mysql://address=(host=fe)(port=9030)/",
         )) {
             val config = config(url)
@@ -25,6 +25,8 @@ class TestDorisJdbcUrlValidation {
     @Test
     fun testUnsupportedProtocolsAndMalformedEncodingFailClosed() {
         for (url in listOf(null, "", "mysqlx://fe:9030", "mysqlx+srv://fe", "jdbc:mysqlx://fe:9030",
+            "jdbc:mysql+srv://does-not-exist.invalid/", "jdbc:mysql+srv:loadbalance://does-not-exist.invalid/",
+            "jdbc:mysql+srv:replication://source.invalid,replica.invalid/",
             "jdbc:postgresql://fe:5432", "jdbc:mysql://fe/%zz", "jdbc:mysql://fe/?%zz=x", "jdbc:mysql://fe:not_a_port/")) {
             assertThat(config(url).isUrlValid()).describedAs(url).isFalse()
             assertThat(config(url).isUrlWithoutDatabase()).describedAs(url).isFalse()
@@ -42,7 +44,7 @@ class TestDorisJdbcUrlValidation {
             "jdbc:mysql://address=(host=fe)(port=9030)(%64bname=hidden_db)/",
             "jdbc:mysql:loadbalance://address=(host=fe1)(dbname=hidden_db),fe2:9030/",
             "jdbc:mysql:replication://fe1:9030,address=(host=fe2)(dBnAmE=hidden_db)/",
-            "jdbc:mysql+srv://address=(host=service.invalid)(dbname=hidden_db)/",
+            "jdbc:mysql://address=(host=service.invalid)(dbname=hidden_db)/?dnsSrv=true",
         )) assertThat(config(url).isUrlWithoutDatabase()).describedAs(url).isFalse()
     }
 

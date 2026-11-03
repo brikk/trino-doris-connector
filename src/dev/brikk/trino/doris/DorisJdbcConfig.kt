@@ -19,6 +19,7 @@ import com.mysql.cj.conf.ConnectionUrlParser.parseConnectionString
 import com.mysql.cj.exceptions.CJException
 import io.trino.plugin.jdbc.BaseJdbcConfig
 import jakarta.validation.constraints.AssertTrue
+import jakarta.validation.constraints.Pattern
 
 /**
  * Validates the Doris FE connection URL: a supported MySQL Connector/J JDBC URL
@@ -39,6 +40,7 @@ class DorisJdbcConfig : BaseJdbcConfig() {
     /** Lexical parser only: never instantiate ConnectionUrl, resolve DNS or load transforms/profiles. */
     private fun validate(check: (ConnectionUrlParser, List<Map<String, String>>) -> Boolean): Boolean {
         val url = connectionUrl ?: return false
+        if (!BASE_JDBC_URL_PATTERN.matcher(url).matches()) return false
         return try {
             val parsed = parseConnectionString(url)
             val hosts = parsed.hosts
@@ -57,6 +59,13 @@ class DorisJdbcConfig : BaseJdbcConfig() {
     }
 
     companion object {
+        // Both BaseJdbcConfig and its subclass are validated at catalog creation.
+        // Reuse the upstream constraint (including flags), rather than promising
+        // driver schemes such as mysql+srv that the surrounding module rejects.
+        private val BASE_JDBC_URL_PATTERN = requireNotNull(BaseJdbcConfig::class.java.getMethod("getConnectionUrl")
+            .getAnnotation(Pattern::class.java)).let { constraint ->
+            java.util.regex.Pattern.compile(constraint.regexp, constraint.flags.fold(0) { flags, flag -> flags or flag.value })
+        }
         private val JDBC_TYPES = setOf(Type.SINGLE_CONNECTION, Type.FAILOVER_CONNECTION, Type.LOADBALANCE_CONNECTION,
             Type.REPLICATION_CONNECTION, Type.FAILOVER_DNS_SRV_CONNECTION, Type.LOADBALANCE_DNS_SRV_CONNECTION,
             Type.REPLICATION_DNS_SRV_CONNECTION)

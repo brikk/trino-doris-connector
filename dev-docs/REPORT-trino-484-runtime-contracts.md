@@ -5,6 +5,18 @@ R-08, R-09, with a commit/push between each. Trino 484, Doris
 4.1.5-release-917b20be838, Connector/J 26.7.0, metadata 0.21.0, Kotlin 2.4.10
 and JDK 25 remain fixed. This work does not authorize publication.
 
+Separate implementation checkpoints, committed and pushed in the approved order:
+
+| Finding | Commit | Focused result |
+|---|---|---|
+| R-11 | `60a75e3` | 24 passed |
+| R-17 | `fdb8c7c` | 19 passed |
+| R-08 | `f2be88f` | 29 passed |
+| R-09 | `a065fa3` | 42 passed, including scheduling stress and slow cancellation |
+
+Each focused run also passed detekt/assembly verification. These overlapping
+runs are not added together as one unique test count; final staged results follow.
+
 ## R-11 — supported timeout ranges and shared normalization
 
 `DorisTimeouts` is the single rendering/range policy used by catalog setters,
@@ -44,7 +56,8 @@ The live checks explicitly opt into the R-15 disposable-cluster guard.
 Validation uses Connector/J 26.7.0's lexical `ConnectionUrlParser` and pure type
 classification only. It does not construct `ConnectionUrl`, load a transform or
 profile, resolve SRV/DNS, or connect. Normal single/failover/load-balance/
-replication JDBC and their SRV forms remain supported; X Protocol is rejected.
+replication JDBC remain supported; X Protocol is rejected. DNS-SRV uses the
+ordinary JDBC URL option `dnsSrv=true`, not a direct `jdbc:mysql+srv:` scheme.
 
 The no-database check covers the decoded path and decoded global/per-host
 properties, with case-insensitive DBNAME recognition. Any nonempty DBNAME is
@@ -135,3 +148,12 @@ Implementation milestones are committed/pushed in the approved order. The final
 clean single-FE build, separate overlay replay, tooling guards and packaged-plugin
 smoke will be recorded here. Focused passes above are not presented as a completed
 aggregate run. No release is authorized by any of these checks.
+
+The first isolated-plugin smoke found an admission mismatch hidden by standalone
+predicate tests: Trino 484's inherited BaseJdbcConfig URL pattern rejects direct
+`jdbc:mysql+srv:` schemes. The validator now reuses that upstream constraint and
+its flags, and module tests cover rejection plus successful non-resolving CREATE
+with `jdbc:mysql://.../?dnsSrv=true`. No new URL family was enabled. The initial
+smoke failure is retained separately; qualification is rerun after this alignment.
+All 19 URL/config/module checks, detekt and assembly verification passed again
+with the inherited-pattern constraint included (`r17-base-constraint.log`).

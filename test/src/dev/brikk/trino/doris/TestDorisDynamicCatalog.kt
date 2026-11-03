@@ -102,7 +102,7 @@ class TestDorisDynamicCatalog : AbstractTestQueryFramework() {
             """CREATE CATALOG doris_bad USING doris WITH ("connection-url" = 'jdbc:mysql://example:9030/somedb', "connection-user" = 'root')""",
             "Database (catalog) must not be specified",
         )
-        for (url in listOf("mysqlx://example:9030", "jdbc:mysql://example:9030/?DBNAME=hidden_db",
+        for (url in listOf("mysqlx://example:9030", "jdbc:mysql+srv://example.invalid/", "jdbc:mysql://example:9030/?DBNAME=hidden_db",
             "jdbc:mysql://address=(host=example)(port=9030)(DBNAME=hidden_db)/",
             "jdbc:mysql://example:9030/?propertiesTransform=java.lang.String", "jdbc:mysql://example:9030/?useConfigs=maxPerformance")) {
             assertCreateCatalogFails(
@@ -135,6 +135,11 @@ class TestDorisDynamicCatalog : AbstractTestQueryFramework() {
         )
         assertQueryFails("SHOW SCHEMAS FROM doris_unreachable", "(?s).*(refused|failure|link).*")
         assertUpdate("DROP CATALOG doris_unreachable")
+        // The base JDBC URL constraint excludes direct mysql+srv schemes; the
+        // driver's option form remains valid and does not resolve DNS at CREATE.
+        assertUpdate("CREATE CATALOG doris_srv USING doris WITH (\"connection-url\"='jdbc:mysql://does-not-exist.invalid/?dnsSrv=true'," +
+            "\"connection-user\"='root')")
+        assertUpdate("DROP CATALOG doris_srv")
     }
 
     @Test
