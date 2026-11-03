@@ -135,7 +135,7 @@ class TestDorisJsonAndCardinalityPushdown : DorisPushdownTest("p5_batch", { prov
         // WHY numeric-looking literals never push: the engines canonicalize number text
         // independently. Trino (through the connector, local evaluation):
         assertThat(computeActual("SELECT json_extract_scalar(doc, '$.a') FROM doris.p5_batch.j WHERE id = 32").onlyValue)
-            .isEqualTo("1.0E30") // 484 preserves exponent-form JSON numbers as DOUBLE.
+            .isEqualTo("1E+30") // 483 normalizes JSON numbers through BigDecimal.
         assertThat(computeActual("SELECT json_extract_scalar(doc, '$.a') FROM doris.p5_batch.j WHERE id = 34").onlyValue)
             .isEqualTo("0")
         // Doris oracle for the SAME cells:

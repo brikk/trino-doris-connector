@@ -1,6 +1,6 @@
 # Local Trino sandbox
 
-This starts a Trino **484** coordinator with the verified current Doris plugin,
+This starts a Trino **483** coordinator with the verified current Doris plugin,
 dynamic catalogs and an in-memory catalog store. It is for local evaluation,
 not a secure shared service.
 

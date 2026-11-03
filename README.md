@@ -6,9 +6,14 @@
 A **read-only Trino connector for Apache Doris**, with Doris-aware types,
 streaming reads and guarded query pushdown.
 
-**Target stack:** Trino **484**, Apache Doris **4.1.5**, bundled MySQL Connector/J
+**Target stack:** Trino **483**, Apache Doris **4.1.5**, bundled MySQL Connector/J
 **26.7.0**. Building requires **JDK 25**. Use a plugin built for the same Trino
 version as every coordinator and worker; other version combinations are not qualified.
+
+This is the Trino 483 compatibility branch of **0.4.0**, derived from the
+published Trino 484 source with the shared fixes intact. It reuses the completed
+Doris 4.1.5 qualification; only compilation/ABI/assembly/package checks are run
+for this adaptation. See [branch compatibility notes](dev-docs/TRINO-483.md).
 
 ## Install
 
@@ -149,8 +154,9 @@ Important limits:
 - String-array wire text is ambiguous; it is not exposed as a native string array.
   Textualized complex/Decimal256 columns do not inherit native VARCHAR grouping,
   comparison or ordering semantics.
-- SQL NULL and JSON null remain distinct. Invalid/non-finite JSON is rejected,
-  not silently repaired.
+- SQL NULL and JSON null remain distinct. JSON/VARIANT use Trino 483's parsed
+  UTF-8 Slice representation: object keys are sorted and duplicate keys collapse
+  to the last value. Malformed input is rejected by Trino's 483 JSON parser.
 - DATE/DATETIME predicates outside Doris's year 0000–9999 range stay local.
   DATETIME is a wall clock, not an instant; TIMESTAMP WITH TIME ZONE is not exposed.
 
@@ -206,7 +212,7 @@ reclaimed. Use the Doris server-side query timeout for a per-scan work limit.
 ## Local evaluation and development
 
 The [manual Trino sandbox](compose/trino/README.md) runs this plugin in a local
-Trino 484 container. It is unauthenticated and loopback-only by default; do not
+Trino 483 container. It is unauthenticated and loopback-only by default; do not
 share it with production credentials.
 
 Build/test instructions, implementation invariants, qualification and the active

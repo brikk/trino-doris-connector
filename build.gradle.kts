@@ -10,7 +10,7 @@ plugins {
 
 // The release workflow passes -Pversion=<trino>-<semver>, derived from the release branch name.
 // A plain assignment here would overwrite that property, so only fall back to the dev default.
-version = (findProperty("version") as? String)?.takeIf { it != "unspecified" } ?: "484-0.5.0-SNAPSHOT"
+version = (findProperty("version") as? String)?.takeIf { it != "unspecified" } ?: "483-0.5.0-SNAPSHOT"
 
 // Version labels are also directory/archive names. Reject unsafe spellings before
 // configuring any task output, not just in the GitHub publication step.
@@ -61,9 +61,9 @@ repositories {
 }
 
 // Dependency + exclusion block per dev-docs/archive/REPORT-plugin-assembly-proof.md §6 (G12 "PROVEN CLEAN").
-// Trino 484 JSON/Guice adaptations: dev-docs/archive/REPORT-trino-484-upgrade.md.
+// Trino 483 compatibility: dev-docs/TRINO-483.md.
 dependencies {
-    // Trino 484 BOM drives io.trino / io.airlift / jackson / opentelemetry versions.
+    // Trino 483 BOM drives io.trino / io.airlift / jackson / opentelemetry versions.
     implementation(platform(libs.trino.bom))
     testImplementation(platform(libs.trino.bom))
     implementation(enforcedPlatform(libs.kotlin.bom)) {
@@ -75,8 +75,8 @@ dependencies {
     implementation("io.trino:trino-base-jdbc")
     implementation("io.trino:trino-plugin-toolkit")
     implementation("com.google.guava:guava")
-    // Trino 484/Airlift use the unshaded Airlift fork, not com.google.inject:guice.
-    implementation("io.airlift:guice")
+    // Trino 483 uses the unshaded classes classifier of Google Guice.
+    implementation("com.google.inject:guice") { artifact { classifier = "classes" } }
     implementation("io.airlift:bootstrap")
     implementation("io.airlift:configuration")
     implementation("io.airlift:json")
@@ -84,7 +84,7 @@ dependencies {
     implementation("io.airlift:units")
     implementation("jakarta.validation:jakarta.validation-api")
 
-    // Doris FE speaks the MySQL wire protocol; Connector/J 26.7.0 is BOM-aligned with Trino 484.
+    // Retain Connector/J 26.7.0 and the shared physical-connection fixes from the 484 release.
     // Deviation from assembly-proof §6 (runtimeOnly): DorisClientModule/DorisJdbcConfig reference
     // com.mysql.cj.jdbc.Driver + ConnectionUrlParser at compile time (same as upstream trino-mysql,
     // where the driver is compile scope), so this is `implementation`, not `runtimeOnly`.
@@ -93,7 +93,6 @@ dependencies {
 
     // --- Provided / parent-first SPI set: compile against, never bundle ---
     compileOnly("io.trino:trino-spi")
-    compileOnly("io.trino:trino-json")
     compileOnly("io.airlift:slice")
     compileOnly("com.fasterxml.jackson.core:jackson-annotations")
     compileOnly("io.opentelemetry:opentelemetry-api")
@@ -102,7 +101,6 @@ dependencies {
 
     // --- Test scope: real engine + SPI in-process (mirror trino-ducklake) ---
     testImplementation("io.trino:trino-spi")
-    testImplementation("io.trino:trino-json")
     testImplementation("io.airlift:slice")
     testCompileOnly("com.fasterxml.jackson.core:jackson-annotations")
     testImplementation("io.trino:trino-main")
@@ -159,7 +157,7 @@ tasks.test {
     // BE fails ALL queries with MEM_ALLOC_FAILED regardless of its own usage.
     maxHeapSize = "1536m"
 
-    // Same JVM flags the in-process Trino 484 engine needs in trino-ducklake's test task
+    // Same JVM flags the in-process Trino engine needs in trino-ducklake's test task
     // (BlockEncodingSimdSupport requires jdk.incubator.vector, etc.).
     jvmArgs(
         "-XX:+ExitOnOutOfMemoryError",
@@ -190,7 +188,7 @@ val pluginAssemble by tasks.registering(Sync::class) {
 
 // G12 guard mirroring the assembly-proof check: the assembled plugin dir must not bundle any
 // engine-provided (parent-first SPI) jar, must bundle base-jdbc + Connector/J, and must carry
-// exactly one unshaded Airlift guice jar.
+// exactly one Trino-483-compatible unshaded Google Guice classes jar.
 val verifyPluginAssembly by tasks.registering {
     dependsOn(pluginAssemble)
     val pluginDir = pluginDirectory
@@ -233,8 +231,8 @@ val verifyPluginAssembly by tasks.registering {
         check(missing.isEmpty()) { "expected bundled jars missing (prefixes): $missing; got $jars" }
 
         val guiceJars = jars.filter { it.startsWith("guice-") }
-        check(guiceJars.size == 1 && Regex("^guice-\\d+\\.jar$").matches(guiceJars.single())) {
-            "expected exactly one unshaded io.airlift:guice jar, got: $guiceJars"
+        check(guiceJars.size == 1 && Regex("^guice-\\d.*-classes\\.jar$").matches(guiceJars.single())) {
+            "expected exactly one unshaded com.google.inject:guice classes jar, got: $guiceJars"
         }
 
         // A real Trino server discovers plugins from the plugin dir via ServiceLoader; the

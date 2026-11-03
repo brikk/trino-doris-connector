@@ -6,9 +6,13 @@
 - Gradle wrapper; do not substitute a system Gradle version.
 - Python 3.11+ for the standard-library tooling/qualification tests.
 - Docker with Compose v2 for live integration tests.
-- Golden engines: Trino 484 and Doris 4.1.5-release-917b20be838, using the checked-in
+- Branch target: Trino 483 and Doris 4.1.5-release-917b20be838, using the checked-in
   FE/BE release digests. Connector/J 26.7.0, metadata 0.21.0 and Kotlin 2.4.10 stay pinned.
   A version change needs a separate request and qualification, not a rolling image update.
+
+The [483 adaptation](TRINO-483.md) reuses the completed 484/Doris qualification
+by explicit maintainer decision. Commands below remain development references;
+no test/live suite is rerun for the paired 0.4.0 publication.
 
 Run commands from the repository root. `mise exec --` supplies JDK 25 when it is
 not already selected by the shell.

@@ -1,6 +1,6 @@
 name: trino-doris-manual
 
-# User-facing MANUAL smoke sandbox: a single Trino 484 coordinator with OUR
+# User-facing MANUAL smoke sandbox: a single Trino 483 coordinator with OUR
 # trino-doris plugin installed and DYNAMIC CATALOG MANAGEMENT enabled, so the
 # user can log into the CLI and add THEIR OWN external Doris server at runtime
 # with `CREATE CATALOG ... USING doris WITH (...)` — no rebuild, no restart.
@@ -11,7 +11,7 @@ name: trino-doris-manual
 
 services:
   trino:
-    image: trinodb/trino:484
+    image: trinodb/trino:483
     container_name: trino-doris-manual
     ports:
       # Host 18080 -> container 8080 (Trino HTTP + CLI). 18080 avoids colliding

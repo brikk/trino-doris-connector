@@ -4,6 +4,13 @@ This describes the existing mechanics. It does not authorize a version choice,
 release branch/tag, merge or publication. The source default is a development
 snapshot; a validated snapshot is not a selected release version.
 
+**Paired 0.4.0 publication exception:** the maintainer authorized stable
+`v484-0.4.0`, followed by minimal `trino-483` compatibility and `v483-0.4.0`,
+without repeating qualification. These releases are published directly with
+the GitHub CLI after compilation/ABI/assembly/package checks, reusing the completed
+qualification. Do not push a `release-*` branch for this task: it would trigger
+the redundant live build described below. CI/workflow files remain unchanged.
+
 ## Decision boundary
 
 The maintainer chooses the version, stable/prerelease designation, exact reviewed

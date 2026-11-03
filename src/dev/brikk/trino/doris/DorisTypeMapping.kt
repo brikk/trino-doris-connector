@@ -17,6 +17,8 @@ import dev.brikk.trino.doris.DorisPushdownControllers.CHAR_PUSHDOWN
 import dev.brikk.trino.doris.DorisPushdownControllers.IPV4_PUSHDOWN
 import dev.brikk.trino.doris.DorisPushdownControllers.TEMPORAL_PUSHDOWN
 import dev.brikk.trino.doris.DorisPushdownControllers.VARCHAR_PUSHDOWN
+import io.airlift.slice.Slices.utf8Slice
+import io.trino.plugin.base.util.JsonTypeUtil.jsonParse
 import io.trino.plugin.jdbc.ColumnMapping
 import io.trino.plugin.jdbc.DoubleReadFunction
 import io.trino.plugin.jdbc.JdbcTypeHandle
@@ -33,7 +35,6 @@ import io.trino.plugin.jdbc.StandardColumnMappings.dateWriteFunctionUsingLocalDa
 import io.trino.plugin.jdbc.StandardColumnMappings.decimalColumnMapping
 import io.trino.plugin.jdbc.StandardColumnMappings.doubleWriteFunction
 import io.trino.plugin.jdbc.StandardColumnMappings.integerColumnMapping
-import io.trino.plugin.jdbc.StandardColumnMappings.jsonColumnMapping
 import io.trino.plugin.jdbc.StandardColumnMappings.longDecimalWriteFunction
 import io.trino.plugin.jdbc.StandardColumnMappings.realWriteFunction
 import io.trino.plugin.jdbc.StandardColumnMappings.smallintColumnMapping
@@ -226,8 +227,11 @@ internal class DorisTypeMapping(typeManager: TypeManager) {
         return ColumnMapping.sliceMapping(varcharType, varcharReadFunction(varcharType), varcharWriteFunction(), VARCHAR_PUSHDOWN)
     }
 
+    // Trino 483 has no native JSON column mapping. Its parser sorts keys and keeps the last duplicate.
     private fun jsonMapping(): ColumnMapping {
-        return jsonColumnMapping(jsonType, varcharWriteFunction())
+        return ColumnMapping.sliceMapping(jsonType, { resultSet, columnIndex ->
+            jsonParse(utf8Slice(resultSet.getString(columnIndex)))
+        }, varcharWriteFunction(), DISABLE_PUSHDOWN)
     }
 
     /**
