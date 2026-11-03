@@ -43,7 +43,7 @@ import java.util.concurrent.atomic.AtomicInteger
  *
  * The working sequence (adapted, with credit, from the Apache-2.0 reference implementation
  * in dev.sort.doris.cancel — production-hardened against a real LB'd cluster; re-proven
- * live on Doris 4.1.3 single-FE and the 3-FE overlay, `NOTES-cancel-cluster-scoped.md`):
+ * live on Doris 4.1.3 single-FE and the 3-FE overlay, `dev-docs/archive/NOTES-cancel-cluster-scoped.md`):
  *
  *  1. Each built scan starts with a fresh `/*trino_statement_id=<uuid>*/` comment. The
  *     Trino query-id comment remains for tracing, but is NOT a cancellation key: Trino

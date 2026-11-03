@@ -52,7 +52,7 @@ import java.util.function.Consumer
  * `JdbcMergeSink` (both write paths), so throwing from it (and from [execute]) makes the
  * procedure physically unable to reach Doris even if an access-control layer were bypassed.
  *
- * `TestReadOnlyDorisClient` classifies the ENTIRE 483 [JdbcClient] surface by reflection and
+ * `TestReadOnlyDorisClient` classifies the pinned 484 [JdbcClient] surface by reflection and
  * fails loud if a future base-jdbc upgrade adds a method not covered here or explicitly
  * allow-listed.
  *

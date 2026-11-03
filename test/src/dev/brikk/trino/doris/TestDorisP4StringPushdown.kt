@@ -25,7 +25,7 @@ import org.junit.jupiter.api.TestInstance
 
 /**
  * Configurable string pushdown modes (`doris.string-pushdown.mode` / `string_pushdown_mode`)
- * over the adversarial fixture from `REPORT-string-comparison-probe-4.1.3.md`. Both engines'
+ * over the adversarial fixture from `dev-docs/archive/REPORT-string-comparison-probe-4.1.3.md`. Both engines'
  * semantics are PINNED here; each mode is differential-tested against NULL_ONLY (the local
  * ground truth) and the direct Doris oracle, with plan-shape and audit-log assertions.
  */

@@ -24,7 +24,7 @@ import java.math.BigDecimal
 
 /**
  * READ-ONLY-MAX batch 2: aggregate pushdown expansion. Engine-path findings and Doris truth
- * tables in `NOTES-readonly-max-batch2.md`. Differentials: pushed vs
+ * tables in `dev-docs/archive/NOTES-readonly-max-batch2.md`. Differentials: pushed vs
  * `aggregation_pushdown_enabled=false` vs the direct Doris oracle.
  */
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)

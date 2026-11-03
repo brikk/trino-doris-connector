@@ -84,12 +84,12 @@ import java.util.Optional
 import java.util.concurrent.TimeUnit.DAYS
 
 /**
- * Scalar type contract v1, implemented EXACTLY per `LEDGER-p0-type-and-capability.md` §A.
+ * Native scalar/array mappings; retained type evidence: `dev-docs/archive/LEDGER-p0-type-and-capability.md` §A.
  * Every mapping keys off the Doris `information_schema.columns.COLUMN_TYPE` string carried
  * in [JdbcTypeHandle.jdbcTypeName]; JDBC metadata type codes are never trusted (PROBE §1).
  *
- * Not exposed in P1a (columns hidden, never silently textualized): ARRAY (P2), MAP/STRUCT
- * (deferred), BITMAP/HLL/QUANTILE_STATE/AGG_STATE (opaque engine states, PROBE "BITMAP/HLL").
+ * Supported arrays use the closed leaf allowlist below. MAP/STRUCT and denied arrays
+ * are hidden or explicitly textualized; opaque engine states stay hidden under all policies.
  */
 internal class DorisTypeMapping(typeManager: TypeManager) {
     private val jsonType: Type = typeManager.getType(TypeDescriptor(StandardTypes.JSON))
@@ -181,7 +181,7 @@ internal class DorisTypeMapping(typeManager: TypeManager) {
      * Native `ARRAY<T>` for the allowlist: `getString()` wire text -> strict
      * [DorisArrayWireDecoder] -> Trino elements Block (PostgreSqlClient Block-construction
      * pattern only — Connector/J implements no `java.sql.Array` for Doris, spike §6).
-     * No ARRAY predicate pushdown in P2a (typed `contains`/`arrays_overlap` rules are P2b).
+     * Typed ARRAY predicates are admitted separately by DorisArrayPushdownSupport.
      */
     private fun arrayColumnMapping(parsed: DorisColumnType): Optional<ColumnMapping> {
         val element = resolveArrayElement(arrayElementColumnType(parsed.raw)) ?: return Optional.empty()
@@ -280,7 +280,7 @@ internal class DorisTypeMapping(typeManager: TypeManager) {
      * IPV4/IPV6 arrive as canonical text (`192.168.1.1`, `2001:db8::ff00:42:8329`, `::`,
      * `fe80::1` — PROBE §3, Impl #4) and map to Trino IPADDRESS; unparseable text fails loud.
      *
-     * Pushdown is TYPE-AWARE (live-probed 2026-07-19, `REPORT-ip-pushdown-probe-4.1.3.md`):
+     * Pushdown is TYPE-AWARE (live-probed 2026-07-19, `dev-docs/archive/REPORT-ip-pushdown-probe-4.1.3.md`):
      * Trino IPADDRESS is a single 16-byte (IPv4-mapped) type, but Doris has DISTINCT IPV4 and
      * IPV6 types that reject each other's textual forms — IPV4 wants dotted-quad `a.b.c.d`,
      * IPV6 wants a colon-hex form and REJECTS dotted-quad. Byte ordering is identical on both
@@ -343,7 +343,7 @@ internal class DorisTypeMapping(typeManager: TypeManager) {
 
         /**
          * G5 string-domain policy, mode-resolved per query (probe evidence:
-         * `REPORT-string-comparison-probe-4.1.3.md` — Doris 4.1.3 string comparison is pure
+         * `dev-docs/archive/REPORT-string-comparison-probe-4.1.3.md` — Doris 4.1.3 string comparison is pure
          * byte semantics, `utf8mb4_0900_bin`):
          * - NULL_ONLY: null-ness only (exact; no collation hazard).
          * - GUARDED (default), EVIDENCE-TIERED: domain shapes (`=`, `<>`, `IN`, ranges) over

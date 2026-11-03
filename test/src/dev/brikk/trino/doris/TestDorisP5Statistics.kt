@@ -25,7 +25,7 @@ import java.util.concurrent.TimeUnit
 /**
  * P5 remote statistics: probe pins for what Doris 4.1.3 exposes (pre/post ANALYZE, formats,
  * permissions) + live `getTableStatistics` behavior through `SHOW STATS FOR` / EXPLAIN.
- * Probe findings table: `dev-docs/NOTES-p5-statistics.md`. Test setup runs ANALYZE via ROOT
+ * Probe findings table: `dev-docs/archive/NOTES-p5-statistics.md`. Test setup runs ANALYZE via ROOT
  * (never the connector — statistics writes are the user's domain) so results are
  * deterministic on a fresh cluster regardless of auto-analyze timing.
  */

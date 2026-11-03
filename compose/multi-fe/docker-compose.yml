@@ -3,7 +3,7 @@ name: trino-doris-mfe
 # OPTIONAL multi-FE FAILOVER OVERLAY for the trino-doris connector.
 #
 # This is a MANUAL / DEV-ONLY overlay used to produce the multi-FE failover
-# evidence in dev-docs/REPORT-multi-fe-failover.md. It is DELIBERATELY separate
+# evidence in dev-docs/archive/REPORT-multi-fe-failover.md. It is DELIBERATELY separate
 # from — and does NOT replace or disturb — the default single-FE probe cluster
 # in ../docker-compose.yml (project trino-doris-dev, subnet 172.30.81.0/24, host
 # 9130/8130). CI keeps using the single-FE cluster; nothing here is wired into

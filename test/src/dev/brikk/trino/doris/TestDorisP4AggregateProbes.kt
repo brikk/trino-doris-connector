@@ -21,7 +21,7 @@ import org.junit.jupiter.api.TestInstance
 /**
  * Live pins of the Doris 4.1.3 aggregate semantics that GATE every P4 family decision
  * (PLAN §6.5 "Verify NULL, overflow, DECIMAL scale, and approximate-function behavior before
- * each rule"; full narrative in `dev-docs/NOTES-p4-aggregates.md`). Direct FE connection, no
+ * each rule"; full narrative in `dev-docs/archive/NOTES-p4-aggregates.md`). Direct FE connection, no
  * Trino: these facts are properties of Doris itself. If Doris ever fixes/changes any of them
  * (e.g. starts ERRORING on sum overflow), a pin goes red and the family verdict must be
  * re-derived — never silently.

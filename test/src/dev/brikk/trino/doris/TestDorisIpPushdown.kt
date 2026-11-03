@@ -24,7 +24,7 @@ import org.junit.jupiter.api.TestInstance
 /**
  * IPADDRESS pushdown (unlocks IP `=`/IN/range domains, `contains`, `arrays_overlap`, and TopN).
  *
- * The safety argument (probe: `REPORT-ip-pushdown-probe-4.1.3.md`): Trino IPADDRESS is a single
+ * The safety argument (probe: `dev-docs/archive/REPORT-ip-pushdown-probe-4.1.3.md`): Trino IPADDRESS is a single
  * 16-byte (IPv4-mapped) type, Doris has DISTINCT IPV4/IPV6 types. Byte ORDER is identical on
  * both engines (unsigned big-endian 16 bytes), so domains and TopN are exact once rendered in
  * the target dialect — IPV4 as dotted-quad (pushed only for v4-mapped values), IPV6 as

@@ -32,7 +32,7 @@ import io.trino.spi.connector.JoinCondition
  * database accepts it) and Doris REJECTS the `IS NOT DISTINCT FROM` syntax outright —
  * Doris's null-safe equality operator is `<=>`, live-proven truth-table-identical
  * (`NULL<=>NULL`=1, `NULL<=>1`=0; joins match NULL keys to each other exactly like Trino;
- * `NOTES-p5-joins.md`).
+ * `dev-docs/archive/NOTES-p5-joins.md`).
  */
 class DorisQueryBuilder @Inject constructor(
     queryModifier: RemoteQueryModifier,

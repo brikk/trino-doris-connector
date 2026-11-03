@@ -36,7 +36,7 @@ import java.util.Optional
 
 /**
  * `value LIKE pattern [ESCAPE escape]` pushdown — enabled ONLY in BINARY/FULL string-pushdown
- * mode. Probe evidence (`REPORT-string-comparison-probe-4.1.3.md`, LIKE section):
+ * mode. Probe evidence (`dev-docs/archive/REPORT-string-comparison-probe-4.1.3.md`, LIKE section):
  * - Doris LIKE matching is byte/character semantics identical to Trino (case-sensitive,
  *   `%`/`_` identical, `_` is one CHARACTER incl. 4-byte emoji).
  * - Trino's NO-escape LIKE treats `\` as a LITERAL, while Doris's default escape IS `\` —

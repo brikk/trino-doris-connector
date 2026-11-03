@@ -31,7 +31,7 @@ import java.sql.Connection
 
 /**
  * Doris 4.1.3 statistics reader (PLAN P4 tail "remote statistics"; SR K12 pattern with the
- * SQL re-derived against live Doris — probe verdicts in `dev-docs/NOTES-p5-statistics.md`).
+ * SQL re-derived against live Doris — probe verdicts in `dev-docs/archive/NOTES-p5-statistics.md`).
  *
  * Sources (all READ-only; the connector NEVER issues ANALYZE — Doris auto-analyze is on by
  * default and users manage manual ANALYZE themselves):

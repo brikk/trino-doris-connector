@@ -24,7 +24,7 @@ import java.util.concurrent.TimeUnit
  * PLAN §6.4 inverted-index gates: (1) the generated remote SQL is the index-accelerable form,
  * (2) the predicate reaches the Doris scan node (EXPLAIN evidence). Doris optimizer INDEX
  * SELECTION and timings are recorded observations, NOT gates — they live in
- * `dev-docs/evidence/inverted-index-explain-p2b.md` (captured live 2026-07-19; profile counter
+ * `dev-docs/archive/evidence/inverted-index-explain-p2b.md` (captured live 2026-07-19; profile counter
  * `RowsInvertedIndexFiltered` is the authoritative signal).
  *
  * The 1M-row `p2b_index.events` fixture (with an INVERTED index on the ARRAY<INT> column,

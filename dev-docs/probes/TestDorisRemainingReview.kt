@@ -11,7 +11,7 @@ import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.TestInstance
 import java.util.UUID
 
-/** Diagnostic pins for OPEN findings, not assertions that these behaviors are safe. */
+/** Optional rechecks of the resolved statistics, targeting, timeout and URL contracts. */
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 class TestDorisRemainingReview : AbstractTestQueryFramework() {
     private val schema = "hardening_review_${UUID.randomUUID().toString().replace("-", "")}"

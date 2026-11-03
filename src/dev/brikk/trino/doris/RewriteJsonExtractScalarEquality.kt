@@ -41,7 +41,7 @@ import java.util.Optional
  * `json_extract_scalar(json_col, '$.path') = 'literal'` (either orientation) ->
  * `(json_unquote(json_extract(`col`, ?)) = ?)` — registry evidence in
  * [DorisPushdownEvidence.JSON_EXTRACT_SCALAR] (verdict CONDITIONALLY_EQUIVALENT),
- * scope-restricted by the connector's own P5 live probe (`NOTES-p5-batch.md`) to the shapes
+ * scope-restricted by the connector's own P5 live probe (`dev-docs/archive/NOTES-p5-batch.md`) to the shapes
  * where the two engines are proven cell-identical THROUGH the connector:
  *
  * - EQUALITY ONLY. `<>`, `IS NULL`, and `IS NOT NULL` forms are NOT pushable: at a

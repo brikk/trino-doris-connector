@@ -44,7 +44,7 @@ import java.util.concurrent.TimeUnit
  * The DESTRUCTIVE master-kill / re-election-timing evidence is deliberately NOT automated
  * here (it is slow — ~60s BDBJE re-election on a hard crash — and perturbs the shared
  * overlay); it lives as a scripted, reproducible procedure with recorded output in
- * dev-docs/REPORT-multi-fe-failover.md.
+ * dev-docs/archive/REPORT-multi-fe-failover.md.
  *
  * Topology-specific SQL stays here; shared [DorisTestSafety] authorizes every connection
  * and lifecycle action. The public [DorisQueryRunner.dynamicCatalogBuilder] also provisions

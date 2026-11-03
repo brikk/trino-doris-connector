@@ -59,8 +59,8 @@ repositories {
     mavenCentral()
 }
 
-// Dependency + exclusion block per dev-docs/REPORT-plugin-assembly-proof.md §6 (G12 "PROVEN CLEAN").
-// Trino 484 JSON/Guice adaptations: dev-docs/REPORT-trino-484-upgrade.md.
+// Dependency + exclusion block per dev-docs/archive/REPORT-plugin-assembly-proof.md §6 (G12 "PROVEN CLEAN").
+// Trino 484 JSON/Guice adaptations: dev-docs/archive/REPORT-trino-484-upgrade.md.
 dependencies {
     // Trino 484 BOM drives io.trino / io.airlift / jackson / opentelemetry versions.
     implementation(platform(libs.trino.bom))

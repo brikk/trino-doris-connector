@@ -25,7 +25,7 @@ import org.junit.jupiter.api.TestInstance
  * non-text key set; `IS NOT DISTINCT FROM` -> `<=>` (truth table live-proven); FULL OUTER
  * and text/approximate keys excluded. Differentials run pushed (EAGER) vs local (default
  * OFF) over NULL keys, duplicate keys, and empty sides — the local plan is the ground
- * truth. Probe verdicts: `NOTES-p5-joins.md`.
+ * truth. Probe verdicts: `dev-docs/archive/NOTES-p5-joins.md`.
  */
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 class TestDorisP5JoinPushdown : AbstractTestQueryFramework() {

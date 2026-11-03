@@ -75,9 +75,9 @@ internal class DorisArrayPushdownSupport(
      * Resolves a [Variable] to a pushable native Doris array column, or null (with a DEBUG
      * rejection log) when any guard fails. Pushable element types are the live-proven literal
      * families: integers, LARGEINT/DECIMAL (DECIMAL(38,0)-representable by construction —
-     * PLAN §5 note), BOOLEAN, DATE, DATETIME. FLOAT/DOUBLE are excluded (approximate;
-     * spike §7.5 forbids exact-equality pushdown over float elements), IPADDRESS is excluded
-     * until its parameter rendering is live-proven (P2b open item), nested arrays excluded
+     * PLAN §5 note), BOOLEAN, DATE, DATETIME and IPADDRESS. FLOAT/DOUBLE are excluded
+     * (approximate; spike §7.5 forbids their exact-equality predicates). IP literals use
+     * the proven IPV4/IPV6 dialect renderings; nested arrays remain excluded
      * (no element-literal shape exists).
      */
     fun pushableArrayColumn(context: RewriteContext<*>, variable: Variable): PushableArrayColumn? {
@@ -427,9 +427,9 @@ internal class RewriteArrayPositionComparison(
  * NULL elements COUNTED on both, and NOT-composition cell-identical — VALUE-level identical,
  * so the rule lives in the VALUE-SAFE tier (composable under NOT/AND/OR) alongside
  * `array_position` comparisons. Bounds are validated Longs rendered inline (no injection
- * surface). Column guard reuses the pushable-array allowlist (FLOAT/DOUBLE/IP element
- * arrays are excluded — over-tight for a size check, but keeps one proof surface; noted in
- * NOTES-p5-batch).
+ * surface). Column guard reuses the pushable-array allowlist (including IP elements;
+ * FLOAT/DOUBLE and nested element arrays remain excluded to keep one proof surface;
+ * retained evidence: dev-docs/archive/NOTES-p5-batch.md).
  */
 internal class RewriteCardinalityComparison(
     private val support: DorisArrayPushdownSupport,

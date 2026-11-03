@@ -58,7 +58,7 @@ import java.util.Optional
 
 /**
  * Batch-1 scalar expression pushdown (READ-ONLY-MAX; probe verdicts in
- * `NOTES-readonly-max-batch1.md`, evidence pins in [DorisPushdownEvidence]).
+ * `dev-docs/archive/NOTES-readonly-max-batch1.md`, evidence pins in [DorisPushdownEvidence]).
  *
  * The SCALAR VALUE tier: typed rules over a closed set of value types —
  * [DorisScalarValues.isValueType]: the exact non-text set plus VARCHAR (byte-fidelity
@@ -247,7 +247,7 @@ internal class DorisScalarRewriterHolder {
 
 /**
  * Predicate bridge: `<scalar> <cmp> <scalar>` where at least one side is a FUNCTION shape
- * (plain column-vs-literal comparisons are domain territory and never arrive here). Both
+ * (plain comparisons can arrive, but are declined here in favor of domain handling). Both
  * operands must rewrite through the scalar tier and be of value types — comparisons over
  * those are value-identical (exact types: P0 domain evidence; text: byte-exact, P4 probe).
  * TOP-LEVEL WHERE conjuncts only (not in the NOT/AND/OR value-safe tier): NULL cells drop
@@ -332,8 +332,8 @@ internal class RewriteScalarIsNullBridge(
 
 /**
  * `starts_with(col, 'prefix')` -> `(col LIKE '<escaped-prefix>%')` — the
- * CONDITIONALLY_EQUIVALENT condition ([DorisPushdownEvidence.STARTS_WITH]): Doris has no
- * `starts_with`; the LIKE-prefix rendering is byte-exact (P4 probe: LIKE is memcmp
+ * CONDITIONALLY_EQUIVALENT condition ([DorisPushdownEvidence.STARTS_WITH]): the native
+ * function exists; escaped LIKE is the chosen prefix rendering (P4 probe: LIKE is memcmp
  * semantics) AND zone-map/index-eligible, unlike `left(col, n) = 'prefix'`. LIKE
  * metacharacters in the prefix are escaped (`%` -> `\%`, `_` -> `\_`, `\` -> `\\` —
  * live-proven: `'a%b_c' LIKE 'a\%b\_%'` matches, `'aXbYc'` does not). NULL input -> NULL

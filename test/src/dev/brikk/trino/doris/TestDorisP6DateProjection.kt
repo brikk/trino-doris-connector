@@ -23,7 +23,7 @@ import org.junit.jupiter.api.TestInstance
 /**
  * P6 date-of-datetime projection pushdown + GROUP BY composition (the user's motivating
  * query: `GROUP BY date(event_at)` on a huge table -> ONE remote statement). Probe verdicts
- * in `NOTES-p6-date-projection.md`; evidence pins [DorisPushdownEvidence.DATE_OF_DATETIME]
+ * in `dev-docs/archive/NOTES-p6-date-projection.md`; evidence pins [DorisPushdownEvidence.DATE_OF_DATETIME]
  * / [DorisPushdownEvidence.DATE_TRUNC]. Differentials compare pushed results against the
  * unpushed plan (`complex_expression_pushdown = false` disables convertProjection wiring).
  */

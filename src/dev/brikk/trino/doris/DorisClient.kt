@@ -300,7 +300,7 @@ class DorisClient @Inject constructor(
      * NULL-key matching in joins) plus the four range comparisons and `<>` — all probed
      * NULL-drop-identical on both engines. Key types: the exact NON-TEXT set only —
      * integers, DECIMAL (incl. the LARGEINT mapping), DATE, DATETIME, BOOLEAN.
-     * Excluded with reasons (NOTES-p5-joins.md):
+     * Excluded with reasons (dev-docs/archive/NOTES-p5-joins.md):
      * - CHAR/VARCHAR keys: collation posture is mode-gated for filters; join conditions
      *   compare remote-stored bytes vs Trino-wire values — deferred even for BINARY/FULL
      *   modes until proven (documented future extension; byte semantics themselves are
@@ -323,7 +323,7 @@ class DorisClient @Inject constructor(
 
     /**
      * Remote statistics for the cost-based optimizer (PLAN P4 tail; probe verdicts in
-     * `dev-docs/NOTES-p5-statistics.md`). Config-gated (`doris.statistics.enabled` /
+     * `dev-docs/archive/NOTES-p5-statistics.md`). Config-gated (`doris.statistics.enabled` /
      * `statistics_enabled`). FAIL-SOFT by contract: statistics are advisory, so any failure
      * degrades to [TableStatistics.empty] (all-unknown) with a DEBUG log — never a query
      * failure. The connector never issues ANALYZE (that writes to Doris's stats store);
@@ -505,7 +505,7 @@ class DorisClient @Inject constructor(
      * ascending UTF-8 byte order), which equals Trino's VARCHAR codepoint ordering. CHAR keys
      * stay OFF in every mode — Trino orders trimmed/padded CHAR values while Doris orders
      * stored bytes, divergent for trailing-space data and undetectable from the query
-     * (REPORT-string-comparison-probe-4.1.3.md "ORDER BY").
+     * (dev-docs/archive/REPORT-string-comparison-probe-4.1.3.md "ORDER BY").
      */
     private fun isPushableSortKey(session: ConnectorSession, column: JdbcColumnHandle): Boolean = when {
         column.columnType is VarcharType -> isNativeVarchar(column) &&
@@ -535,7 +535,7 @@ class DorisClient @Inject constructor(
      * Verified aggregate pushdown (PLAN §6.5, P4), one live-proven family at a time. The
      * argument rewriter is DELIBERATELY only [RewriteVariable] (quote a column reference):
      * aggregate arguments must stay bare columns — no derived-expression surface. Family
-     * verdicts (full proofs in `dev-docs/NOTES-p4-aggregates.md`, pinned by
+     * verdicts (full proofs in `dev-docs/archive/NOTES-p4-aggregates.md`, pinned by
      * `TestDorisP4AggregateProbes`):
      *
      * - `count(*)` / `count(x)`: pushed (stock rules; bigint result; empty/all-NULL proven).

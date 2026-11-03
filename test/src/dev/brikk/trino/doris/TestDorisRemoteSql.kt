@@ -47,9 +47,9 @@ class TestDorisRemoteSql : AbstractTestQueryFramework() {
 
     @Test
     fun testStringEqualityWireShapePerPushdownMode() {
-        // G5 at the wire, mode-resolved (REPORT-string-comparison-probe-4.1.3.md): under the
-        // GUARDED default the string equality DOES ship as a superset pre-filter (the exact
-        // Trino filter is retained locally); under NULL_ONLY it must NOT appear at all.
+        // G5 at the wire, mode-resolved (dev-docs/archive/REPORT-string-comparison-probe-4.1.3.md): under the
+        // GUARDED default admitted string equality is fully pushed; a genuine LIKE-prefix
+        // superset retains its local filter. Under NULL_ONLY the value equality stays local.
         val sql = "SELECT id FROM doris.p0_probe.scalars WHERE c_string = 'a normal string'"
 
         val guarded = getDistributedQueryRunner().executeWithPlan(session, sql)

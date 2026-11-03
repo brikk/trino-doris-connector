@@ -23,7 +23,7 @@ import org.junit.jupiter.api.TestInstance
 /**
  * READ-ONLY-MAX batch 3: DISTINCT pushdown (incl. the VARCHAR grouping-key widening),
  * HAVING verification, and domain-compaction behavior. Probe findings in
- * `NOTES-readonly-max-batch3.md`.
+ * `dev-docs/archive/NOTES-readonly-max-batch3.md`.
  */
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 class TestDorisB3DistinctHaving : AbstractTestQueryFramework() {

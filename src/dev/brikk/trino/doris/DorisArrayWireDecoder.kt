@@ -33,7 +33,7 @@ import java.time.temporal.ChronoField
 
 /**
  * Strict recursive-descent decoder for the PROVEN Doris 4.1.3 ARRAY `getString()` wire grammar
- * (`REPORT-array-wire-decoder-spike.md` §2; the checked-in spike is evidence, this is the
+ * (`dev-docs/archive/REPORT-array-wire-decoder-spike.md` §2; the checked-in spike is evidence, this is the
  * production implementation):
  *
  * ```

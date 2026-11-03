@@ -1,50 +1,36 @@
-# Opt-in review diagnostics
+# Opt-in regression replays
 
-R-04/R-05 diagnostic sources are **not part of the default build**. They assert the
-correctness/non-blocking behavior we want, so an unfixed finding deliberately
-produces a red probe run; it must not be reported as a green release gate.
-The R-05 diagnostic now inherits the durable production-driver regression suite
-that also runs in the default build. Both diagnostic classes pass after the
-approved safety fixes; historical red measurements are retained in the reports.
+These Kotlin sources are outside the default test source set. The init script
+adds them for targeted rechecks against the identified disposable golden cluster.
+They now assert the **resolved behavior**, not that the old defects still exist.
 
-`TestDorisRemainingReview` is different: it deliberately pins **open** R-08,
-R-10, R-11 and R-17 defects for current-stack triage. A passing run reproduces
-those defects, not their resolution. It uses a UUID-named scratch schema on the
-identified local golden cluster and never issues a live KILL or failover stop.
-See [remaining review triage](../TRIAGE-trino-484-remaining-review.md) for results,
-source-only findings and qualifications. Run it explicitly with the same init
-script and `--tests '*TestDorisRemainingReview'`; it is not a default release gate.
+| Class | Purpose |
+|---|---|
+| `TestDorisR04Review` | Outer-join/min_by/max_by NULL behavior under EAGER, with base/INNER controls |
+| `TestDorisR05Review` | Reuse the durable real-driver HA abort/identity/fresh-connection regressions |
+| `TestDorisRemainingReview` | Positive-TTL statistics policy, literal-token rejection, timeout ranges and URL/default-database rejection |
 
-After qualifying the digest-pinned Trino 484 / Doris 4.1.5 baseline:
+From the repository root:
 
 ```sh
-DORIS_TEST_ALLOW_MUTATION=1 JAVA_HOME=~/.local/share/mise/installs/java/25 ./gradlew \
+./compose/up.sh
+DORIS_TEST_ALLOW_MUTATION=1 mise exec -- ./gradlew \
   -I dev-docs/probes/review-probes.init.gradle test \
   --tests '*TestDorisR04Review' --tests '*TestDorisR05Review' \
-  --no-daemon --console=plain
+  --tests '*TestDorisRemainingReview' --no-daemon
 ```
 
-Both probes use the connector's stock validation target at `127.0.0.1:9130`.
-They require explicit mutation opt-in, disposable Compose identity and the golden
-native FE/BE version before running. R-04 recreates only
-its `r04_484_review.l` and `.r` fixture tables. Do not point this harness at a
-production server. No multi-FE failover or unrelated container is stopped.
+The shared [test guard](../DEVELOPMENT.md) requires explicit mutation permission,
+disposable Compose ownership/native identity and the golden FE/BE release. These
+probes may recreate their documented fixtures; do not point them at production.
+The remaining-review replay uses a UUID-named schema and drops only that schema.
+Its candidate-classifier test never kills an unrelated live query.
 
-- R-04 compares LEFT and RIGHT joins with both `min_by` and `max_by` under EAGER
-  join pushdown, default-disabled join pushdown, and all-connector-pushdown OFF.
-  Base-table and matched INNER JOIN controls must remain fully pushed and return
-  60. EXPLAIN output is retained with the per-case values in JUnit XML.
-- R-05 uses the real production prepared-statement wrapper and Connector/J
-  connections. Single-host, comma-list, load-balancing, and replication URLs
-  target the **same FE** (duplicate hosts isolate the proxy-lock behavior).
-  Execute-phase probes run bounded `sleep(4)` work with the actual cancellation
-  helper disabled or failing its connection factory. A 250ms observation captures
-  cancellation thread stacks before letting the operation finish naturally.
-  Adopted streaming results and concurrent close are checked separately.
+HA URLs using duplicate addresses isolate driver locking/identity on the same FE;
+they do not prove cross-FE forwarding or master election. The dedicated optional
+overlay lane performs the real failover/cross-FE checks and requires its separate
+permission. Latency assertions are regression bounds, not universal production SLAs.
 
-The 1000ms diagnostic threshold is not a production latency SLA. A slow result
-must be interpreted alongside the stack, query duration, and single-host/stream
-controls. These same-FE URL probes do **not** establish cross-FE forwarding,
-master election, or load-balancer routing behavior. Failed assertions and raw
-JUnit XML are retained as evidence, not silenced or folded into the green
-baseline count.
+Keep fresh XML/logs by run and interpret scope honestly. The original pre-fix
+red measurements are retained in the [archive](../archive/README.md); a successful
+targeted replay is not a replacement for full or packaged-plugin qualification.

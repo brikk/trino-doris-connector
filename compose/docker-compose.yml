@@ -1,7 +1,7 @@
 name: trino-doris-dev
 
 # ISOLATED stock Apache Doris 4.1.5 cluster for connector validation.
-# Historical P0 evidence: dev-docs/REPORT-protocol-type-probe-doris-4.1.3.md.
+# Historical P0 evidence: dev-docs/archive/REPORT-protocol-type-probe-doris-4.1.3.md.
 #
 # This is DELIBERATELY separate from jvm/doris-ducklake's cluster:
 #   - doris-ducklake runs a PATCHED master-based FE (doris-fe:pr62767-local) on

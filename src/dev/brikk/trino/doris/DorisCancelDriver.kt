@@ -27,10 +27,10 @@ import java.util.Properties
 import java.util.concurrent.TimeUnit
 
 /**
- * Helper-only Connector/J 9.7.0 driver. Any configured FE can perform a cluster-wide kill,
- * so ordinary jdbc:mysql single/failover URLs are tried in order, at most once per list entry,
- * without HA proxies, retries or fallback. Load-balance, replication, DNS SRV and X Protocol
- * URL types are deliberately rejected rather than silently changing their host-selection rules.
+ * Helper-only Connector/J 26.7.0 driver. Any configured FE can perform a cluster-wide kill.
+ * Supported JDBC host lists (including load-balance, replication and resolved SRV roles)
+ * are attempted without a mutable HA proxy or in-flight reconnect. X Protocol is rejected;
+ * ordinary catalog URL admission has its own stricter contract in DorisJdbcConfig.
  *
  * Limits are imposed AFTER Connector/J merges URL, Properties, host, useConfigs and transform
  * settings. The cached URL and its hosts remain untouched, including normal-driver settings.

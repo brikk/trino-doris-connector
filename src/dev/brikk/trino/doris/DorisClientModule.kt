@@ -87,9 +87,9 @@ class DorisClientModule : AbstractConfigurationAwareModule() {
         // via getTableStatistics — with EAGER available).
         configBinder(binder).bindConfig(JdbcJoinPushdownConfig::class.java)
         bindSessionPropertiesProvider(binder, JdbcJoinPushdownSessionProperties::class.java)
-        // Complex join pushdown (condition-as-expression) is forced OFF: our expression
+        // Complex join pushdown (condition-as-expression) defaults to false: our expression
         // rewriter deliberately has no variable-to-variable comparison rules (unproven
-        // surface), and the complex path has NO legacy fallback at 483 — leaving it on
+        // surface), and the complex path has no automatic legacy fallback — enabling it
         // would make joins silently unpushable. The legacy path gives the per-condition
         // typed guard (DorisClient.isSupportedJoinCondition) instead.
         configBinder(binder).bindConfigDefaults(JdbcMetadataConfig::class.java) { config ->
@@ -110,7 +110,7 @@ class DorisClientModule : AbstractConfigurationAwareModule() {
         // plane (`doris.data-plane=jdbc|adbc`) — columnar result transport for large scans,
         // opt-in because Flight needs direct BE reachability (hard behind k8s/NAT). Metadata,
         // pushdown, and SQL generation stay on this JDBC plane either way. NOT scheduled;
-        // see dev-docs/TODO-adbc-arrow-flight.md for the gate.
+        // see dev-docs/BACKLOG.md for the retained, explicitly deferred transport decision.
         return DriverConnectionFactory.builder(DorisReadDriver(), config.connectionUrl, credentialProvider)
             .setConnectionProperties(connectionProperties(dorisConfig))
             .setOpenTelemetry(openTelemetry)

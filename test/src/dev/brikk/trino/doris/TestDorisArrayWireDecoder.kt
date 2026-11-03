@@ -41,7 +41,7 @@ import java.time.LocalDateTime
 
 /**
  * Decoder unit tests over the spike report's fixture classes — wire texts are the VERBATIM
- * `getString()` values from `REPORT-array-wire-decoder-spike.md` §3, and the malformed
+ * `getString()` values from `dev-docs/archive/REPORT-array-wire-decoder-spike.md` §3, and the malformed
  * battery is §5 (12/12 must fail loud with wire-offset info). No cluster needed.
  */
 class TestDorisArrayWireDecoder {

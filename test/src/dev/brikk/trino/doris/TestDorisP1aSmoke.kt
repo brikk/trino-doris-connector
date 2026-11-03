@@ -308,7 +308,7 @@ class TestDorisP1aSmoke : AbstractTestQueryFramework() {
     @Test
     fun testStringPredicateContractUnderDefaultGuardedMode() {
         // G5 RESOLVED by the byte-exactness probe -> evidence-tiered GUARDED default
-        // (REPORT-string-comparison-probe-4.1.3.md; P6 tiering): proven-exact shapes push
+        // (dev-docs/archive/REPORT-string-comparison-probe-4.1.3.md; P6 tiering): proven-exact shapes push
         // FULLY, genuine supersets keep the Trino filter, hazards stay entirely local.
         // Fully pushed: varchar/string equality + ranges (and null-ness, exact as always).
         assertThat(query("SELECT id FROM doris.p1_smoke.scalars WHERE c_varchar100 = 'héllo 中文 🦆'"))

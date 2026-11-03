@@ -29,7 +29,7 @@ import java.math.BigDecimal
  * (isFullyPushedDown for enabled families, retained [AggregationNode] for denied ones),
  * audit-log remote-SQL shapes, and the fail-loud overflow/avg divergence pins that justify
  * every exclusion. Doris-side gating facts are pinned in [TestDorisP4AggregateProbes];
- * narrative in `dev-docs/NOTES-p4-aggregates.md`.
+ * narrative in `dev-docs/archive/NOTES-p4-aggregates.md`.
  */
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 class TestDorisP4Aggregates : AbstractTestQueryFramework() {

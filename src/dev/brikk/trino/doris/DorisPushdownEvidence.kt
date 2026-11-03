@@ -20,7 +20,7 @@ import io.trino.spi.StandardErrorCode.GENERIC_INTERNAL_ERROR
 import io.trino.spi.TrinoException
 
 /**
- * Evidence bridge for every pushdown rule (PLAN §6.3 contract, G3 verdict-gating), backed by
+ * Registry-backed evidence index and artifact-drift check (PLAN §6.3, G3), backed by
  * the RELEASED `dev.brikk.house:brikk-sql-metadata-jvm:0.21.0` hazard registry, including
  * the directly paired Trino 484 / Doris 4.1.5 JSON evidence. The direction-oriented
  * `sourceName`/`targetName` fields originally requested by this connector are retained.
@@ -32,8 +32,8 @@ import io.trino.spi.TrinoException
  * A silently-changed future brikk artifact therefore cannot alter connector behavior — it
  * can only FAIL LOUD (catalog creation refuses; the build's drift suite goes red).
  *
- * Every rule remains additionally backed by connector-owned LIVE proof (truth-table pins and
- * differentials) — brikk supplies evidence, the connector owns the exact typed rendering
+ * Connector-owned live pins and differentials exercise admitted cases; they are not an
+ * exhaustive rendering proof. The connector owns typed admission and SQL generation
  * (PLAN §6.3: "No function is pushed merely because it appears in both function catalogs").
  */
 internal object DorisPushdownEvidence {
@@ -69,7 +69,7 @@ internal object DorisPushdownEvidence {
         val expectedVerdict: HazardVerdict,
         /** Pinned registry provenance string. */
         val expectedProvenance: String,
-        /** What the rule actually renders (must contain [expectedTarget]). */
+        /** Handwritten rendering description (consistency checked, not generated rule output). */
         val dorisRendering: String,
         /** G3 treatment implementing the verdict. */
         val treatment: Treatment,
@@ -243,7 +243,7 @@ internal object DorisPushdownEvidence {
     /**
      * Batch-1 scalar tier, registry-IDENTICAL entries re-proven live (NULL propagation,
      * `nullif(a,a)` = NULL, byte-exact case-SENSITIVE nullif on text; 0000/9999 temporal
-     * edges, fraction truncation) — `NOTES-readonly-max-batch1.md`.
+     * edges, fraction truncation) — `dev-docs/archive/NOTES-readonly-max-batch1.md`.
      */
     val COALESCE = Evidence(
         trinoFunction = "coalesce(a, b, ...) over the scalar value-type set",
@@ -318,12 +318,12 @@ internal object DorisPushdownEvidence {
         dorisRendering = "(`col` LIKE '<metachar-escaped-prefix>%')  -- starts_with has no Doris equivalent",
         treatment = Treatment.GUARDED_WRAPPER,
         guard = "LIKE",
-        hazard = "no Doris starts_with; LIKE-prefix rendering requires metacharacter escaping " +
+        hazard = "the chosen LIKE-prefix rendering requires metacharacter escaping " +
             "(live-proven) and inherits the 0x00 skip policy",
         liveProof = "TestDorisB1ScalarPushdown",
     )
 
-    /** Every rule the connector registers — one Evidence entry per pushdown rule, no more, no fewer. */
+    /** Active registry-backed pins; not a one-to-one inventory of all registered connector rules. */
     val ALL: List<Evidence> = listOf(
         CONTAINS, ARRAYS_OVERLAP, ARRAY_POSITION, JSON_EXTRACT_SCALAR, CARDINALITY, DATE_OF_DATETIME, DATE_TRUNC,
         COALESCE, NULLIF, LENGTH, STARTS_WITH,
@@ -354,7 +354,7 @@ internal object DorisPushdownEvidence {
         if (entry.provenance != evidence.expectedProvenance) {
             fail(evidence, "provenance drifted: registry=${entry.provenance}, pinned=${evidence.expectedProvenance}")
         }
-        // structural self-check: the rule's rendering really uses the pinned target function
+        // Documentation consistency only; actual rule rendering/admission needs executable tests.
         if (!evidence.dorisRendering.contains(evidence.expectedTarget)) {
             fail(evidence, "rendering '${evidence.dorisRendering}' does not use pinned target '${evidence.expectedTarget}'")
         }

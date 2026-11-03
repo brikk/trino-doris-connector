@@ -16,7 +16,7 @@ package dev.brikk.trino.doris
 /**
  * String predicate pushdown mode — catalog config `doris.string-pushdown.mode`, per-query
  * override via session property `string_pushdown_mode` (either direction: tighten or
- * loosen). Evidence: `REPORT-string-comparison-probe-4.1.3.md` — Doris 4.1.3 string
+ * loosen). Evidence: `dev-docs/archive/REPORT-string-comparison-probe-4.1.3.md` — Doris 4.1.3 string
  * comparison/ordering/LIKE are pure byte (memcmp) semantics over UTF-8
  * (`utf8mb4_0900_bin`), identical to Trino's VARCHAR semantics except for the hazards each
  * mode addresses.

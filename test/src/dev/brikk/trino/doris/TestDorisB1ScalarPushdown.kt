@@ -27,7 +27,7 @@ import org.junit.jupiter.api.TestInstance
  * length->char_length, starts_with->escaped-LIKE-prefix; lower/upper stay local — plus the pinned
  * ENGINE DENIALS (CASE/IF never reach the connector at 483). Differentials compare pushed
  * vs `complex_expression_pushdown=false` (projections/predicate expressions local) vs the
- * direct Doris oracle. Probe verdicts: `NOTES-readonly-max-batch1.md`.
+ * direct Doris oracle. Probe verdicts: `dev-docs/archive/NOTES-readonly-max-batch1.md`.
  */
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 class TestDorisB1ScalarPushdown : AbstractTestQueryFramework() {

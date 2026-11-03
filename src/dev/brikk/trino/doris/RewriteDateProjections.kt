@@ -80,7 +80,7 @@ internal class RewriteCastDatetimeToDate : ProjectFunctionRule<JdbcExpression, P
  * `date_trunc('unit', datetime_col)` -> `date_trunc(col, 'unit')` — the ARGUMENT ORDER
  * SWAPS (registry CONDITIONALLY_EQUIVALENT, [DorisPushdownEvidence.DATE_TRUNC]); returns
  * DATETIME of the input's precision in both engines (live-probed). Unit allowlist is
- * live-proven per unit (`NOTES-p6-date-projection.md`): second/minute/hour/day/month/
+ * live-proven per unit (`dev-docs/archive/NOTES-p6-date-projection.md`): second/minute/hour/day/month/
  * quarter/year truncate identically. WEEK is DENIED: both engines are Monday-start
  * (probed on Sunday/Monday/ISO-week-1 adversaries), but at the calendar minimum Trino
  * truncates 0000-01-01/02 into year -1 (`-0001-12-27`) while Doris CLAMPS to

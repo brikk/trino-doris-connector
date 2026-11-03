@@ -4,7 +4,7 @@
 #   THREE FEs (fe1 master + fe2/fe3 followers) + ONE BE, project trino-doris-mfe,
 #   dedicated subnet 172.30.82.0/24, host MySQL ports 9131/9132/9133 -> the three
 #   FEs' 9030. This is a MANUAL / DEV overlay used to produce the failover
-#   evidence in dev-docs/REPORT-multi-fe-failover.md. It does NOT replace or
+#   evidence in dev-docs/archive/REPORT-multi-fe-failover.md. It does NOT replace or
 #   disturb the default single-FE probe cluster (../up.sh, project
 #   trino-doris-dev, host 9130). CI uses the single-FE cluster only.
 #

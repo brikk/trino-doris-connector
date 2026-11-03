@@ -23,7 +23,7 @@ import java.util.concurrent.atomic.AtomicBoolean
  * never by test code — the first CI run (bare runner, fresh cluster) failed en masse because
  * of it. This bootstrapper replicates the original fixtures EXACTLY (proven by two-way
  * `EXCEPT` diffs of every table against the original dev-cluster data before it was ever
- * wiped — see dev-docs/NOTES-ci-fixture-bootstrap.md):
+ * wiped — see dev-docs/archive/NOTES-ci-fixture-bootstrap.md):
  *
  * - `scalars` (8 rows incl. the duplicate id=6 rows): LARGEINT extremes, DOUBLE_MAX rows
  *   (the wire renders them as Infinity — the ledger's getString READ rule), one real

@@ -43,7 +43,7 @@ import java.util.concurrent.atomic.LongAdder
 /**
  * Verified aggregate pushdown (PLAN §6.5, P4): shared type gate and rejection observability
  * for the aggregate rules below. Every family here is gated on a LIVE Doris 4.1.3 semantic
- * proof recorded in `dev-docs/NOTES-p4-aggregates.md` and pinned by `TestDorisP4AggregateProbes`.
+ * proof recorded in `dev-docs/archive/NOTES-p4-aggregates.md` and pinned by `TestDorisP4AggregateProbes`.
  * These are standard SQL aggregates (COUNT/MIN/MAX/SUM), not brikk hazard-registry surface —
  * the evidence lives in the per-rule KDoc and the probe suite, not in [DorisPushdownEvidence].
  */
@@ -55,17 +55,17 @@ internal object DorisAggregatePushdown {
 
     /**
      * Types whose value, ordering, and grouping semantics are live-proven identical between
-     * Trino and Doris — the ONLY types allowed as min/max arguments and GROUP BY keys (and,
-     * for [DorisImplementCountDistinct], as distinct-count arguments). Deliberately the same
-     * set as the safe-TopN sort keys ([DorisClient.supportsTopN]): ordering identity is
-     * exactly what min/max relies on. Excluded with evidence:
-     * - CHAR/VARCHAR: Doris collation unproven (G5; same reason as string TopN/predicates).
+     * Trino and Doris — the numeric/temporal/boolean gate for min/max and direct distinct
+     * aggregates. Grouping admits additional native VARCHAR keys; TopN separately admits
+     * IP and mode-gated native VARCHAR. Those sets are not identical. Exclusions here:
+     * - CHAR/VARCHAR: no admitted min/max rendering under this aggregate contract.
+     * - Text grouping and ordering follow their separate native-type/mode guards.
      * - REAL/DOUBLE: DIVERGENT min/max — Trino 483 `max` uses COMPARISON_UNORDERED_FIRST
      *   (NaN smallest -> `max(NaN, Infinity) = Infinity`) while Doris 4.1.3 returns NaN as
      *   the max (live probe 2026-07-19: `max({NaN, 1.5, Infinity, -0.0, 0.0}) = NaN`), and
      *   ±0.0 tie-breaks are order-dependent on both engines (textually distinguishable).
      *   Grouping over NaN/-0.0 is equally unproven.
-     * - JSON/IPADDRESS/ARRAY and everything else: no ordering/grouping identity evidence.
+     * - JSON/IPADDRESS/ARRAY: not admitted by this aggregate argument gate.
      */
     internal fun isExactPushableKeyType(type: Type): Boolean = when (type) {
         is io.trino.spi.type.TinyintType,
