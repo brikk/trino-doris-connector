@@ -5,6 +5,13 @@ R-08, R-09, with a commit/push between each. Trino 484, Doris
 4.1.5-release-917b20be838, Connector/J 26.7.0, metadata 0.21.0, Kotlin 2.4.10
 and JDK 25 remain fixed. This work does not authorize publication.
 
+**All four scoped fixes and final staged qualification are complete.** The final
+clean run has 398 passes with five overlay-only skips and slow cancellation
+enabled; the separate overlay replay passes all five. Packaged-plugin smoke,
+archive checks and the existing tooling/Gradle guards also pass. Validation
+containers are stopped, temporary files cleared, and retained volumes/evidence
+were not deleted. No unrelated workload was stopped.
+
 Separate implementation checkpoints, committed and pushed in the approved order:
 
 | Finding | Commit | Focused result |
@@ -142,12 +149,11 @@ Initial scaffolding corrections split an overly complex fake and moved its
 remote-state reset after logical-request completion. No production deadline,
 admission bound, delayed-visibility guard or assertion threshold was loosened.
 
-## Final staged qualification pending
+## Final staged qualification
 
-Implementation milestones are committed/pushed in the approved order. The final
-clean single-FE build, separate overlay replay, tooling guards and packaged-plugin
-smoke will be recorded here. Focused passes above are not presented as a completed
-aggregate run. No release is authorized by any of these checks.
+Implementation milestones were committed/pushed in the approved order. Final
+qualification is staged, not one combined no-skip run. No release is authorized
+by any of these checks.
 
 The first isolated-plugin smoke found an admission mismatch hidden by standalone
 predicate tests: Trino 484's inherited BaseJdbcConfig URL pattern rejects direct
@@ -157,3 +163,44 @@ with `jdbc:mysql://.../?dnsSrv=true`. No new URL family was enabled. The initial
 smoke failure is retained separately; qualification is rerun after this alignment.
 All 19 URL/config/module checks, detekt and assembly verification passed again
 with the inherited-pattern constraint included (`r17-base-constraint.log`).
+That alignment was committed/pushed as **`5915a25`** before the final rerun.
+
+| Final check | Result |
+|---|---|
+| Clean single-FE build, slow cancellation ON | 403 discovered: **398 passed, 5 overlay-only skips, 0 failures/errors** |
+| Separate three-FE replay | **5 passed, 0 skips/failures/errors** |
+| Current opt-in resolution replay | **5 passed** (safe assertions for the resolved findings) |
+| Existing tooling contracts | **6 passed** |
+| Existing actual-Gradle guard qualification | **4 passed**, including intentional no-permission fixture refusal |
+| ZIP/TAR checksums and extraction | Both passed; all **79 JARs** byte-identical to verified inputs |
+| ZIP-extracted plugin in fresh Trino 484 | **19 SQL operations passed**, including expected configuration errors |
+
+The final clean build completed in **16m28s** with the normal 1536MiB test heap,
+1GiB Gradle heap and in-process Kotlin. Compilation, detekt, compiled-Trino
+compatibility and ServiceLoader/assembly guards passed. The five skips are
+exactly `TestDorisMultiFeFailover`, including its framework naming check; that
+class passed in the subsequent explicit replay on the same source. The original
+overlay container IDs were retained and all FEs were restored before cleanup.
+
+The isolated-plugin smoke covers warm statistics → disabled session → enabled
+session with positive TTL/missing caching, query-timeout validation and a valid
+fractional catalog setting, URL protocol/DBNAME/transform rejection, successful
+non-resolving `dnsSrv=true` catalog creation, read results and representative
+Unicode/LIKE/outer-join/AVG safeguards. It mounts the ZIP-extracted current
+directory, not an old snapshot or the in-process test classpath. The first failed
+smoke remains separate from `plugin-smoke-qualified.json` / `plugin-qualified.log`.
+
+Evidence under `~/.cache/trino-doris-484-final-runtime/`: `full-qualified.log`,
+`full-qualified-xml/`, `qualified-summary.json`, `overlay-qualified.log`,
+`overlay-qualified-xml/`, `resolution-replay.log`, `resolution-replay-xml/`,
+`tooling.log`, `guard-qualification.log`, `refusal-xml/`, `artifacts-qualified/`,
+and `manual-qualified-installation.json`. Development artifact label
+`484-0.2.0-SNAPSHOT` is not a chosen release version.
+
+Cleanup used verified recorded IDs, not broad name matching or a container prune.
+All seven validation containers are stopped (`cleanup.json`), with fixture data
+and volumes retained. Task temp files were cleared. Gradle tests used
+`--no-daemon`; the archive-mounted sandbox did not start a persistent build daemon.
+The golden dependency/image pins remain unchanged. Optional CI automation,
+operational K findings and other developer-backlog decisions were not silently
+implemented or made new publication requirements.
