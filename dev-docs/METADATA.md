@@ -1,16 +1,14 @@
 # Metadata contract
 
-The production registry dependency is intentional: `dev.brikk.house:brikk-sql-metadata-jvm:0.21.0`.
-Its version is in [the version catalog](../gradle/libs.versions.toml); binary SHA
-and tuple drift checks live in
-[TestDorisPushdownEvidenceDrift](../test/src/dev/brikk/trino/doris/TestDorisPushdownEvidenceDrift.kt).
+The pushdown rules were proven against `dev.brikk.house:brikk-sql-metadata-jvm:0.21.0`,
+a test-scope dependency; the plugin does not bundle it. Its version is in
+[the version catalog](../gradle/libs.versions.toml).
 Do not replace the immutable release with a mutable snapshot or automatically bump it.
 
-At connector construction, `DorisPushdownEvidence.verifyAgainstRegistry` checks
-the active entries' direction, source/target, verdict and provenance. Drift
-refuses construction rather than silently changing pushdown semantics. The index
-currently has 17 active pins; not every connector rule is a distinct registry entry.
-Documentation-string consistency checks are not proofs of actual SQL rendering.
+[TestDorisPushdownEvidenceDrift](../test/src/dev/brikk/trino/doris/TestDorisPushdownEvidenceDrift.kt)
+pins the artifact's file name and SHA-256, and for each of the 17 pushed functions the
+registry's source/target, verdict and provenance. Registry drift fails the build; it
+never changes what the connector pushes. Not every connector rule is a distinct registry entry.
 
 Changing a registry verdict does not itself authorize a rule. Admission still
 depends on the connector's type/wire/nullability/path/value guard and live tests.
@@ -42,5 +40,4 @@ Original evidence and qualification are retained in the
 redirects at their published paths preserve links in the upstream issue.
 
 The [fulfilled additive API request](archive/HANDOFF-brikk-sql-metadata-request.md)
-is history, not an outstanding TODO. Removing the sanctioned runtime dependency
-is an architecture/product decision, not routine dependency cleanup.
+is history, not an outstanding TODO.

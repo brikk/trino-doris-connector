@@ -37,10 +37,9 @@ confirmed valid-data wrong-answer bug or silently call it fixed.
 
 ## Optional engineering and automation
 
-- **E-16:** registry tuple/SHA checks are real; handwritten rendering/guard strings
-  are documentation consistency checks, not instantiated SQL-rendering proof.
-  Current guides state that boundary. Additional direct rule-output tests remain
-  useful; do not remove the sanctioned runtime gate as routine cleanup.
+- **E-16:** registry tuple/SHA checks are real and now run as a unit test; the
+  handwritten rendering/guard strings were removed with the startup gate.
+  Additional direct rule-output tests remain useful.
 - **E-18 / E-26:** modes, scalar transformations, comparisons, grouping and the
   standard expression/all-pushdown switches have different scopes. E-26's claimed
   missing switch is refuted, not a new feature request. Keep their documentation
@@ -75,13 +74,12 @@ backlog. Existing release mechanics are in [Releasing](RELEASING.md).
 - **TIMESTAMPTZ:** not exposed. Reconsider only with a deliberate instant versus
   wall-clock contract, precision decision, pinned connection zone and DST/offset
   fixtures. No dependency/server upgrade is automatically requested by that idea.
-- **K-10 / metadata:** recheck semantics on explicit version changes; a startup
+- **K-10 / metadata:** recheck semantics on explicit version changes; a pinned
   registry tuple is not dynamic server certification. Keep LOWER/UPPER local;
   [brikk-sql#1](https://github.com/brikk/brikk-sql/issues/1) is an evidence correction,
   not a consumer release dependency or permission to re-enable the rules.
-- **E-28:** the featherweight runtime metadata dependency/fail-loud startup check
-  is intentional. Moving it to tests is an architecture/product decision, not an
-  accidental dependency to remove.
+- **E-28:** done. The registry check moved from catalog creation to
+  `TestDorisPushdownEvidenceDrift`, and the metadata dependency to test scope.
 - **ADBC / Arrow Flight (D-02):** parked, not implemented or a release prerequisite.
   Retain JDBC as default/control plane and correctness reference; an opt-in result
   transport needs direct BE reachability (including NAT/k8s constraints), fresh

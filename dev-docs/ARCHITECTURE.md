@@ -139,11 +139,10 @@ prove every BE allocation was reclaimed. Preserve those limits in operational cl
 
 ## Evidence discipline
 
-The [metadata contract](METADATA.md) is an immutable-artifact/tuple/provenance
-drift check and a map to proof. Handwritten rendering/guard consistency strings
-are not structural validation of generated SQL and do not independently establish
-equivalence. Rule output, actual admission/rejection, native observations, local
-oracles and composition regressions carry that burden.
+The [metadata contract](METADATA.md) is a test-time immutable-artifact/tuple/provenance
+drift check and a map to proof. It does not independently establish equivalence.
+Rule output, actual admission/rejection, native observations, local oracles and
+composition regressions carry that burden.
 
 The [archive](archive/README.md) retains original probes and rejected alternatives.
 Their version-bound observations are evidence to recheck, not runtime discovery
