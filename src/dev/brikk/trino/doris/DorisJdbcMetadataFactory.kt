@@ -32,9 +32,25 @@ class DorisJdbcMetadataFactory @Inject constructor(
     private val listeners: Set<@JvmSuppressWildcards JdbcQueryEventListener>,
     identityMapping: IdentityCacheMapping,
 ) : DefaultJdbcMetadataFactory(jdbcClient, timestampDomain, listeners, identityMapping) {
-    override fun create(transactionCachingJdbcClient: JdbcClient): JdbcMetadata =
-        object : DefaultJdbcMetadata(transactionCachingJdbcClient, timestampDomain, true, listeners) {
-            override fun getTableStatistics(session: ConnectorSession, tableHandle: ConnectorTableHandle): TableStatistics =
-                if (DorisSessionProperties.isStatisticsEnabled(session)) super.getTableStatistics(session, tableHandle) else TableStatistics.empty()
+    override fun create(transactionCachingJdbcClient: JdbcClient): JdbcMetadata {
+        return DorisJdbcMetadata(transactionCachingJdbcClient, timestampDomain, listeners)
+    }
+
+    private class DorisJdbcMetadata(
+        jdbcClient: JdbcClient,
+        timestampDomain: TimestampTimeZoneDomain,
+        listeners: Set<JdbcQueryEventListener>,
+    ) : DefaultJdbcMetadata(jdbcClient, timestampDomain, PRECALCULATE_STATISTICS_FOR_PUSHDOWN, listeners) {
+        override fun getTableStatistics(session: ConnectorSession, tableHandle: ConnectorTableHandle): TableStatistics {
+            if (!DorisSessionProperties.isStatisticsEnabled(session)) {
+                return TableStatistics.empty()
+            }
+            return super.getTableStatistics(session, tableHandle)
         }
+    }
+
+    companion object {
+        // Same value DefaultJdbcMetadataFactory passes.
+        private const val PRECALCULATE_STATISTICS_FOR_PUSHDOWN = true
+    }
 }
