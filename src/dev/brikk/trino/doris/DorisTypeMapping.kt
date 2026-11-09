@@ -208,10 +208,7 @@ internal class DorisTypeMapping(typeManager: TypeManager) {
     }
 
     private fun decimalArrayElement(parsed: DorisColumnType): DorisArrayElement? {
-        if (parsed.arguments.size != 2) {
-            throw TrinoException(GENERIC_INTERNAL_ERROR, "Unexpected Doris decimal COLUMN_TYPE: '${parsed.raw}'")
-        }
-        val (precision, scale) = parsed.arguments
+        val (precision, scale) = decimalPrecisionAndScale(parsed)
         if (precision > MAX_TRINO_DECIMAL_PRECISION) {
             // Decimal256 array elements exceed Trino's DECIMAL ceiling -> denied leaf.
             return null
@@ -220,8 +217,8 @@ internal class DorisTypeMapping(typeManager: TypeManager) {
     }
 
     /**
-     * Read-only VARCHAR view of a complex type's wire text (opt-in via
-     * `unsupported-type-handling=CONVERT_TO_VARCHAR`). No pushdown: the text is a rendering,
+     * Read-only VARCHAR view of wire text: Decimal256 always, complex types when opted in via
+     * `unsupported-type-handling=CONVERT_TO_VARCHAR`. No pushdown: the text is a rendering,
      * not a comparable value.
      */
     private fun unboundedVarcharTextMapping(): ColumnMapping {
@@ -236,20 +233,18 @@ internal class DorisTypeMapping(typeManager: TypeManager) {
      * "Decimal256 stance"; PROBE Impl #3).
      */
     private fun decimalMapping(parsed: DorisColumnType): ColumnMapping {
-        if (parsed.arguments.size != 2) {
-            throw TrinoException(GENERIC_INTERNAL_ERROR, "Unexpected Doris decimal COLUMN_TYPE: '${parsed.raw}'")
-        }
-        val (precision, scale) = parsed.arguments
+        val (precision, scale) = decimalPrecisionAndScale(parsed)
         if (precision > MAX_TRINO_DECIMAL_PRECISION) {
-            return decimal256TextMapping()
+            return unboundedVarcharTextMapping()
         }
         return decimalColumnMapping(createDecimalType(precision, scale))
     }
 
-    /** Decimal256 is exposed as exact wire text, so remote numeric operations are never valid. */
-    private fun decimal256TextMapping(): ColumnMapping {
-        val varcharType = createUnboundedVarcharType()
-        return ColumnMapping.sliceMapping(varcharType, varcharReadFunction(varcharType), varcharWriteFunction(), DISABLE_PUSHDOWN)
+    private fun decimalPrecisionAndScale(parsed: DorisColumnType): Pair<Int, Int> {
+        if (parsed.arguments.size != 2) {
+            throw TrinoException(GENERIC_INTERNAL_ERROR, "Unexpected Doris decimal COLUMN_TYPE: '${parsed.raw}'")
+        }
+        return parsed.arguments[0] to parsed.arguments[1]
     }
 
     private fun charMapping(parsed: DorisColumnType): ColumnMapping {
