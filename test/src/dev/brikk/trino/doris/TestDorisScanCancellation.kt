@@ -91,9 +91,9 @@ class TestDorisScanCancellation {
                 assertThat(source.nextSourcePage).isNull()
                 awaitCondition("live execute-phase scan appears") { DorisTestCluster.runningStatements().any { it.contains(marker) } }
                 assertThat(source.isBlocked.isDone).describedAs("no result produced yet").isFalse()
-                val dispatched = DorisClusterScopedCancel.killsDispatched.get()
+                val dispatched = client.clusterScopedCancel.stats.killsDispatched.get()
                 closer.submit { source.close() }.get(TIMEOUT_SECONDS, SECONDS)
-                assertThat(DorisClusterScopedCancel.killsDispatched.get()).isEqualTo(dispatched + 1)
+                assertThat(client.clusterScopedCancel.stats.killsDispatched.get()).isEqualTo(dispatched + 1)
                 source.isBlocked.handle { _, _ -> null }.get(TIMEOUT_SECONDS, SECONDS)
                 assertThat(source.isBlocked.isCompletedExceptionally).isTrue()
                 awaitCondition("live Doris statement released") { DorisTestCluster.runningStatements().none { it.contains(marker) } }
@@ -115,13 +115,13 @@ class TestDorisScanCancellation {
             await(scan.executeEntered, "executeQuery entered")
             val execution = source.isBlocked
             assertThat(execution.isDone).isFalse()
-            val dispatched = DorisClusterScopedCancel.killsDispatched.get()
+            val dispatched = jdbc.client.clusterScopedCancel.stats.killsDispatched.get()
 
             jdbc.closeSource(source)
 
             assertThat(scan.rawCancels.get()).isZero()
             assertThat(scan.aborts.get()).isPositive()
-            assertThat(DorisClusterScopedCancel.killsDispatched.get()).isEqualTo(dispatched + 1)
+            assertThat(jdbc.client.clusterScopedCancel.stats.killsDispatched.get()).isEqualTo(dispatched + 1)
             // Connection.abort, not raw cancel/close or the helper's KILL, releases executeQuery.
             execution.handle { _, _ -> null }.get(TIMEOUT_SECONDS, SECONDS)
             assertThat(execution.isCompletedExceptionally).isTrue()
@@ -252,13 +252,13 @@ class TestDorisScanCancellation {
             assertThat(BIGINT.getLong(page.getBlock(0), 0)).isEqualTo(7L)
             assertThat(source.isFinished).isTrue()
             assertThat(scan.result.isAfterLast).isTrue()
-            val dispatched = DorisClusterScopedCancel.killsDispatched.get()
+            val dispatched = jdbc.client.clusterScopedCancel.stats.killsDispatched.get()
 
             jdbc.closeSource(source)
             jdbc.closeSource(source)
 
             // Dispatch counting is synchronous, unlike a racy absence-of-helper assertion.
-            assertThat(DorisClusterScopedCancel.killsDispatched.get()).isEqualTo(dispatched)
+            assertThat(jdbc.client.clusterScopedCancel.stats.killsDispatched.get()).isEqualTo(dispatched)
             assertThat(scan.rawCancels.get()).isZero()
             assertThat(scan.aborts.get()).isZero()
             assertThat(scan.resultClosed.get()).isTrue()
@@ -311,7 +311,7 @@ class TestDorisScanCancellation {
         val killedQueryIds = CopyOnWriteArrayList<String>()
         private val helperClosed = CountDownLatch(1)
         private val helperSql = CopyOnWriteArrayList<String>()
-        private val client = DorisClient(
+        val client = DorisClient(
             BaseJdbcConfig(), config,
             ConnectionFactory { pendingConnections.poll() ?: helperConnection() },
             DorisQueryBuilder(RemoteQueryModifier.NONE), TESTING_TYPE_MANAGER,

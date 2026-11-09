@@ -16,6 +16,7 @@ package dev.brikk.trino.doris
 import io.trino.spi.connector.ConnectorSession
 import io.trino.testing.TestingConnectorSession
 import org.assertj.core.api.Assertions.assertThat
+import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Test
 import java.lang.reflect.Proxy
 import java.sql.Connection
@@ -38,6 +39,11 @@ import java.util.concurrent.atomic.AtomicInteger
  * (overlay-guarded); the end-to-end connector path in `TestDorisCancellation`.
  */
 class TestDorisClusterScopedCancel {
+    private val resources = DorisCancelTestResources()
+
+    @AfterEach
+    fun closeResources() = resources.close()
+
     // --- pure functions ---
 
     @Test
@@ -122,21 +128,19 @@ class TestDorisClusterScopedCancel {
             attempted.countDown()
             throw SQLException("no cluster reachable")
         }
-        val cancel = DorisClusterScopedCancel(failingFactory, enabled = true)
+        val cancel = resources.newCancel(failingFactory, requestSlots = Semaphore(2))
         val marker = "trino_statement_id=${UUID.randomUUID()}"
-        val before = DorisClusterScopedCancel.killsDispatched.get()
         // No registry or in-flight deduplication: the wrapper owns dispatch-once behavior.
         repeat(2) { cancel.cancel(SESSION, marker) { true } }
-        assertThat(DorisClusterScopedCancel.killsDispatched.get()).isEqualTo(before + 2)
+        assertThat(cancel.stats.killsDispatched.get()).isEqualTo(2)
         assertThat(attempted.await(5, TimeUnit.SECONDS)).isTrue()
     }
 
     @Test
     fun testDisabledDoesNothing() {
-        val cancel = DorisClusterScopedCancel({ _, _ -> throw AssertionError("must not open") }, enabled = false)
-        val before = DorisClusterScopedCancel.killsDispatched.get()
+        val cancel = resources.newCancel({ _, _ -> throw AssertionError("must not open") }, enabled = false)
         cancel.cancel(SESSION, "trino_statement_id=${UUID.randomUUID()}") { throw AssertionError("must not read execution state") }
-        assertThat(DorisClusterScopedCancel.killsDispatched.get()).isEqualTo(before)
+        assertThat(cancel.stats.killsDispatched.get()).isZero()
     }
 
     @Test
@@ -194,7 +198,7 @@ class TestDorisClusterScopedCancel {
             }
         }
 
-        DorisClusterScopedCancel({ _, _ -> connection }, enabled = true).cancel(SESSION, marker) {
+        resources.newCancel({ _, _ -> connection }).cancel(SESSION, marker) {
             finished.get().also { events.add("finished $it") }
         }
 
@@ -217,7 +221,7 @@ class TestDorisClusterScopedCancel {
         val markers = List(2) { "trino_statement_id=${UUID.randomUUID()}" }
         val helpersClosed = CountDownLatch(2)
         val slots = Semaphore(2)
-        val cancel = DorisClusterScopedCancel(
+        val cancel = resources.newCancel(
             DorisCancelConnectionFactory { _, _ ->
                 val connection = openRoot()
                 object : Connection by connection {

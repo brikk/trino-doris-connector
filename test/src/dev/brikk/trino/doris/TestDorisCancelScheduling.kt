@@ -3,6 +3,7 @@ package dev.brikk.trino.doris
 import com.google.common.util.concurrent.MoreExecutors.directExecutor
 import io.trino.testing.TestingConnectorSession
 import org.assertj.core.api.Assertions.assertThat
+import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Test
 import java.lang.reflect.Proxy
 import java.sql.Connection
@@ -14,6 +15,7 @@ import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executor
 import java.util.concurrent.RejectedExecutionException
+import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.Semaphore
 import java.util.concurrent.TimeUnit.SECONDS
 import java.util.concurrent.atomic.AtomicBoolean
@@ -22,6 +24,10 @@ import java.util.concurrent.atomic.AtomicInteger
 /** Strict, deterministic JDBC models exercise the production dispatcher, not a copied retry loop. */
 class TestDorisCancelScheduling {
     private val session = TestingConnectorSession.builder().build()
+    private val resources = DorisCancelTestResources()
+
+    @AfterEach
+    fun closeResources() = resources.close()
 
     @Test
     fun testEightAbsentFinishedScansDoNotStarveALiveNinthRequest() {
@@ -30,7 +36,7 @@ class TestDorisCancelScheduling {
             val scheduler = DorisClusterScopedCancel.newRetryScheduler()
             val slots = Semaphore(72)
             val model = Model(liveMarker = marker(), firstCloses = 8)
-            val cancel = DorisClusterScopedCancel(model.factory, true, executor, 5000, scheduler, slots)
+            val cancel = resources.newCancel(model.factory, true, executor, 5000, scheduler, slots)
             try {
                 repeat(8) { cancel.cancel(session, marker()) { true } }
                 assertThat(model.closed.await(2, SECONDS)).describedAs("absent probes closed before retry window ends").isTrue()
@@ -56,15 +62,15 @@ class TestDorisCancelScheduling {
         val scheduler = DorisClusterScopedCancel.newRetryScheduler()
         val slots = Semaphore(72)
         val model = Model(firstCloses = 72)
-        val cancel = DorisClusterScopedCancel(model.factory, true, executor, 5000, scheduler, slots)
+        val cancel = resources.newCancel(model.factory, true, executor, 5000, scheduler, slots)
         try {
             repeat(72) { cancel.cancel(session, marker()) { true } }
             assertThat(model.closed.await(2, SECONDS)).isTrue()
             assertThat(slots.availablePermits()).isZero()
             assertThat(scheduler.queue.size).isLessThanOrEqualTo(72)
-            val rejected = DorisClusterScopedCancel.killsRejected.get()
+            val rejected = cancel.stats.killsRejected.get()
             cancel.cancel(session, marker()) { true }
-            assertThat(DorisClusterScopedCancel.killsRejected.get()).isEqualTo(rejected + 1)
+            assertThat(cancel.stats.killsRejected.get()).isEqualTo(rejected + 1)
             assertThat(model.maximumActive.get()).isLessThanOrEqualTo(8)
             assertThat(slots.tryAcquire(72, 8, SECONDS)).isTrue()
             assertThat(model.active.get()).isZero()
@@ -85,7 +91,7 @@ class TestDorisCancelScheduling {
         val model = Model()
         try {
             val started = System.nanoTime()
-            DorisClusterScopedCancel(model.factory, true, executor, 1600, scheduler, slots).cancel(session, marker()) { false }
+            resources.newCancel(model.factory, true, executor, 1600, scheduler, slots).cancel(session, marker()) { false }
             assertThat(slots.tryAcquire(1, 4, SECONDS)).isTrue()
             assertThat(System.nanoTime() - started).isGreaterThanOrEqualTo(java.util.concurrent.TimeUnit.MILLISECONDS.toNanos(1600))
             assertThat(model.deadlines.size).isGreaterThanOrEqualTo(3)
@@ -107,7 +113,7 @@ class TestDorisCancelScheduling {
         val slots = Semaphore(1)
         val model = Model()
         try {
-            DorisClusterScopedCancel(model.factory, true, executor, 5000, scheduler, slots).cancel(session, marker()) { true }
+            resources.newCancel(model.factory, true, executor, 5000, scheduler, slots).cancel(session, marker()) { true }
             assertThat(slots.tryAcquire(1, 3, SECONDS)).isTrue()
             assertThat(model.deadlines).hasSize(3)
             assertThat(model.active.get()).isZero()
@@ -128,7 +134,7 @@ class TestDorisCancelScheduling {
         val slots = Semaphore(1)
         val model = Model(liveMarker = marker())
         try {
-            DorisClusterScopedCancel(model.factory, true, executor, 5000, scheduler, slots)
+            resources.newCancel(model.factory, true, executor, 5000, scheduler, slots)
                 .cancel(session, requireNotNull(model.liveMarker)) { true }
             assertThat(slots.tryAcquire(1, 3, SECONDS)).isTrue()
             assertThat(model.deadlines).hasSize(2)
@@ -150,12 +156,12 @@ class TestDorisCancelScheduling {
             val slots = Semaphore(1)
             val model = Model()
             val executor = if (rejectWorker) Executor { throw RejectedExecutionException("scripted worker rejection") } else directExecutor()
-            val before = DorisClusterScopedCancel.killsRejected.get()
-            DorisClusterScopedCancel(model.factory, true, executor, 5000, scheduler, slots).cancel(session, marker()) { true }
+            val cancel = resources.newCancel(model.factory, true, executor, 5000, scheduler, slots)
+            cancel.cancel(session, marker()) { true }
             assertThat(slots.availablePermits()).isEqualTo(1)
             assertThat(model.active.get()).isZero()
             assertThat(model.deadlines).hasSize(if (rejectWorker) 0 else 1)
-            assertThat(DorisClusterScopedCancel.killsRejected.get()).isEqualTo(before + 1)
+            assertThat(cancel.stats.killsRejected.get()).isEqualTo(1)
             assertThat(model.failures).isEmpty()
         }
     }
@@ -241,4 +247,27 @@ class TestDorisCancelScheduling {
     }
 
     private fun marker(): String = "trino_statement_id=${UUID.randomUUID()}"
+}
+
+internal class DorisCancelTestResources : AutoCloseable {
+    private val executor = DorisClusterScopedCancel.newExecutor()
+    private val scheduler = DorisClusterScopedCancel.newRetryScheduler()
+    private val watchdog = DorisClusterScopedCancel.newRetryScheduler()
+
+    fun newCancel(
+        connectionFactory: DorisCancelConnectionFactory,
+        enabled: Boolean = true,
+        executor: Executor = this.executor,
+        timeoutMillis: Long = 15_000,
+        retryScheduler: ScheduledExecutorService = scheduler,
+        requestSlots: Semaphore = Semaphore(1),
+    ): DorisClusterScopedCancel = DorisClusterScopedCancel(
+        connectionFactory, enabled, executor, timeoutMillis, retryScheduler, requestSlots, watchdog,
+    )
+
+    override fun close() {
+        val services = listOf(executor, scheduler, watchdog)
+        services.forEach { it.shutdownNow() }
+        services.forEach { assertThat(it.awaitTermination(5, SECONDS)).isTrue() }
+    }
 }

@@ -5,6 +5,7 @@ import com.mysql.cj.jdbc.JdbcStatement
 import io.trino.testing.TestingConnectorSession
 import org.assertj.core.api.Assertions.assertThat
 import org.assertj.core.api.Assertions.assertThatThrownBy
+import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Test
 import java.lang.management.ManagementFactory
 import java.lang.reflect.Proxy
@@ -21,6 +22,11 @@ import java.util.concurrent.atomic.AtomicReference
 /** Real Connector/J HA connections; duplicate hosts isolate locking, not cross-FE routing. */
 open class TestDorisHaReadCancellation {
     private val session = TestingConnectorSession.builder().build()
+    private val resources = DorisCancelTestResources()
+
+    @AfterEach
+    fun closeResources() = resources.close()
+
     private val urls = linkedMapOf(
         "single" to "jdbc:mysql://127.0.0.1:9130/",
         "comma" to "jdbc:mysql://127.0.0.1:9130,127.0.0.1:9130/",
@@ -140,7 +146,7 @@ open class TestDorisHaReadCancellation {
         val marker = "trino_statement_id=${UUID.randomUUID()}"
         val attempted = AtomicInteger()
         val helperAttempt = CountDownLatch(1)
-        val helper = DorisClusterScopedCancel(DorisCancelConnectionFactory { _, _ ->
+        val helper = resources.newCancel(DorisCancelConnectionFactory { _, _ ->
             attempted.incrementAndGet()
             helperAttempt.countDown()
             throw SQLException("R05 deliberately unavailable helper")

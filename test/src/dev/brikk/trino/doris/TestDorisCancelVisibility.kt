@@ -16,6 +16,7 @@ package dev.brikk.trino.doris
 import com.google.common.util.concurrent.MoreExecutors.directExecutor
 import io.trino.testing.TestingConnectorSession
 import org.assertj.core.api.Assertions.assertThat
+import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Test
 import java.lang.reflect.Proxy
 import java.sql.Connection
@@ -32,6 +33,11 @@ import java.util.concurrent.TimeUnit.SECONDS
 import java.util.concurrent.atomic.AtomicBoolean
 
 class TestDorisCancelVisibility {
+    private val resources = DorisCancelTestResources()
+
+    @AfterEach
+    fun closeResources() = resources.close()
+
     @Test
     fun testWarningIsOncePerConnectorAndCancellationStillRuns() {
         val warnings = mutableListOf<LogRecord>()
@@ -52,7 +58,7 @@ class TestDorisCancelVisibility {
         val running = AtomicBoolean(true)
         val slots = Semaphore(1)
         val factory = DorisCancelConnectionFactory { _, _ -> helper(marker, killed, failedSet, running) }
-        val cancel = DorisClusterScopedCancel(factory, enabled = true, executor = directExecutor(), requestSlots = slots)
+        val cancel = resources.newCancel(factory, executor = directExecutor(), requestSlots = slots)
         try {
             repeat(2) {
                 running.set(true)
@@ -82,11 +88,11 @@ class TestDorisCancelVisibility {
             assertThat(warnings.single().thrown).isSameAs(failedSet)
             // A separate catalog must not have its warning suppressed by the first one.
             running.set(true)
-            DorisClusterScopedCancel(factory, enabled = true, executor = directExecutor(), requestSlots = slots).cancel(session, marker) { true }
+            resources.newCancel(factory, executor = directExecutor(), requestSlots = slots).cancel(session, marker) { true }
             awaitRequest(slots)
             assertThat(warnings).hasSize(2)
             running.set(true)
-            DorisClusterScopedCancel({ _, _ -> helper(marker, killed, null, running) }, enabled = true, executor = directExecutor(), requestSlots = slots)
+            resources.newCancel({ _, _ -> helper(marker, killed, null, running) }, executor = directExecutor(), requestSlots = slots)
                 .cancel(session, marker) { true }
             awaitRequest(slots)
             assertThat(warnings).hasSize(2)

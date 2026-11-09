@@ -77,8 +77,18 @@ internal class DorisClusterScopedCancel(
     private val timeoutMillis: Long = KILL_WINDOW_MILLIS,
     private val retryScheduler: ScheduledExecutorService = RETRY_SCHEDULER,
     private val requestSlots: Semaphore = SHARED_REQUEST_SLOTS,
+    private val watchdogScheduler: ScheduledExecutorService = WATCHDOG,
 ) {
     private val visibilityWarningLogged = AtomicBoolean()
+    internal val stats = Stats()
+
+    internal class Stats {
+        val killsDispatched = AtomicInteger()
+        val killsIssued = AtomicInteger()
+        val killsRejected = AtomicInteger()
+        val killsExpired = AtomicInteger()
+        val helperTimeouts = AtomicInteger()
+    }
 
     init {
         require(timeoutMillis > 0) { "Cancellation timeout must be positive" }
@@ -94,13 +104,13 @@ internal class DorisClusterScopedCancel(
         }
         // Includes running, queued AND delayed requests, across catalogs in this classloader.
         if (!requestSlots.tryAcquire()) {
-            killsRejected.incrementAndGet()
+            stats.killsRejected.incrementAndGet()
             log.debug("cluster-scoped cancel pending-request limit reached for %s", marker)
             return
         }
         val deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMillis)
         if (Request(session, marker, executionFinished, deadline).dispatch()) {
-            killsDispatched.incrementAndGet()
+            stats.killsDispatched.incrementAndGet()
         }
     }
 
@@ -183,7 +193,7 @@ internal class DorisClusterScopedCancel(
         }
 
         private fun reject(failure: RejectedExecutionException) {
-            killsRejected.incrementAndGet()
+            stats.killsRejected.incrementAndGet()
             log.debug(failure, "cluster-scoped cancel dispatch failed for %s", marker)
             finish()
         }
@@ -191,7 +201,7 @@ internal class DorisClusterScopedCancel(
         private fun finish(expired: Boolean = false) {
             if (completed.compareAndSet(false, true)) {
                 if (expired) {
-                    killsExpired.incrementAndGet()
+                    stats.killsExpired.incrementAndGet()
                     log.debug("cluster-scoped cancel expired before release was verified for %s", marker)
                 }
                 requestSlots.release()
@@ -217,7 +227,7 @@ internal class DorisClusterScopedCancel(
         try {
             return connectionFactory.openConnection(session, deadline).use { helper ->
                 // Keep the watchdog armed through resource close too, which can perform network I/O.
-                watchdog = WATCHDOG.schedule(
+                watchdog = watchdogScheduler.schedule(
                     { abortHelper(helper, marker) },
                     maxOf(0, deadline - System.nanoTime()), TimeUnit.NANOSECONDS,
                 )
@@ -277,7 +287,7 @@ internal class DorisClusterScopedCancel(
     private fun killQueryId(statement: java.sql.Statement, queryId: String, marker: String) {
         try {
             statement.execute("""KILL QUERY "$queryId"""")
-            killsIssued.incrementAndGet()
+            stats.killsIssued.incrementAndGet()
             log.debug("cluster-scoped cancel: killed %s for %s", queryId, marker)
         } catch (e: SQLException) {
             if (isUnknownQueryId(e)) {
@@ -285,6 +295,16 @@ internal class DorisClusterScopedCancel(
             } else {
                 log.debug(e, "cluster-scoped cancel: KILL QUERY %s failed for %s", queryId, marker)
             }
+        }
+    }
+
+    @Suppress("TooGenericExceptionCaught") // Do not terminate the watchdog on best-effort socket cleanup failure.
+    private fun abortHelper(helper: Connection, marker: String) {
+        stats.helperTimeouts.incrementAndGet()
+        try {
+            helper.abort(directExecutor())
+        } catch (e: Exception) {
+            log.debug(e, "cluster-scoped cancel: helper abort failed for %s", marker)
         }
     }
 
@@ -298,11 +318,13 @@ internal class DorisClusterScopedCancel(
         private const val KILL_RECHECK_MILLIS = 500L
         // Three empty probes span two retry intervals, allowing delayed FE visibility without a full-window search.
         private const val FINISHED_EMPTY_PROBE_LIMIT = 3
+        private const val WORKER_COUNT = 8
+        private const val QUEUE_CAPACITY = 64
 
         /** Shared per plugin classloader, not multiplied by the number of catalogs. */
         private val SHARED_EXECUTOR = newExecutor()
         private val RETRY_SCHEDULER = newRetryScheduler()
-        private val SHARED_REQUEST_SLOTS = Semaphore(72)
+        private val SHARED_REQUEST_SLOTS = Semaphore(WORKER_COUNT + QUEUE_CAPACITY)
 
         internal fun newRetryScheduler(): ScheduledThreadPoolExecutor = ScheduledThreadPoolExecutor(1) { runnable ->
             Thread(runnable, "doris-cancel-retry").apply { isDaemon = true }
@@ -313,7 +335,7 @@ internal class DorisClusterScopedCancel(
         }
 
         internal fun newExecutor(): ThreadPoolExecutor = ThreadPoolExecutor(
-            8, 8, 30, TimeUnit.SECONDS, ArrayBlockingQueue(64),
+            WORKER_COUNT, WORKER_COUNT, 30, TimeUnit.SECONDS, ArrayBlockingQueue(QUEUE_CAPACITY),
             { runnable -> Thread(runnable, "doris-cluster-cancel").apply { isDaemon = true } },
             ThreadPoolExecutor.AbortPolicy(),
         ).apply { allowCoreThreadTimeOut(true) }
@@ -326,23 +348,6 @@ internal class DorisClusterScopedCancel(
             setKeepAliveTime(30, TimeUnit.SECONDS)
             allowCoreThreadTimeOut(true)
         }
-
-        @Suppress("TooGenericExceptionCaught") // Do not terminate the watchdog on best-effort socket cleanup failure.
-        private fun abortHelper(helper: Connection, marker: String) {
-            helperTimeouts.incrementAndGet()
-            try {
-                helper.abort(directExecutor())
-            } catch (e: Exception) {
-                log.debug(e, "cluster-scoped cancel: helper abort failed for %s", marker)
-            }
-        }
-
-        /** Test/diagnostic counters: dispatches are deterministic; issued kills can lose the race to the socket belt. */
-        internal val killsDispatched = AtomicInteger()
-        internal val killsIssued = AtomicInteger()
-        internal val killsRejected = AtomicInteger()
-        internal val killsExpired = AtomicInteger()
-        internal val helperTimeouts = AtomicInteger()
 
         /**
          * `QueryId` shape from SHOW FULL PROCESSLIST (e.g. `ce96d055444242d1-a5a580d0c15a4c40`),

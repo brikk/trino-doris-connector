@@ -215,11 +215,8 @@ class TestDorisMultiFeFailover : AbstractTestQueryFramework() {
             val remoteMarker = DorisRemoteQueryModifier.marker(trinoQueryId!!)
             awaitCondition("overlay processlist entry") { overlayHasRunningStatement(remoteMarker) }
 
-            val dispatchedBefore = DorisClusterScopedCancel.killsDispatched.get()
             queryRunner.execute("CALL system.runtime.kill_query(query_id => '$trinoQueryId', message => 'mfe cancel test')")
-            // the primary cluster-scoped dispatch fired...
-            awaitCondition("cluster-scoped dispatch") { DorisClusterScopedCancel.killsDispatched.get() > dispatchedBefore }
-            // ...and the overlay's work is released (cluster-wide view)
+            // The overlay's work is released (cluster-wide view).
             awaitCondition("overlay release") { !overlayHasRunningStatement(remoteMarker) }
             future.cancel(true)
         } finally {

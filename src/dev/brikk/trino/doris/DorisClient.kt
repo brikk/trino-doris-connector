@@ -109,7 +109,7 @@ class DorisClient @Inject constructor(
     private val typeMapping = DorisTypeMapping(typeManager)
 
     /** Cluster-scoped cancellation (multi-FE/LB correct) — see [DorisClusterScopedCancel]. */
-    private val clusterScopedCancel = DorisClusterScopedCancel(cancelConnectionFactory, dorisConfig.isClusterScopedCancel())
+    internal val clusterScopedCancel = DorisClusterScopedCancel(cancelConnectionFactory, dorisConfig.isClusterScopedCancel())
 
     private val rewriters = DorisPushdownRewriters(typeMapping, ::quoted)
 
