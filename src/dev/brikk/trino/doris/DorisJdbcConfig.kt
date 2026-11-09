@@ -19,7 +19,6 @@ import com.mysql.cj.conf.ConnectionUrlParser.parseConnectionString
 import com.mysql.cj.exceptions.CJException
 import io.trino.plugin.jdbc.BaseJdbcConfig
 import jakarta.validation.constraints.AssertTrue
-import jakarta.validation.constraints.Pattern
 
 /**
  * Validates the Doris FE connection URL: a supported MySQL Connector/J JDBC URL
@@ -27,47 +26,57 @@ import jakarta.validation.constraints.Pattern
  * must not pin a default database (ledger §B; SR K3; PLAN G9/§4.4).
  */
 class DorisJdbcConfig : BaseJdbcConfig() {
-    @AssertTrue(message = "Invalid JDBC URL for the Doris connector: use a supported MySQL JDBC URL without propertiesTransform or useConfigs")
-    fun isUrlValid(): Boolean = validate { _, _ -> true }
+    @AssertTrue(
+        message = "Invalid JDBC URL for the Doris connector: " +
+            "use a supported MySQL JDBC URL without propertiesTransform or useConfigs",
+    )
+    fun isUrlValid(): Boolean {
+        return isSupportedUrl { _, _ -> true }
+    }
 
-    @AssertTrue(message = "Database (catalog) must not be specified in the JDBC URL for the Doris connector (Doris databases map to Trino schemas)")
-    fun isUrlWithoutDatabase(): Boolean = validate { parsed, properties ->
-        parsed.path.isNullOrEmpty() && properties.none { entries ->
-            entries.any { (key, value) -> key.equals("dbname", ignoreCase = true) && !value.isNullOrEmpty() }
+    @AssertTrue(
+        message = "Database (catalog) must not be specified in the JDBC URL for the Doris connector " +
+            "(Doris databases map to Trino schemas)",
+    )
+    fun isUrlWithoutDatabase(): Boolean {
+        return isSupportedUrl { parsed, properties ->
+            parsed.path.isNullOrEmpty() && properties.none { it.hasNonEmptyValue("dbname") }
         }
     }
 
     /** Lexical parser only: never instantiate ConnectionUrl, resolve DNS or load transforms/profiles. */
-    private fun validate(check: (ConnectionUrlParser, List<Map<String, String>>) -> Boolean): Boolean {
+    private fun isSupportedUrl(check: (ConnectionUrlParser, List<Map<String, String>>) -> Boolean): Boolean {
         val url = connectionUrl ?: return false
-        if (!BASE_JDBC_URL_PATTERN.matcher(url).matches()) return false
-        return try {
+        try {
             val parsed = parseConnectionString(url)
             val hosts = parsed.hosts
-            val type = Type.fromValue(parsed.scheme, hosts.size)
+            if (Type.fromValue(parsed.scheme, hosts.size) !in JDBC_TYPES) {
+                return false
+            }
             val properties = listOf(parsed.properties) + hosts.map { it.hostProperties }
-            type in JDBC_TYPES && properties.none { entries ->
-                entries.any { (key, value) ->
-                    (key.equals("propertiesTransform", ignoreCase = true) || key.equals("useConfigs", ignoreCase = true)) && !value.isNullOrEmpty()
-                }
-            } && check(parsed, properties)
+            if (properties.any { it.hasNonEmptyValue("propertiesTransform") || it.hasNonEmptyValue("useConfigs") }) {
+                return false
+            }
+            return check(parsed, properties)
         } catch (ignored: CJException) {
-            false
+            return false
         } catch (ignored: IllegalArgumentException) {
-            false // malformed %-encoding/ports must be a validation failure, not an escaping exception
+            // malformed %-encoding/ports must be a validation failure, not an escaping exception
+            return false
         }
     }
 
     companion object {
-        // Both BaseJdbcConfig and its subclass are validated at catalog creation.
-        // Reuse the upstream constraint (including flags), rather than promising
-        // driver schemes such as mysql+srv that the surrounding module rejects.
-        private val BASE_JDBC_URL_PATTERN = requireNotNull(BaseJdbcConfig::class.java.getMethod("getConnectionUrl")
-            .getAnnotation(Pattern::class.java)).let { constraint ->
-            java.util.regex.Pattern.compile(constraint.regexp, constraint.flags.fold(0) { flags, flag -> flags or flag.value })
+        // BaseJdbcConfig's own URL pattern already rejects the mysql+srv schemes.
+        private val JDBC_TYPES = setOf(
+            Type.SINGLE_CONNECTION,
+            Type.FAILOVER_CONNECTION,
+            Type.LOADBALANCE_CONNECTION,
+            Type.REPLICATION_CONNECTION,
+        )
+
+        private fun Map<String, String>.hasNonEmptyValue(key: String): Boolean {
+            return entries.any { (name, value) -> name.equals(key, ignoreCase = true) && !value.isNullOrEmpty() }
         }
-        private val JDBC_TYPES = setOf(Type.SINGLE_CONNECTION, Type.FAILOVER_CONNECTION, Type.LOADBALANCE_CONNECTION,
-            Type.REPLICATION_CONNECTION, Type.FAILOVER_DNS_SRV_CONNECTION, Type.LOADBALANCE_DNS_SRV_CONNECTION,
-            Type.REPLICATION_DNS_SRV_CONNECTION)
     }
 }

@@ -1,6 +1,9 @@
 package dev.brikk.trino.doris
 
 import com.mysql.cj.conf.ConnectionPropertiesTransform
+import io.airlift.testing.ValidationAssertions.assertFailsValidation
+import io.airlift.testing.ValidationAssertions.assertValidates
+import jakarta.validation.constraints.Pattern
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.Test
 import java.util.Properties
@@ -31,6 +34,18 @@ class TestDorisJdbcUrlValidation {
             assertThat(config(url).isUrlValid()).describedAs(url).isFalse()
             assertThat(config(url).isUrlWithoutDatabase()).describedAs(url).isFalse()
         }
+    }
+
+    @Test
+    fun testInheritedUrlPatternRejectsSchemesTheDriverWouldDecode() {
+        for (url in listOf(
+            "jdbc%3Amysql://fe:9030", "jdbc:my%73ql://fe:9030", "jdbc:mysql%3Aloadbalance://fe1:9030,fe2:9030/",
+            "jdbc:mysql+srv://does-not-exist.invalid/", "jdbc:mysql+srv:loadbalance://does-not-exist.invalid/",
+        )) {
+            assertFailsValidation(config(url), "connectionUrl", "must match \"^jdbc:[a-z0-9]+:(?s:.*)$\"", Pattern::class.java)
+        }
+        assertValidates(config("jdbc:mysql://fe:9030"))
+        assertValidates(config("JDBC:MYSQL:loadbalance://fe1:9030,fe2:9030/"))
     }
 
     @Test
