@@ -84,12 +84,57 @@ class TestDorisCancelScheduling {
         val slots = Semaphore(1)
         val model = Model()
         try {
-            DorisClusterScopedCancel(model.factory, true, executor, 1600, scheduler, slots).cancel(session, marker()) { true }
+            val started = System.nanoTime()
+            DorisClusterScopedCancel(model.factory, true, executor, 1600, scheduler, slots).cancel(session, marker()) { false }
             assertThat(slots.tryAcquire(1, 4, SECONDS)).isTrue()
-            assertThat(model.deadlines.size).isGreaterThanOrEqualTo(2)
+            assertThat(System.nanoTime() - started).isGreaterThanOrEqualTo(java.util.concurrent.TimeUnit.MILLISECONDS.toNanos(1600))
+            assertThat(model.deadlines.size).isGreaterThanOrEqualTo(3)
             assertThat(model.deadlines.distinct()).hasSize(1)
             assertThat(model.active.get()).isZero()
             assertThat(model.failures).isEmpty()
+        } finally {
+            scheduler.shutdownNow()
+            executor.shutdownNow()
+            assertThat(scheduler.awaitTermination(5, SECONDS)).isTrue()
+            assertThat(executor.awaitTermination(5, SECONDS)).isTrue()
+        }
+    }
+
+    @Test
+    fun testFinishedNeverObservedStatementStopsAfterThreeEmptyProbes() {
+        val executor = DorisClusterScopedCancel.newExecutor()
+        val scheduler = DorisClusterScopedCancel.newRetryScheduler()
+        val slots = Semaphore(1)
+        val model = Model()
+        try {
+            DorisClusterScopedCancel(model.factory, true, executor, 5000, scheduler, slots).cancel(session, marker()) { true }
+            assertThat(slots.tryAcquire(1, 3, SECONDS)).isTrue()
+            assertThat(model.deadlines).hasSize(3)
+            assertThat(model.active.get()).isZero()
+            assertThat(model.failures).isEmpty()
+            assertThat(scheduler.queue).isEmpty()
+        } finally {
+            scheduler.shutdownNow()
+            executor.shutdownNow()
+            assertThat(scheduler.awaitTermination(5, SECONDS)).isTrue()
+            assertThat(executor.awaitTermination(5, SECONDS)).isTrue()
+        }
+    }
+
+    @Test
+    fun testObservedStatementStopsOnItsFirstEmptyProbe() {
+        val executor = DorisClusterScopedCancel.newExecutor()
+        val scheduler = DorisClusterScopedCancel.newRetryScheduler()
+        val slots = Semaphore(1)
+        val model = Model(liveMarker = marker())
+        try {
+            DorisClusterScopedCancel(model.factory, true, executor, 5000, scheduler, slots)
+                .cancel(session, requireNotNull(model.liveMarker)) { true }
+            assertThat(slots.tryAcquire(1, 3, SECONDS)).isTrue()
+            assertThat(model.deadlines).hasSize(2)
+            assertThat(model.killed.count).isZero()
+            assertThat(model.failures).isEmpty()
+            assertThat(scheduler.queue).isEmpty()
         } finally {
             scheduler.shutdownNow()
             executor.shutdownNow()

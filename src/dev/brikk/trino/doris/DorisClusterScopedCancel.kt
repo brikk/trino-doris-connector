@@ -113,6 +113,7 @@ internal class DorisClusterScopedCancel(
     ) : Runnable {
         private val completed = AtomicBoolean()
         private var observed = false
+        private var finishedEmptyProbes = 0
 
         fun dispatch(): Boolean {
             if (completed.get()) return false
@@ -141,7 +142,7 @@ internal class DorisClusterScopedCancel(
                     // Read BEFORE scanning: completion during SHOW cannot prove absence.
                     val finishedBeforeScan = executionFinished()
                     val queryIds = scanRunningQueryIds(statement, marker)
-                    if (queryIds.isEmpty() && finishedBeforeScan && observed) {
+                    if (isGone(queryIds.isEmpty(), finishedBeforeScan)) {
                         false
                     } else {
                         observed = observed || queryIds.isNotEmpty()
@@ -157,6 +158,15 @@ internal class DorisClusterScopedCancel(
             }
             // probeQuietly has closed all JDBC resources (watchdog still armed through close).
             if (retry) scheduleRetry()
+        }
+
+        private fun isGone(emptyScan: Boolean, finishedBeforeScan: Boolean): Boolean {
+            if (!emptyScan || !finishedBeforeScan) {
+                finishedEmptyProbes = 0
+                return false
+            }
+            finishedEmptyProbes++
+            return observed || finishedEmptyProbes >= FINISHED_EMPTY_PROBE_LIMIT
         }
 
         private fun scheduleRetry() {
@@ -286,6 +296,8 @@ internal class DorisClusterScopedCancel(
         /** Original dispatch-to-expiry window, shared by every probe in a request. */
         private const val KILL_WINDOW_MILLIS = 15_000L
         private const val KILL_RECHECK_MILLIS = 500L
+        // Three empty probes span two retry intervals, allowing delayed FE visibility without a full-window search.
+        private const val FINISHED_EMPTY_PROBE_LIMIT = 3
 
         /** Shared per plugin classloader, not multiplied by the number of catalogs. */
         private val SHARED_EXECUTOR = newExecutor()
