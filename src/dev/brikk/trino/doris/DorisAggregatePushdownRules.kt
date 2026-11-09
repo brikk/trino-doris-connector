@@ -44,8 +44,6 @@ import io.trino.spi.type.TimestampType
 import io.trino.spi.type.TinyintType
 import io.trino.spi.type.Type
 import java.util.Optional
-import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.atomic.LongAdder
 
 /**
  * Verified aggregate pushdown (PLAN §6.5, P4): shared type gate and rejection observability
@@ -56,9 +54,6 @@ import java.util.concurrent.atomic.LongAdder
  */
 internal object DorisAggregatePushdown {
     private val log = Logger.get(DorisAggregatePushdown::class.java)
-
-    /** PLAN §8 (minimal): aggregate-pushdown rejection counts per reason category, DEBUG-logged. */
-    private val REJECTION_COUNTS = ConcurrentHashMap<String, LongAdder>()
 
     /**
      * Types whose value, ordering, and grouping semantics are live-proven identical between
@@ -91,9 +86,7 @@ internal object DorisAggregatePushdown {
         isExactPushableKeyType(column.columnType) || DorisColumnType.isNativeString(column)
 
     internal fun rejected(reason: String, subject: Any): Optional<JdbcExpression> {
-        val category = reason.substringBefore(':')
-        val count = REJECTION_COUNTS.computeIfAbsent(category) { LongAdder() }.also { it.increment() }.sum()
-        log.debug("aggregate pushdown rejected (%s; total for category=%s): %s", reason, count, subject)
+        log.debug("aggregate pushdown rejected (%s): %s", reason, subject)
         return Optional.empty()
     }
 }

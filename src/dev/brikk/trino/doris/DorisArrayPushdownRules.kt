@@ -41,8 +41,6 @@ import io.trino.spi.type.IntegerType.INTEGER
 import io.trino.spi.type.Type
 import io.trino.spi.type.TypeUtils.readNativeValue
 import java.util.Optional
-import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.atomic.LongAdder
 
 /**
  * Typed, evidence-gated ARRAY predicate rules (PLAN §6.1 layer 2 / §6.2; evidence citations in
@@ -183,17 +181,12 @@ internal class DorisArrayPushdownSupport(
     }
 
     private fun rejected(reason: String, subject: String): PushableArrayColumn? {
-        val category = reason.substringBefore(':')
-        val count = REJECTION_COUNTS.computeIfAbsent(category) { LongAdder() }.also { it.increment() }.sum()
-        log.debug("array pushdown rejected (%s; total for category=%s): %s", reason, count, subject)
+        log.debug("array pushdown rejected (%s): %s", reason, subject)
         return null
     }
 
     companion object {
         private val log = Logger.get(DorisArrayPushdownSupport::class.java)
-
-        /** PLAN §8 (minimal): rejection counts per reason category, DEBUG-logged. */
-        private val REJECTION_COUNTS = ConcurrentHashMap<String, LongAdder>()
 
         internal fun isPushableElement(element: DorisArrayElement): Boolean = when (element) {
             is DorisArrayElement.BooleanElement,
