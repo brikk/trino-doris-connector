@@ -255,7 +255,9 @@ class TestDorisCancelDriver {
         }
         val session = TestingConnectorSession.builder().setIdentity(identity).build()
         val factory = DorisClientModule().createCancelConnectionFactory(config, DorisConfig(), credentials, OpenTelemetry.noop())
-        factory.openConnection(session, System.nanoTime() + TimeUnit.SECONDS.toNanos(15)).use { helper ->
+        DorisTestSafety.openSingle {
+            factory.openConnection(session, System.nanoTime() + TimeUnit.SECONDS.toNanos(15))
+        }.use { helper ->
             assertThat(helper.networkTimeout).isEqualTo(DorisCancelDriver.NETWORK_TIMEOUT_MILLIS)
             helper.createStatement().use { statement ->
                 val started = System.nanoTime()

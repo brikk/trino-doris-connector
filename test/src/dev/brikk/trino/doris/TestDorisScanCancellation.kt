@@ -75,7 +75,9 @@ class TestDorisScanCancellation {
             DorisQueryBuilder(RemoteQueryModifier.NONE), TESTING_TYPE_MANAGER,
             DefaultIdentifierMapping(), RemoteQueryModifier.NONE,
             DorisCancelConnectionFactory { _, deadline ->
-                DorisCancelDriver(deadlineNanos = deadline).connect("${DorisQueryRunner.JDBC_URL}/?user=root", null)!!
+                DorisTestSafety.openSingle {
+                    DorisCancelDriver(deadlineNanos = deadline).connect("${DorisQueryRunner.JDBC_URL}/?user=root", null)!!
+                }
             },
         )
         val table = JdbcTableHandle(
