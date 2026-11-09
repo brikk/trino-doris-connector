@@ -126,7 +126,9 @@ internal class DorisClusterScopedCancel(
         private var finishedEmptyProbes = 0
 
         fun dispatch(): Boolean {
-            if (completed.get()) return false
+            if (completed.get()) {
+                return false
+            }
             if (System.nanoTime() >= deadline) {
                 finish(expired = true)
                 return false
@@ -141,7 +143,9 @@ internal class DorisClusterScopedCancel(
         }
 
         override fun run() {
-            if (completed.get()) return
+            if (completed.get()) {
+                return
+            }
             if (System.nanoTime() >= deadline) {
                 finish(expired = true)
                 return
@@ -151,23 +155,29 @@ internal class DorisClusterScopedCancel(
                 retry = probeQuietly(session, marker, deadline) { statement ->
                     // Read BEFORE scanning: completion during SHOW cannot prove absence.
                     val finishedBeforeScan = executionFinished()
-                    val queryIds = scanRunningQueryIds(statement, marker)
-                    if (isGone(queryIds.isEmpty(), finishedBeforeScan)) {
+                    val queries = scanRunningQueries(statement, marker)
+                    if (isGone(!queries.found, finishedBeforeScan)) {
                         false
                     } else {
-                        observed = observed || queryIds.isNotEmpty()
-                        for (queryId in queryIds) {
-                            if (System.nanoTime() >= deadline) break
-                            if (isValidQueryId(queryId)) killQueryId(statement, requireNotNull(queryId), marker)
+                        observed = observed || queries.found
+                        for (queryId in queries.queryIds) {
+                            if (System.nanoTime() >= deadline) {
+                                break
+                            }
+                            killQueryId(statement, queryId, marker)
                         }
                         true
                     }
                 }
             } finally {
-                if (!retry) finish() // also release admission on unexpected unchecked failures
+                if (!retry) {
+                    finish() // also release admission on unexpected unchecked failures
+                }
             }
             // probeQuietly has closed all JDBC resources (watchdog still armed through close).
-            if (retry) scheduleRetry()
+            if (retry) {
+                scheduleRetry()
+            }
         }
 
         private fun isGone(emptyScan: Boolean, finishedBeforeScan: Boolean): Boolean {
@@ -186,7 +196,11 @@ internal class DorisClusterScopedCancel(
                 return
             }
             try {
-                retryScheduler.schedule({ dispatch() }, minOf(TimeUnit.MILLISECONDS.toNanos(KILL_RECHECK_MILLIS), remaining), TimeUnit.NANOSECONDS)
+                retryScheduler.schedule(
+                    { dispatch() },
+                    minOf(TimeUnit.MILLISECONDS.toNanos(KILL_RECHECK_MILLIS), remaining),
+                    TimeUnit.NANOSECONDS,
+                )
             } catch (failure: RejectedExecutionException) {
                 reject(failure)
             }
@@ -268,23 +282,30 @@ internal class DorisClusterScopedCancel(
         }
     }
 
-    private fun scanRunningQueryIds(statement: java.sql.Statement, marker: String): List<String?> =
+    private class RunningQueries(val found: Boolean, val queryIds: List<String>)
+
+    private fun scanRunningQueries(statement: Statement, marker: String): RunningQueries =
         statement.executeQuery(SHOW_FULL_PROCESSLIST).use { resultSet ->
-            buildList {
-                while (resultSet.next()) {
-                    val info = resultSet.getString("Info")
-                    val command = resultSet.getString("Command")
-                    if (!isRunningCancelCandidate(command, info, marker)) {
-                        continue
-                    }
-                    // A visible row may not have an assigned QueryId yet. Keep it so that
-                    // the retry loop cannot mistake an unkillable-yet statement for release.
-                    add(resultSet.getString("QueryId"))
+            var found = false
+            val queryIds = mutableListOf<String>()
+            while (resultSet.next()) {
+                val info = resultSet.getString("Info")
+                val command = resultSet.getString("Command")
+                if (!isRunningCancelCandidate(command, info, marker)) {
+                    continue
+                }
+                // A visible row may not have an assigned QueryId yet. Remember it so that
+                // the retry loop cannot mistake an unkillable-yet statement for release.
+                found = true
+                val queryId = resultSet.getString("QueryId")
+                if (queryId != null && isValidQueryId(queryId)) {
+                    queryIds.add(queryId)
                 }
             }
+            RunningQueries(found, queryIds)
         }
 
-    private fun killQueryId(statement: java.sql.Statement, queryId: String, marker: String) {
+    private fun killQueryId(statement: Statement, queryId: String, marker: String) {
         try {
             statement.execute("""KILL QUERY "$queryId"""")
             stats.killsIssued.incrementAndGet()
@@ -354,7 +375,9 @@ internal class DorisClusterScopedCancel(
          * validated before embedding in kill SQL (the value comes from a server result set).
          */
         internal fun isValidQueryId(value: String?): Boolean =
-            value != null && value.matches(Regex("[0-9a-f]{1,16}-[0-9a-f]{1,16}"))
+            value != null && QUERY_ID.matches(value)
+
+        private val QUERY_ID = Regex("[0-9a-f]{1,16}-[0-9a-f]{1,16}")
 
         /**
          * A row we may kill: RUNNING (not an idle `Sleep` connection), carrying OUR marker,

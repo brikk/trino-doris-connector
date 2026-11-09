@@ -46,7 +46,11 @@ internal class DorisReadDriver : NonRegisteringDriver() {
                 }
                 return PinnedReadConnection(selected, owner)
             } catch (failure: SQLException) {
-                runCatching { owner.close() }.exceptionOrNull()?.let(failure::addSuppressed)
+                try {
+                    owner.close()
+                } catch (closeFailure: SQLException) {
+                    failure.addSuppressed(closeFailure)
+                }
                 throw failure
             }
         }

@@ -60,6 +60,21 @@ open class TestDorisHaReadCancellation {
     }
 
     @Test
+    fun testPinFailurePreservesCloseFailure() {
+        val pinFailure = SQLException("unsupported physical identity")
+        val closeFailure = SQLException("owner close failed")
+        val owner = Proxy.newProxyInstance(Connection::class.java.classLoader, arrayOf(Connection::class.java)) { _, method, _ ->
+            when (method.name) {
+                "unwrap" -> throw pinFailure
+                "close" -> throw closeFailure
+                else -> error("Unexpected call ${method.name}")
+            }
+        } as Connection
+        assertThatThrownBy { DorisReadDriver.pin(owner) }.isSameAs(pinFailure)
+        assertThat(pinFailure.suppressed).containsExactly(closeFailure)
+    }
+
+    @Test
     fun testExecutePhaseFallbackDoesNotWaitForHaProxy() {
         DorisTestCluster.requireGoldenVersion()
         for ((topology, url) in urls) {
