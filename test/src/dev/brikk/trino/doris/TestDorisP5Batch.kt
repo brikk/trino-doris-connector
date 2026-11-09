@@ -25,8 +25,7 @@ import org.junit.jupiter.api.TestInstance
  * P5 batch: `json_extract_scalar` equality -> `json_unquote(json_extract(...))`,
  * `cardinality` comparisons -> `array_size(...)` (value-safe tier), and the GUARDED-mode
  * LIKE-prefix range pre-filter (engine-derived domain + retained filter). Truth tables for
- * both engines are PINNED here; probe verdicts in `dev-docs/archive/NOTES-p5-batch.md`; evidence tuples in
- * [DorisPushdownEvidence.JSON_EXTRACT_SCALAR] / [DorisPushdownEvidence.CARDINALITY].
+ * both engines are PINNED here; probe verdicts in `dev-docs/archive/NOTES-p5-batch.md`.
  */
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 class TestDorisP5Batch : AbstractTestQueryFramework() {

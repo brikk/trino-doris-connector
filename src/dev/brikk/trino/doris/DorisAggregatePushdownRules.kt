@@ -50,7 +50,7 @@ import java.util.Optional
  * for the aggregate rules below. Every family here is gated on a LIVE Doris 4.1.3 semantic
  * proof recorded in `dev-docs/archive/NOTES-p4-aggregates.md` and pinned by `TestDorisP4AggregateProbes`.
  * These are standard SQL aggregates (COUNT/MIN/MAX/SUM), not brikk hazard-registry surface —
- * the evidence lives in the per-rule KDoc and the probe suite, not in [DorisPushdownEvidence].
+ * the evidence lives in the per-rule KDoc and the probe suite.
  */
 internal object DorisAggregatePushdown {
     private val log = Logger.get(DorisAggregatePushdown::class.java)

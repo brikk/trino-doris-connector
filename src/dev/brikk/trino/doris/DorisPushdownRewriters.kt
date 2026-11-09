@@ -51,8 +51,8 @@ internal class DorisPushdownRewriters(typeMapping: DorisTypeMapping, quote: (Str
     /**
      * Typed ARRAY predicate rules (PLAN §6.1 layer 2, §6.2; P2b/P3) in two tiers:
      *
-     * - VALUE-SAFE tier: `array_position` comparisons (value-identical on both engines,
-     *   [DorisPushdownEvidence.ARRAY_POSITION]) plus NOT/AND/OR composition over that tier
+     * - VALUE-SAFE tier: `array_position` comparisons (value-identical on both engines)
+     *   plus NOT/AND/OR composition over that tier
      *   only — safe because Doris's three-valued logic is live-proven identical to Trino's
      *   (see [RewriteValueSafeNot] and the P3 composition pins).
      * - PREDICATE-LEVEL tier: `contains` / `arrays_overlap`, whose NULL cells differ at
@@ -63,7 +63,6 @@ internal class DorisPushdownRewriters(typeMapping: DorisTypeMapping, quote: (Str
      * Deliberately NO `addStandardRules`: scalar column-vs-literal comparisons and
      * IS [NOT] NULL are already covered exactly by domain pushdown (P1a controllers);
      * column-to-column scalar comparison rules would be new unproven surface (P3 remainder).
-     * Evidence citations: [DorisPushdownEvidence].
      */
     val predicate: ConnectorExpressionRewriter<ParameterizedExpression> = run {
         val support = DorisArrayPushdownSupport(typeMapping, quote)
@@ -71,7 +70,7 @@ internal class DorisPushdownRewriters(typeMapping: DorisTypeMapping, quote: (Str
         val valueSafeRules = listOf(
             RewriteArrayPositionComparison(support),
             // cardinality -> array_size: value-identical on every reachable cell (P5 pins),
-            // so composable — [DorisPushdownEvidence.CARDINALITY]
+            // so composable
             RewriteCardinalityComparison(support),
             RewriteValueSafeNot(valueSafe),
             RewriteValueSafeLogical(valueSafe),
@@ -87,8 +86,7 @@ internal class DorisPushdownRewriters(typeMapping: DorisTypeMapping, quote: (Str
             // stays out of the value-safe tier (no composition) — probe report, LIKE section.
             .add(RewriteStringLike(quote))
             // JSON equality is PREDICATE-level (divergent cells are both-drop only under a
-            // top-level '='), so it too stays out of the value-safe tier —
-            // [DorisPushdownEvidence.JSON_EXTRACT_SCALAR]
+            // top-level '='), so it too stays out of the value-safe tier
             .add(RewriteJsonExtractScalarEquality(quote))
             // Batch-1 scalar bridges: comparisons / IS NULL over scalar-tier function shapes
             // (plain column shapes stay domain territory) + starts_with -> escaped LIKE-prefix.

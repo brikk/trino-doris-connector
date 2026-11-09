@@ -54,7 +54,7 @@ import java.util.Optional
 
 /**
  * Batch-1 scalar expression pushdown (READ-ONLY-MAX; probe verdicts in
- * `dev-docs/archive/NOTES-readonly-max-batch1.md`, evidence pins in [DorisPushdownEvidence]).
+ * `dev-docs/archive/NOTES-readonly-max-batch1.md`).
  *
  * The SCALAR VALUE tier: typed rules over a closed set of value types —
  * [DorisScalarValues.isValueType]: the exact non-text set plus VARCHAR (byte-fidelity
@@ -145,7 +145,7 @@ internal class RewriteScalarConstant : ConnectorExpressionRule<Constant, Paramet
 
 /**
  * `$coalesce(a, b, ...)` -> `coalesce(a, b, ...)` and `$nullif(a, b)` -> `nullif(a, b)` —
- * registry-IDENTICAL ([DorisPushdownEvidence.COALESCE]/[DorisPushdownEvidence.NULLIF]);
+ * registry-IDENTICAL;
  * live pins: NULL propagation, `nullif(a, a)` = NULL, and nullif's equality is byte-exact
  * case-SENSITIVE on text (`nullif('a','A')` = 'a' on both engines).
  */
@@ -174,7 +174,7 @@ internal class RewriteScalarFunctionByName(
 
 /**
  * `year|month|day|hour|minute|second(timestamp(0..6))` -> the same-named Doris function —
- * registry-IDENTICAL for all six ([DorisPushdownEvidence.TEMPORAL_EXTRACT]); live-probed on
+ * registry-IDENTICAL for all six; live-probed on
  * the 0000-01-01/9999-12-31 edges and every precision (fractional seconds truncate
  * identically). Trino returns BIGINT; Doris' narrower integer widens losslessly on read.
  * Comparisons like `year(dt) = 2026` are unwrapped into datetime range domains UPSTREAM
@@ -204,7 +204,7 @@ internal class RewriteTemporalExtract(
 
 /**
  * Trino `length(varchar)` (CHARACTERS) -> Doris `char_length` (characters) — NOT Doris
- * `length` (BYTES; the registry-DIVERGENT hazard, [DorisPushdownEvidence.LENGTH]). Live
+ * `length` (BYTES; the registry-DIVERGENT hazard). Live
  * pins: emoji = 1, CJK chars = 1 each, NFD combining sequences count per codepoint —
  * identical to Trino on every probed shape.
  */
@@ -304,7 +304,7 @@ internal class RewriteScalarIsNullBridge(
 
 /**
  * `starts_with(col, 'prefix')` -> `(col LIKE '<escaped-prefix>%')` — the
- * CONDITIONALLY_EQUIVALENT condition ([DorisPushdownEvidence.STARTS_WITH]): the native
+ * CONDITIONALLY_EQUIVALENT condition: the native
  * function exists; escaped LIKE is the chosen prefix rendering (P4 probe: LIKE is memcmp
  * semantics) AND zone-map/index-eligible, unlike `left(col, n) = 'prefix'`. LIKE
  * metacharacters in the prefix are escaped (`%` -> `\%`, `_` -> `\_`, `\` -> `\\` —

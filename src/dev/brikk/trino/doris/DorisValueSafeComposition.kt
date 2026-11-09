@@ -37,8 +37,7 @@ import java.util.Optional
  * The safety proof has two independently live-proven halves (2026-07-19, Doris 4.1.3; pinned
  * in `TestDorisP3Composition`):
  * 1. The value-safe operands — `array_position` comparisons — return IDENTICAL values on both
- *    engines for every reachable shape, including NULL propagation
- *    ([DorisPushdownEvidence.ARRAY_POSITION]).
+ *    engines for every reachable shape, including NULL propagation.
  * 2. Doris NOT/AND/OR follow exactly Trino's SQL three-valued logic (all cells probed:
  *    NOT NULL=NULL; TRUE AND NULL=NULL, FALSE AND NULL=FALSE; TRUE OR NULL=TRUE,
  *    FALSE OR NULL=NULL, NULL OR NULL=NULL).

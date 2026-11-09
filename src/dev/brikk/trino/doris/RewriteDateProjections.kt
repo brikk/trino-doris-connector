@@ -42,8 +42,8 @@ import java.util.Optional
  * column that the aggregate machinery then groups on remotely, collapsing the whole
  * query into one Doris statement).
  *
- * `CAST(datetime_col AS DATE)` -> `CAST(col AS DATE)` — registry-IDENTICAL
- * ([DorisPushdownEvidence.DATE_OF_DATETIME]); live-probed identical to Doris `date()`
+ * `CAST(datetime_col AS DATE)` -> `CAST(col AS DATE)` — registry-IDENTICAL;
+ * live-probed identical to Doris `date()`
  * on every precision (0/3/6) incl. the `0000-01-01` / `9999-12-31` edges. Trino's
  * `date(x)` spelling desugars to this cast, so one rule covers both spellings.
  * Source restricted to plain DATETIME columns (Variable of TIMESTAMP(0..6)).
@@ -79,7 +79,7 @@ internal class RewriteCastDatetimeToDate : ProjectFunctionRule<JdbcExpression, P
 
 /**
  * `date_trunc('unit', datetime_col)` -> `date_trunc(col, 'unit')` — the ARGUMENT ORDER
- * SWAPS (registry CONDITIONALLY_EQUIVALENT, [DorisPushdownEvidence.DATE_TRUNC]); returns
+ * SWAPS (registry CONDITIONALLY_EQUIVALENT); returns
  * DATETIME of the input's precision in both engines (live-probed). Unit allowlist is
  * live-proven per unit (`dev-docs/archive/NOTES-p6-date-projection.md`): second/minute/hour/day/month/
  * quarter/year truncate identically. WEEK is DENIED: both engines are Monday-start

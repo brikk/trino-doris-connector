@@ -39,14 +39,6 @@ class TestDorisJsonExtractScalarEquality {
         .build()
 
     @Test
-    fun testConditionalEvidenceNamesThisAdmissionProof() {
-        val evidence = DorisPushdownEvidence.JSON_EXTRACT_SCALAR
-        assertThat(evidence.treatment).isEqualTo(DorisPushdownEvidence.Treatment.GUARDED_ADMISSION)
-        assertThat(evidence.admissionGuard).isEqualTo(DorisPushdownEvidence.AdmissionGuard.JSON_SCALAR_EQUALITY)
-        assertThat(evidence.admissionGuard!!.unitProof).isEqualTo(javaClass.simpleName)
-    }
-
-    @Test
     fun testOnlyEqualityOverNativeJsonIsAdmitted() {
         for (reversed in listOf(false, true)) {
             assertThat(rewrite("$.a", reversed, comparison = NOT_EQUAL_OPERATOR_FUNCTION_NAME)).isEmpty

@@ -15,152 +15,66 @@ package dev.brikk.trino.doris
 
 import dev.brikk.house.sql.metadata.HazardRegistry
 import dev.brikk.house.sql.metadata.HazardVerdict
-import io.trino.spi.TrinoException
+import dev.brikk.house.sql.metadata.HazardVerdict.CONDITIONALLY_EQUIVALENT
+import dev.brikk.house.sql.metadata.HazardVerdict.DIVERGENT
+import dev.brikk.house.sql.metadata.HazardVerdict.IDENTICAL
 import org.assertj.core.api.Assertions.assertThat
-import org.assertj.core.api.Assertions.assertThatCode
-import org.assertj.core.api.Assertions.assertThatThrownBy
 import org.junit.jupiter.api.Test
 import java.io.File
 import java.security.MessageDigest
 
 /**
- * brikk evidence drift suite (PLAN G3/§6.3, the P2 "registry drift test" exit criterion —
- * using the released `brikk-sql-metadata-jvm:0.21.0`). No cluster needed.
- *
- * The connector's pinned tuples in [DorisPushdownEvidence] are the source of truth; this
- * suite proves (a) the released registry still agrees with every pin, (b) the G3
- * verdict-gating policy is structurally satisfied, (c) registry presence alone never creates
- * a rule (canaries), and (d) the exact artifact is on the classpath (version + jar sha256) —
- * an artifact swap fails visibly here even if its data happens to agree.
+ * The brikk hazard registry entries the pushdown rules were proven against. A changed registry
+ * does not change what the connector pushes; it fails this test so the rule can be re-verified.
  */
 class TestDorisPushdownEvidenceDrift {
-    // --- (a) every registered rule's pin matches the released registry exactly ---
+    private data class Pin(val source: String, val target: String, val verdict: HazardVerdict, val provenance: String)
 
     @Test
-    fun testEveryRulePinMatchesTheRegistry() {
-        // contains, arrays_overlap, array_position, json_extract_scalar, cardinality,
-        // date-of-datetime, date_trunc, coalesce, nullif, length(->char_length),
-        // starts_with, and the six temporal extracts
-        assertThat(DorisPushdownEvidence.ALL).hasSize(17)
-        for (evidence in DorisPushdownEvidence.ALL) {
-            val entry = DorisPushdownEvidence.lookup(evidence.registrySource)
-            assertThat(entry).describedAs(evidence.registrySource).isNotNull
-            assertThat(entry!!.verdict).describedAs(evidence.registrySource).isEqualTo(evidence.expectedVerdict)
-            assertThat(entry.sourceName).describedAs(evidence.registrySource).isEqualTo(evidence.registrySource)
-            assertThat(entry.targetName).describedAs(evidence.registrySource).isEqualTo(evidence.expectedTarget)
-            assertThat(entry.provenance).describedAs(evidence.registrySource).isEqualTo(evidence.expectedProvenance)
-        }
-        // ... which is exactly what the connector-construction gate enforces:
-        assertThatCode { DorisPushdownEvidence.verifyAgainstRegistry() }.doesNotThrowAnyException()
-    }
-
-    @Test
-    fun testConstructionGateFailsLoudOnDrift() {
-        // A drifted pin must refuse connector construction with a clear message.
-        val drifted = DorisPushdownEvidence.CONTAINS.copy(expectedVerdict = HazardVerdict.IDENTICAL)
-        assertThatThrownBy { DorisPushdownEvidence.verify(drifted) }
-            .isInstanceOf(TrinoException::class.java)
-            .hasMessageContaining("verdict drifted")
-            .hasMessageContaining("Refusing to construct the Doris connector")
-        val missing = DorisPushdownEvidence.CONTAINS.copy(registrySource = "no_such_function")
-        assertThatThrownBy { DorisPushdownEvidence.verify(missing) }
-            .isInstanceOf(TrinoException::class.java)
-            .hasMessageContaining("no trino->doris registry entry")
-        val wrongTarget = DorisPushdownEvidence.ARRAY_POSITION.copy(expectedTarget = "array_pos")
-        assertThatThrownBy { DorisPushdownEvidence.verify(wrongTarget) }
-            .isInstanceOf(TrinoException::class.java)
-            .hasMessageContaining("targetName drifted")
-        val unguardedJson = DorisPushdownEvidence.JSON_EXTRACT_SCALAR.copy(admissionGuard = null)
-        assertThatThrownBy { DorisPushdownEvidence.verify(unguardedJson) }
-            .isInstanceOf(TrinoException::class.java)
-            .hasMessageContaining("closed guard contract")
-        val directJson = DorisPushdownEvidence.JSON_EXTRACT_SCALAR.copy(treatment = DorisPushdownEvidence.Treatment.DIRECT)
-        assertThatThrownBy { DorisPushdownEvidence.verify(directJson) }
-            .isInstanceOf(TrinoException::class.java)
-            .hasMessageContaining("requires guarded treatment")
-    }
-
-    // --- (b) G3 verdict-gating policy, structurally ---
-
-    @Test
-    fun testVerdictGatingPolicyIsStructurallySatisfied() {
-        val eligible = setOf(HazardVerdict.IDENTICAL, HazardVerdict.CONDITIONALLY_EQUIVALENT, HazardVerdict.DIVERGENT)
-        for (evidence in DorisPushdownEvidence.ALL) {
-            // NO_EQUIVALENT / UNCLEAR / unknown are never pushable (G3).
-            assertThat(evidence.expectedVerdict).describedAs(evidence.registrySource).isIn(eligible)
-            when (evidence.expectedVerdict) {
-                HazardVerdict.IDENTICAL ->
-                    assertThat(evidence.treatment).isEqualTo(DorisPushdownEvidence.Treatment.DIRECT)
-                HazardVerdict.CONDITIONALLY_EQUIVALENT -> {
-                    if (evidence.treatment == DorisPushdownEvidence.Treatment.GUARDED_ADMISSION) {
-                        val contract = requireNotNull(evidence.admissionGuard)
-                        assertThat(contract.registrySource).isEqualTo(evidence.registrySource)
-                        assertThat(contract.target).isEqualTo(evidence.expectedTarget)
-                        assertThatCode { Class.forName("dev.brikk.trino.doris.${contract.unitProof}") }.doesNotThrowAnyException()
-                    } else {
-                        assertThat(evidence.treatment).isEqualTo(DorisPushdownEvidence.Treatment.GUARDED_WRAPPER)
-                        assertThat(evidence.guard).describedAs(evidence.registrySource).isNotNull()
-                        assertThat(evidence.dorisRendering).contains(evidence.guard)
-                    }
-                }
-                HazardVerdict.DIVERGENT -> {
-                    // "may be implemented as a separate explicit rewrite after a dedicated
-                    // live test" — the live test must be named and must exist on the classpath.
-                    assertThat(evidence.treatment).isEqualTo(DorisPushdownEvidence.Treatment.CONNECTOR_ORIGINAL_REWRITE)
-                }
-                else -> error("unreachable")
-            }
-            // the rendering uses the pinned target function, and the live proof class exists
-            assertThat(evidence.dorisRendering).contains(evidence.expectedTarget)
-            assertThatCode { Class.forName("dev.brikk.trino.doris.${evidence.liveProof}") }
-                .describedAs("live proof class ${evidence.liveProof}")
-                .doesNotThrowAnyException()
+    fun testRegistryMatchesThePinnedEntries() {
+        for (pin in PINS) {
+            val entry = HazardRegistry.lookup("trino", "doris", pin.source)
+            assertThat(entry).describedAs(pin.source).isNotNull
+            assertThat(entry!!.sourceName).describedAs(pin.source).isEqualTo(pin.source)
+            assertThat(entry.targetName).describedAs(pin.source).isEqualTo(pin.target)
+            assertThat(entry.verdict).describedAs(pin.source).isEqualTo(pin.verdict)
+            assertThat(entry.provenance).describedAs(pin.source).isEqualTo(pin.provenance)
         }
     }
 
-    // --- (c) canaries: registry presence alone never creates a rule ---
-
     @Test
-    fun testDeliberatelyUnpushedFunctionsHaveNoRuleRegardlessOfRegistry() {
-        // element_at exists in the registry (DIVERGENT: NULL-vs-throw out-of-bounds — a PLAN
-        // §6.2 explicit deny example) and has, and may not gain, a rule without its own live
-        // proof. (`length` GRADUATED exactly per this canary's contract: batch 1 shipped it
-        // WITH a live proof, rendering char_length — see DorisPushdownEvidence.LENGTH.)
-        for (denied in listOf("element_at")) {
-            val entry = HazardRegistry.lookup("trino", "doris", denied)
-            assertThat(entry).describedAs(denied).isNotNull
-            assertThat(entry!!.verdict).describedAs(denied).isEqualTo(HazardVerdict.DIVERGENT)
-            assertThat(DorisPushdownEvidence.ALL.map { it.registrySource })
-                .describedAs("no pushdown rule may exist for '$denied'")
-                .doesNotContain(denied)
-        }
-        // 0.21.0 retains historical identity entries, but 4.1.5 column probes disprove
-        // unrestricted case folding. Registry presence must not re-enable either rule.
-        for (denied in listOf("lower", "upper")) {
-            assertThat(HazardRegistry.lookup("trino", "doris", denied)).isNotNull()
-            assertThat(DorisPushdownEvidence.ALL.map { it.registrySource }).doesNotContain(denied)
-        }
-    }
-
-    // --- (d) artifact pin: version + jar sha256 ---
-
-    @Test
-    fun testArtifactPinVersionAndSha256() {
+    fun testRegistryArtifactIsThePinnedJar() {
         val jar = File(HazardRegistry::class.java.protectionDomain.codeSource.location.toURI())
-        assertThat(jar.name)
-            .describedAs("registry must load from the pinned artifact (${DorisPushdownEvidence.ARTIFACT_PIN})")
-            .isEqualTo("brikk-sql-metadata-jvmMain-0.21.0.jar")
+        assertThat(jar.name).isEqualTo("brikk-sql-metadata-jvmMain-0.21.0.jar")
+        val digest = MessageDigest.getInstance("SHA-256").digest(jar.readBytes())
+        assertThat(digest.joinToString("") { "%02x".format(it) }).isEqualTo(ARTIFACT_SHA256)
+    }
 
-        val digest = MessageDigest.getInstance("SHA-256")
-        val sha256 = jar.inputStream().use { input ->
-            val buffer = ByteArray(64 * 1024)
-            while (true) {
-                val read = input.read(buffer)
-                if (read < 0) break
-                digest.update(buffer, 0, read)
-            }
-            digest.digest().joinToString("") { "%02x".format(it) }
-        }
-        assertThat(sha256).isEqualTo(DorisPushdownEvidence.ARTIFACT_SHA256)
+    companion object {
+        private const val ARTIFACT_SHA256 = "506ea02a67bbf983122a978fb3fb0657ff6d606a801820b0e247aa509f5678b2"
+
+        private const val BATCH7_ARRAY = "REPORT-doris-differential-probe-2026-07-13.md#batch7-array"
+        private const val BATCH2 = "REPORT-doris-differential-probe-2026-07-13.md#batch2"
+        private const val BATCH6_DATETIME = "REPORT-doris-differential-probe-2026-07-13.md#batch6-datetime"
+
+        private val PINS = listOf(
+            Pin("contains", "array_contains", DIVERGENT, BATCH7_ARRAY),
+            Pin("arrays_overlap", "arrays_overlap", CONDITIONALLY_EQUIVALENT, BATCH7_ARRAY),
+            Pin("array_position", "array_position", IDENTICAL, BATCH7_ARRAY),
+            Pin("cardinality", "array_size", DIVERGENT, BATCH7_ARRAY),
+            Pin("json_extract_scalar", "json_unquote", CONDITIONALLY_EQUIVALENT, "trino-484-doris-4.1.5-json.md#path-semantics"),
+            Pin("date", "date", IDENTICAL, BATCH6_DATETIME),
+            Pin("date_trunc", "date_trunc", CONDITIONALLY_EQUIVALENT, BATCH6_DATETIME),
+            Pin("year", "year", IDENTICAL, BATCH6_DATETIME),
+            Pin("month", "month", IDENTICAL, BATCH6_DATETIME),
+            Pin("day", "day", IDENTICAL, BATCH6_DATETIME),
+            Pin("hour", "hour", IDENTICAL, BATCH6_DATETIME),
+            Pin("minute", "minute", IDENTICAL, BATCH6_DATETIME),
+            Pin("second", "second", IDENTICAL, BATCH6_DATETIME),
+            Pin("coalesce", "coalesce", IDENTICAL, BATCH2),
+            Pin("nullif", "nullif", IDENTICAL, BATCH2),
+            Pin("length", "length", DIVERGENT, BATCH2),
+            Pin("starts_with", "starts_with", CONDITIONALLY_EQUIVALENT, "REPORT-doris-differential-probe-2026-07-13.md#batch4-string"),
+        )
     }
 }

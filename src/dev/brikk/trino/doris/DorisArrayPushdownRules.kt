@@ -43,13 +43,12 @@ import io.trino.spi.type.TypeUtils.readNativeValue
 import java.util.Optional
 
 /**
- * Typed, evidence-gated ARRAY predicate rules (PLAN §6.1 layer 2 / §6.2; evidence citations in
- * [DorisPushdownEvidence]). All rules fire in PREDICATE context only (WHERE conjuncts via
- * `DorisClient.convertPredicate`); anything outside the strict shape/type guards stays in
- * Trino. No boolean-composition rules ($not/$and/$or/$is_null) exist by design — that is a
- * CORRECTNESS invariant: `contains` is predicate-level (not value-level) equivalent, so its
- * rendering must never be embedded in a value context (see the NULL truth tables in the
- * evidence registry and TestDorisP2bPushdown pins).
+ * Typed, evidence-gated ARRAY predicate rules (PLAN §6.1 layer 2 / §6.2). All rules fire in
+ * PREDICATE context only (WHERE conjuncts via `DorisClient.convertPredicate`); anything outside
+ * the strict shape/type guards stays in Trino. No boolean-composition rules ($not/$and/$or/$is_null)
+ * exist by design — that is a CORRECTNESS invariant: `contains` is predicate-level (not value-level)
+ * equivalent, so its rendering must never be embedded in a value context (see the NULL truth
+ * tables in the TestDorisP2bPushdown pins).
  */
 internal class DorisArrayPushdownSupport(
     private val typeMapping: DorisTypeMapping,
@@ -219,8 +218,7 @@ internal class DorisArrayPushdownSupport(
 }
 
 /**
- * `contains(array(T), t)` -> `(array_contains(`col`, ?))` — evidence and NULL truth table in
- * [DorisPushdownEvidence.CONTAINS]. Rendered BARE (no `= 1` wrapper): profile-proven to be the
+ * `contains(array(T), t)` -> `(array_contains(`col`, ?))`. Rendered BARE (no `= 1` wrapper): profile-proven to be the
  * only form Doris accelerates with an ARRAY inverted index, and predicate-equivalent because
  * this connector emits it exclusively as a top-level WHERE conjunct.
  */
@@ -251,8 +249,7 @@ internal class RewriteContains(
 
 /**
  * `arrays_overlap(array(T), array(T))` in two shapes, both null-strip-GUARDED (the wrapper is
- * MANDATORY: without it Doris matches NULL elements to each other and over-returns — evidence
- * in [DorisPushdownEvidence.ARRAYS_OVERLAP]):
+ * MANDATORY: without it Doris matches NULL elements to each other and over-returns):
  *
  * - column × column -> `(arrays_overlap(array_filter(x -> x IS NOT NULL, `l`), `r`))`
  * - column × constant `ARRAY(T)` literal (either orientation; `arrays_overlap` is symmetric)
@@ -345,7 +342,7 @@ internal class RewriteArraysOverlap(
 /**
  * `array_position(array(T), t) <cmp> n` (either orientation) -> `(array_position(`col`, ?)
  * <cmp> n)` — value-level equivalence proven for non-NULL needles (1-based, 0-if-absent,
- * NULL-array propagation identical; [DorisPushdownEvidence.ARRAY_POSITION]), so all six
+ * NULL-array propagation identical), so all six
  * comparison operators are exactly safe. The integer bound is rendered inline (a validated
  * Long — no injection surface).
  */
@@ -404,8 +401,8 @@ internal class RewriteArrayPositionComparison(
  * `cardinality(array(T)) <cmp> n` (either orientation) and `cardinality(array(T)) BETWEEN
  * lo AND hi` -> `(array_size(`col`) ...)` — the registry verdict is DIVERGENT purely as a
  * RENAME (Doris has no `cardinality` for this shape; the portable name is `array_size`), so
- * per G3 this is a connector-original rewrite backed by its own live truth table
- * ([DorisPushdownEvidence.CARDINALITY]): NULL array -> NULL on both engines, empty -> 0,
+ * per G3 this is a connector-original rewrite backed by its own live truth table:
+ * NULL array -> NULL on both engines, empty -> 0,
  * NULL elements COUNTED on both, and NOT-composition cell-identical — VALUE-level identical,
  * so the rule lives in the VALUE-SAFE tier (composable under NOT/AND/OR) alongside
  * `array_position` comparisons. Bounds are validated Longs rendered inline (no injection
