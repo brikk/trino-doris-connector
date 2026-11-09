@@ -167,12 +167,7 @@ class DorisClientModule : AbstractConfigurationAwareModule() {
             val variables = buildList {
                 config.getQueryTimeout()?.let { add("query_timeout=${DorisTimeouts.querySeconds(it)}") }
                 config.getExecMemLimit()?.let { add("exec_mem_limit=${it.toBytes()}") }
-                config.getTimeZone()?.let { timeZone ->
-                    require(!timeZone.contains('\'') && !timeZone.contains(',')) {
-                        "doris.time-zone must not contain quotes or commas: $timeZone"
-                    }
-                    add("time_zone='$timeZone'")
-                }
+                config.getTimeZone()?.let { add("time_zone='$it'") }
             }
             return variables.takeIf { it.isNotEmpty() }?.joinToString(",")
         }

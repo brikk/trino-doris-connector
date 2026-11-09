@@ -58,6 +58,10 @@ class DorisConfig {
     @Config("doris.time-zone")
     @ConfigDescription("Doris session variable time_zone (e.g. Etc/UTC), applied per connection session")
     fun setTimeZone(timeZone: String?): DorisConfig {
+        // Embedded as time_zone='...' in the comma-separated Connector/J sessionVariables property.
+        require(timeZone == null || (!timeZone.contains('\'') && !timeZone.contains(','))) {
+            "doris.time-zone must not contain quotes or commas: $timeZone"
+        }
         this.timeZone = timeZone
         return this
     }

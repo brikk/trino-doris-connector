@@ -17,6 +17,7 @@ import io.airlift.units.DataSize
 import io.airlift.configuration.ConfigDescription
 import io.airlift.units.Duration
 import org.assertj.core.api.Assertions.assertThat
+import org.assertj.core.api.Assertions.assertThatThrownBy
 import org.junit.jupiter.api.Test
 import java.util.concurrent.TimeUnit
 
@@ -74,6 +75,19 @@ class TestDorisJdbcConfig {
         val properties = DorisClientModule.connectionProperties(config)
         assertThat(properties.getProperty("sessionVariables"))
             .isEqualTo("query_timeout=123,exec_mem_limit=2147483648,time_zone='Etc/UTC'")
+    }
+
+    @Test
+    fun testTimeZoneWithQuotesOrCommasIsAConfigurationError() {
+        for (timeZone in listOf("Etc/UTC'", "Etc/UTC,query_timeout=1", "'")) {
+            assertThatThrownBy { DorisConfig().setTimeZone(timeZone) }
+                .describedAs(timeZone)
+                .isInstanceOf(IllegalArgumentException::class.java)
+                .hasMessageContaining("doris.time-zone must not contain quotes or commas")
+        }
+        for (timeZone in listOf(null, "Etc/UTC", "+08:00", "Asia/Tokyo")) {
+            assertThat(DorisConfig().setTimeZone(timeZone).getTimeZone()).isEqualTo(timeZone)
+        }
     }
 
     @Test
