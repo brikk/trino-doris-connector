@@ -22,10 +22,15 @@ import io.trino.plugin.jdbc.JdbcTableHandle
 import io.trino.plugin.jdbc.JdbcTypeHandle
 import io.trino.plugin.jdbc.RemoteTableName
 import io.trino.plugin.jdbc.logging.RemoteQueryModifier
+import io.trino.spi.connector.AggregateFunction
+import io.trino.spi.connector.ColumnHandle
 import io.trino.spi.connector.ConnectorSession
 import io.trino.spi.connector.SchemaTableName
 import io.trino.spi.connector.SortOrder.ASC_NULLS_LAST
+import io.trino.spi.expression.Variable
+import io.trino.spi.type.BigintType.BIGINT
 import io.trino.spi.type.IntegerType.INTEGER
+import io.trino.spi.type.Type
 import io.trino.spi.type.VarcharType.VARCHAR
 import io.trino.spi.type.VarcharType.createVarcharType
 import io.trino.testing.TestingConnectorSession
@@ -102,6 +107,41 @@ class TestDorisStringKeyPushdown {
         assertThat(client.supportsAggregationPushdown(session, table, emptyList(), emptyMap(), listOf(listOf(integer)))).isTrue()
         assertThat(client.supportsAggregationPushdown(session, table, emptyList(), emptyMap(), listOf(emptyList()))).isTrue()
     }
+
+    @Test
+    fun testOnlyNativeStringValuesPushThroughPayloadAggregates() {
+        val session = TestingConnectorSession.builder()
+            .setPropertyMetadata(DorisSessionProperties(config).sessionProperties)
+            .setPropertyValues(mapOf("approximate_pushdown" to true))
+            .build()
+        for ((remoteType, pushed) in listOf(
+            "varchar(50)" to true, "string" to true, "text" to true,
+            "decimal(76,10)" to false, "decimalv3(50,2)" to false, "array<string>" to false,
+            "map<string,int>" to false, "struct<a:int,b:string>" to false,
+        )) {
+            val value = JdbcColumnHandle.builder()
+                .setColumnName("value")
+                .setJdbcTypeHandle(DorisTypeMapping.toTypeHandle(remoteType))
+                .setColumnType(VARCHAR)
+                .setNullable(false)
+                .build()
+            val assignments = mapOf<String, ColumnHandle>("value" to value, "id" to integer)
+            val valueVariable = Variable("value", VARCHAR)
+            for (aggregate in listOf(
+                aggregate("min_by", VARCHAR, valueVariable, Variable("id", INTEGER)),
+                aggregate("max_by", VARCHAR, valueVariable, Variable("id", INTEGER)),
+                aggregate("any_value", VARCHAR, valueVariable),
+                aggregate("approx_distinct", BIGINT, valueVariable),
+            )) {
+                assertThat(client.implementAggregation(session, aggregate, assignments).isPresent)
+                    .describedAs("${aggregate.functionName} over $remoteType")
+                    .isEqualTo(pushed)
+            }
+        }
+    }
+
+    private fun aggregate(name: String, outputType: Type, vararg arguments: Variable): AggregateFunction =
+        AggregateFunction(name, outputType, arguments.toList(), emptyList(), false, Optional.empty())
 
     private fun session(mode: DorisStringPushdownMode): ConnectorSession = TestingConnectorSession.builder()
         .setPropertyMetadata(DorisSessionProperties(config).sessionProperties)

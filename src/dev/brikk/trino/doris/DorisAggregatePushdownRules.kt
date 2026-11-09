@@ -80,6 +80,9 @@ internal object DorisAggregatePushdown {
         else -> false
     }
 
+    internal fun isExactOrNativeString(column: JdbcColumnHandle): Boolean =
+        isExactPushableKeyType(column.columnType) || DorisColumnType.isNativeString(column)
+
     internal fun rejected(reason: String, subject: Any): Optional<JdbcExpression> {
         val category = reason.substringBefore(':')
         val count = REJECTION_COUNTS.computeIfAbsent(category) { LongAdder() }.also { it.increment() }.sum()
@@ -272,7 +275,7 @@ internal class DorisImplementCountDistinct : AggregateFunctionRule<JdbcExpressio
  * - ties are nondeterministic on BOTH engines (no tie-break contract to preserve).
  *
  * Key types: the exact-ordering set ([DorisAggregatePushdown.isExactPushableKeyType] — the
- * key is what gets compared). Value types: the same set plus VARCHAR (payload passthrough,
+ * key is what gets compared). Value types: the same set plus native VARCHAR (payload passthrough,
  * byte fidelity proven; CHAR/REAL/DOUBLE excluded — trailing-space and wire-Infinity read
  * hazards). Result reuses the VALUE column's type handle (same proven read path).
  */
@@ -299,7 +302,7 @@ internal class DorisImplementMinMaxBy : AggregateFunctionRule<JdbcExpression, Pa
                 aggregateFunction,
             )
         }
-        if (!isPushableValueType(valueColumn.columnType)) {
+        if (!DorisAggregatePushdown.isExactOrNativeString(valueColumn)) {
             return DorisAggregatePushdown.rejected(
                 "min_by/max_by VALUE type not pushable: ${valueColumn.columnType}",
                 aggregateFunction,
@@ -324,9 +327,6 @@ internal class DorisImplementMinMaxBy : AggregateFunctionRule<JdbcExpression, Pa
 
     companion object {
         private val MIN_MAX_BY = setOf("min_by", "max_by")
-
-        private fun isPushableValueType(type: Type): Boolean =
-            DorisAggregatePushdown.isExactPushableKeyType(type) || type is io.trino.spi.type.VarcharType
     }
 }
 
@@ -336,7 +336,7 @@ internal class DorisImplementMinMaxBy : AggregateFunctionRule<JdbcExpression, Pa
  * both ignore NULL inputs (a group holding {NULL, 7} answers a NON-NULL value on both —
  * probed), and an all-NULL/empty group answers NULL on both. Differentials assert the
  * result is an element of the group, not a specific value. Argument types: the exact set
- * plus VARCHAR (payload passthrough), same exclusions as min_by values.
+ * plus native VARCHAR (payload passthrough), same exclusions as min_by values.
  */
 internal class DorisImplementAnyValue : AggregateFunctionRule<JdbcExpression, ParameterizedExpression> {
     override fun getPattern(): Pattern<AggregateFunction> = basicAggregation()
@@ -351,9 +351,7 @@ internal class DorisImplementAnyValue : AggregateFunctionRule<JdbcExpression, Pa
         val argument = captures.get(ANY_ARGUMENT)
         val column = context.getAssignment(argument.name) as JdbcColumnHandle
         verify(column.columnType == aggregateFunction.outputType)
-        val pushable = DorisAggregatePushdown.isExactPushableKeyType(column.columnType) ||
-            column.columnType is io.trino.spi.type.VarcharType
-        if (!pushable) {
+        if (!DorisAggregatePushdown.isExactOrNativeString(column)) {
             return DorisAggregatePushdown.rejected("any_value argument type not pushable: ${column.columnType}", aggregateFunction)
         }
         return Optional.of(
@@ -377,7 +375,7 @@ internal class DorisImplementAnyValue : AggregateFunctionRule<JdbcExpression, Pa
  * error profiles), so pushed and local answers are legitimately DIFFERENT numbers for the
  * same data. Off by default per the exactness discipline; when enabled the caller accepts
  * estimate divergence. Type soundness: BIGINT result on both; empty input -> 0 on both
- * (probed). Argument: any exact-set or varchar column.
+ * (probed). Argument: any exact-set or native varchar column.
  */
 internal class DorisImplementApproxDistinct : AggregateFunctionRule<JdbcExpression, ParameterizedExpression> {
     override fun getPattern(): Pattern<AggregateFunction> = basicAggregation()
@@ -397,9 +395,7 @@ internal class DorisImplementApproxDistinct : AggregateFunctionRule<JdbcExpressi
         if (aggregateFunction.outputType != BIGINT) {
             return DorisAggregatePushdown.rejected("approx_distinct output type: ${aggregateFunction.outputType}", aggregateFunction)
         }
-        val pushable = DorisAggregatePushdown.isExactPushableKeyType(column.columnType) ||
-            column.columnType is io.trino.spi.type.VarcharType
-        if (!pushable) {
+        if (!DorisAggregatePushdown.isExactOrNativeString(column)) {
             return DorisAggregatePushdown.rejected("approx_distinct argument type not pushable: ${column.columnType}", aggregateFunction)
         }
         return Optional.of(
