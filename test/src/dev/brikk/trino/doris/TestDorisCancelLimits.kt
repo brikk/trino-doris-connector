@@ -16,6 +16,7 @@ package dev.brikk.trino.doris
 import com.google.common.util.concurrent.MoreExecutors.directExecutor
 import io.trino.testing.TestingConnectorSession
 import org.assertj.core.api.Assertions.assertThat
+import org.assertj.core.api.Assertions.assertThatThrownBy
 import org.junit.jupiter.api.Test
 import java.lang.reflect.Proxy
 import java.sql.Connection
@@ -38,6 +39,19 @@ class TestDorisCancelLimits {
     private val session = TestingConnectorSession.builder().build()
     private val marker = "trino_statement_id=00000000-0000-0000-0000-000000000001"
     private val failures = CopyOnWriteArrayList<Throwable>()
+
+    @Test
+    fun testConnectionFailureReleasesAdmission() {
+        val slots = Semaphore(1)
+        val cancel = DorisClusterScopedCancel(
+            { _, _ -> throw SQLException("helper connection unavailable") },
+            enabled = true,
+            executor = directExecutor(),
+            requestSlots = slots,
+        )
+        cancel.cancel(session, marker) { false }
+        assertThat(slots.availablePermits()).isEqualTo(1)
+    }
 
     @Test
     @Suppress("LongMethod", "ThrowsCount") // Saturation and wrapper fallback share strict fakes and one held gate.
@@ -118,11 +132,13 @@ class TestDorisCancelLimits {
         val gate = CountDownLatch(1)
         val entered = CountDownLatch(1)
         val opens = AtomicInteger()
+        val slots = Semaphore(1)
         val cancel = DorisClusterScopedCancel(
             DorisCancelConnectionFactory { _, _ -> opens.incrementAndGet(); throw SQLException("must not open") },
             enabled = true,
             executor = executor,
             timeoutMillis = 200,
+            requestSlots = slots,
         )
         val dispatched = DorisClusterScopedCancel.killsDispatched.get()
         val expired = DorisClusterScopedCancel.killsExpired.get()
@@ -140,6 +156,7 @@ class TestDorisCancelLimits {
             executor.submit {}.get(5, SECONDS)
             assertThat(DorisClusterScopedCancel.killsExpired.get()).isGreaterThanOrEqualTo(expired + 1)
             assertThat(opens.get()).isZero()
+            assertThat(slots.availablePermits()).isEqualTo(1)
         } finally {
             gate.countDown()
             shutdown(executor)
@@ -151,6 +168,7 @@ class TestDorisCancelLimits {
         var task: Runnable? = null
         var passedDeadline = 0L
         val timeoutMillis = 5000L
+        val slots = Semaphore(1)
         val cancel = DorisClusterScopedCancel(
             DorisCancelConnectionFactory { _, deadline ->
                 passedDeadline = deadline
@@ -159,12 +177,36 @@ class TestDorisCancelLimits {
             enabled = true,
             executor = Executor { task = it },
             timeoutMillis = timeoutMillis,
+            requestSlots = slots,
         )
         val started = System.nanoTime()
         cancel.cancel(session, marker) { false }
         val dispatched = System.nanoTime()
         requireNotNull(task).run()
         assertThat(passedDeadline).isBetween(started + MILLISECONDS.toNanos(timeoutMillis), dispatched + MILLISECONDS.toNanos(timeoutMillis))
+        assertThat(slots.availablePermits()).isEqualTo(1)
+    }
+
+    @Test
+    fun testUncheckedProbeFailureReleasesAdmission() {
+        val slots = Semaphore(1)
+        val closes = AtomicInteger()
+        val connection = jdbcProxy(Connection::class.java) { method, _ ->
+            when (method) {
+                "setNetworkTimeout" -> null
+                "createStatement" -> throw AssertionError("unchecked probe failure")
+                "close" -> { closes.incrementAndGet(); null }
+                else -> throw AssertionError("unexpected helper call: $method")
+            }
+        }
+        val cancel = DorisClusterScopedCancel(
+            { _, _ -> connection }, enabled = true, executor = directExecutor(), requestSlots = slots,
+        )
+        assertThatThrownBy { cancel.cancel(session, marker) { false } }
+            .isInstanceOf(AssertionError::class.java).hasMessage("unchecked probe failure")
+        assertThat(slots.availablePermits()).isEqualTo(1)
+        assertThat(closes.get()).isEqualTo(1)
+        assertThat(failures).hasSize(1)
     }
 
     @Test
@@ -181,6 +223,7 @@ class TestDorisCancelLimits {
         val closed = CountDownLatch(1)
         val events = CopyOnWriteArrayList<String>()
         val networkTimeout = AtomicInteger()
+        val slots = Semaphore(1)
         val statement = jdbcProxy(Statement::class.java) { method, args ->
             when (method) {
                 "execute" -> {
@@ -232,12 +275,13 @@ class TestDorisCancelLimits {
         val timeouts = DorisClusterScopedCancel.helperTimeouts.get()
         try {
             executor.submit {}.get(5, SECONDS)
-            DorisClusterScopedCancel({ _, _ -> connection }, enabled = true, executor = executor, timeoutMillis = 250)
+            DorisClusterScopedCancel({ _, _ -> connection }, enabled = true, executor = executor, timeoutMillis = 250, requestSlots = slots)
                 .cancel(session, marker) { false }
             val nextWork = executor.submit { events.add("next work") }
             await(stalled)
             await(closed)
             nextWork.get(5, SECONDS)
+            assertThat(slots.availablePermits()).isEqualTo(1)
             assertThat(networkTimeout.get()).isEqualTo(2000).isEqualTo(DorisCancelDriver.NETWORK_TIMEOUT_MILLIS)
             assertThat(DorisClusterScopedCancel.helperTimeouts.get()).isGreaterThanOrEqualTo(timeouts + 1)
             val cleanup = if (stallClose) {
