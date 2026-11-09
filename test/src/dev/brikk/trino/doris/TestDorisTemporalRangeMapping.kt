@@ -47,10 +47,10 @@ class TestDorisTemporalRangeMapping {
             val type = mapping.toColumnMapping(session, columnType).orElseThrow().type
             val step = step(columnType)
             for (value in listOf(low, low + step, 0L, high - step, high)) {
-                assertThat(DorisTypeMapping.isWithinTemporalRange(type, value)).describedAs("$columnType: $value").isTrue()
+                assertThat(DorisPushdownControllers.isWithinTemporalRange(type, value)).describedAs("$columnType: $value").isTrue()
             }
             for (value in listOf(low - step, high + step, Long.MIN_VALUE, Long.MAX_VALUE)) {
-                assertThat(DorisTypeMapping.isWithinTemporalRange(type, value)).describedAs("$columnType: $value").isFalse()
+                assertThat(DorisPushdownControllers.isWithinTemporalRange(type, value)).describedAs("$columnType: $value").isFalse()
             }
         }
     }
@@ -115,11 +115,11 @@ class TestDorisTemporalRangeMapping {
     @Test
     fun testNonTemporalValuesUnaffected() {
         for (value in listOf(Long.MIN_VALUE, Long.MAX_VALUE, null)) {
-            assertThat(DorisTypeMapping.isWithinTemporalRange(BIGINT, value)).isTrue()
+            assertThat(DorisPushdownControllers.isWithinTemporalRange(BIGINT, value)).isTrue()
         }
-        assertThat(DorisTypeMapping.isWithinTemporalRange(VARCHAR, utf8Slice("10000-01-01"))).isTrue()
+        assertThat(DorisPushdownControllers.isWithinTemporalRange(VARCHAR, utf8Slice("10000-01-01"))).isTrue()
         val domain = Domain.multipleValues(BIGINT, listOf(Long.MIN_VALUE, Long.MAX_VALUE), true)
-        val result = DorisTypeMapping.TEMPORAL_PUSHDOWN.apply(session, domain)
+        val result = DorisPushdownControllers.TEMPORAL_PUSHDOWN.apply(session, domain)
         assertThat(result.pushedDown).isEqualTo(domain)
         assertThat(result.remainingFilter).isEqualTo(Domain.all(BIGINT))
     }

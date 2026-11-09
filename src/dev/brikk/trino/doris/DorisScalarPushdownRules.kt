@@ -125,10 +125,10 @@ internal class RewriteScalarConstant : ConnectorExpressionRule<Constant, Paramet
         if (!DorisScalarValues.isValueType(expression.type)) {
             return Optional.empty()
         }
-        if (!DorisTypeMapping.isWithinTemporalRange(expression.type, value)) {
+        if (!DorisPushdownControllers.isWithinTemporalRange(expression.type, value)) {
             return Optional.empty()
         }
-        if (value is Slice && DorisTypeMapping.containsNulByte(value)) {
+        if (value is Slice && DorisPushdownControllers.containsNulByte(value)) {
             return Optional.empty() // 0x00 hazard policy, same as the domain guard
         }
         val dorisType = DorisScalarValues.dorisTypeFor(expression.type) ?: return Optional.empty()

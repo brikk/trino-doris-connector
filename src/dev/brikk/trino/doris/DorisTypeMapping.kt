@@ -13,19 +13,16 @@
  */
 package dev.brikk.trino.doris
 
-import com.google.common.net.InetAddresses
-import io.airlift.slice.Slice
-import io.airlift.slice.Slices.utf8Slice
-import io.airlift.slice.Slices.wrappedBuffer
+import dev.brikk.trino.doris.DorisPushdownControllers.CHAR_PUSHDOWN
+import dev.brikk.trino.doris.DorisPushdownControllers.IPV4_PUSHDOWN
+import dev.brikk.trino.doris.DorisPushdownControllers.TEMPORAL_PUSHDOWN
+import dev.brikk.trino.doris.DorisPushdownControllers.VARCHAR_PUSHDOWN
 import io.trino.plugin.jdbc.ColumnMapping
 import io.trino.plugin.jdbc.JdbcTypeHandle
 import io.trino.plugin.jdbc.LongReadFunction
 import io.trino.plugin.jdbc.ObjectReadFunction
 import io.trino.plugin.jdbc.ObjectWriteFunction
-import io.trino.plugin.jdbc.PredicatePushdownController
-import io.trino.plugin.jdbc.SliceWriteFunction
 import io.trino.plugin.jdbc.PredicatePushdownController.DISABLE_PUSHDOWN
-import io.trino.plugin.jdbc.PredicatePushdownController.DomainPushdownResult
 import io.trino.plugin.jdbc.PredicatePushdownController.FULL_PUSHDOWN
 import io.trino.plugin.jdbc.StandardColumnMappings.bigintColumnMapping
 import io.trino.plugin.jdbc.StandardColumnMappings.booleanColumnMapping
@@ -52,7 +49,6 @@ import io.trino.spi.StandardErrorCode.NUMERIC_VALUE_OUT_OF_RANGE
 import io.trino.spi.TrinoException
 import io.trino.spi.block.Block
 import io.trino.spi.connector.ConnectorSession
-import io.trino.spi.predicate.Domain
 import io.trino.spi.type.ArrayType
 import io.trino.spi.type.CharType.createCharType
 import io.trino.spi.type.DateType.DATE
@@ -71,10 +67,6 @@ import io.trino.spi.type.VarcharType.createUnboundedVarcharType
 import io.trino.spi.type.VarcharType.createVarcharType
 import java.lang.Float.floatToRawIntBits
 import java.math.BigInteger
-import java.net.Inet4Address
-import java.net.Inet6Address
-import java.net.InetAddress
-import java.sql.PreparedStatement
 import java.sql.ResultSet
 import java.sql.Types
 import java.time.LocalDate
@@ -82,7 +74,6 @@ import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter.ISO_LOCAL_DATE
 import java.time.format.DateTimeParseException
 import java.util.Optional
-import java.util.concurrent.TimeUnit.DAYS
 
 /**
  * Native scalar/array mappings; retained type evidence: `dev-docs/archive/LEDGER-p0-type-and-capability.md` §A.
@@ -282,7 +273,7 @@ internal class DorisTypeMapping(typeManager: TypeManager) {
      * IPV6 wants a colon-hex form and REJECTS dotted-quad. Byte ordering is identical on both
      * engines (unsigned big-endian 16 bytes — [IpAddressType.comparisonOperator] vs Doris
      * IPV4/IPV6 order), so equality/range/IN domains and TopN are exact once rendered in the
-     * TARGET dialect. Bound parameters render via [ipAddressWriteFunction]:
+     * TARGET dialect. Bound parameters render via [DorisIpAddress.writeFunction]:
      * - IPV4 columns: [IPV4_PUSHDOWN] pushes ONLY when every domain value is an IPv4-mapped
      *   address (a real IPv6 literal can never equal an IPV4 column value; kept local — still
      *   correct) so the write function can always emit dotted-quad.
@@ -292,8 +283,8 @@ internal class DorisTypeMapping(typeManager: TypeManager) {
     private fun ipAddressMapping(isV4: Boolean): ColumnMapping {
         return ColumnMapping.sliceMapping(
             ipAddressType,
-            { resultSet, columnIndex -> readIpAddress(resultSet, columnIndex) },
-            ipAddressWriteFunction(isV4),
+            { resultSet, columnIndex -> DorisIpAddress.parse(resultSet.getString(columnIndex)) },
+            DorisIpAddress.writeFunction(isV4),
             if (isV4) IPV4_PUSHDOWN else FULL_PUSHDOWN,
         )
     }
@@ -304,100 +295,8 @@ internal class DorisTypeMapping(typeManager: TypeManager) {
 
         internal const val MAX_DATETIME_PRECISION = 6
 
-        private val MIN_DORIS_DATE = LocalDate.of(0, 1, 1).toEpochDay()
-        private val MAX_DORIS_DATE = LocalDate.of(9999, 12, 31).toEpochDay()
-        private val MIN_DORIS_TIMESTAMP = DAYS.toMicros(MIN_DORIS_DATE)
-        private val DORIS_TIMESTAMP_UPPER_BOUND = DAYS.toMicros(MAX_DORIS_DATE + 1)
-
-        /** Checks Trino epoch days/microseconds without JDBC conversion; other types are unaffected. */
-        internal fun isWithinTemporalRange(type: Type, value: Any?): Boolean = when {
-            type == DATE -> value is Long && value in MIN_DORIS_DATE..MAX_DORIS_DATE
-            type is TimestampType -> value is Long && value >= MIN_DORIS_TIMESTAMP && value < DORIS_TIMESTAMP_UPPER_BOUND
-            else -> true
-        }
-
-        // Doris casts out-of-range temporal parameters to NULL, changing comparison semantics.
-        internal val TEMPORAL_PUSHDOWN = PredicatePushdownController { session, domain ->
-            val inRange = domain.values.valuesProcessor.transform(
-                { ranges ->
-                    ranges.orderedRanges.all { range ->
-                        range.lowValue.map { isWithinTemporalRange(domain.type, it) }.orElse(true) &&
-                            range.highValue.map { isWithinTemporalRange(domain.type, it) }.orElse(true)
-                    }
-                },
-                { discrete -> discrete.values.all { isWithinTemporalRange(domain.type, it) } },
-                { true },
-            )
-            if (inRange) FULL_PUSHDOWN.apply(session, domain) else DISABLE_PUSHDOWN.apply(session, domain)
-        }
-
         /** Max unscaled value representable in DECIMAL(38,0): 10^38 - 1. */
         private val DECIMAL_38_MAX: BigInteger = BigInteger.TEN.pow(MAX_PRECISION).subtract(BigInteger.ONE)
-
-        /**
-         * G5 string-domain policy, mode-resolved per query (probe evidence:
-         * `dev-docs/archive/REPORT-string-comparison-probe-4.1.3.md` — Doris 4.1.3 string comparison is pure
-         * byte semantics, `utf8mb4_0900_bin`):
-         * - NULL_ONLY: null-ness only (exact; no collation hazard).
-         * - GUARDED (default), EVIDENCE-TIERED: domain shapes (`=`, `<>`, `IN`, ranges) over
-         *   non-hazardous literals push FULLY — each shape is byte-exactness-proven by the
-         *   probe report (equality/case/padding/NFC-vs-NFD rows; `<`/`BETWEEN`/`IN` rows;
-         *   byte order == codepoint order), so a retained local re-check is pure overhead
-         *   and blocks LIMIT/TopN collapse. Genuine SUPERSET pre-filters keep their local
-         *   check STRUCTURALLY: the LIKE-prefix range works because the engine derives the
-         *   range domain and retains the un-convertible LIKE expression ITSELF — the
-         *   superset relationship lives between the domain and the LIKE, not inside the
-         *   domain, so full domain pushdown preserves it. Hazards stay fully local:
-         *   0x00-bearing values (defense-in-depth: one transient wrong-empty observation,
-         *   probe report) and CHAR columns (see [CHAR_PUSHDOWN]).
-         * - BINARY/FULL: full pushdown incl. TopN keys and the LIKE rule (byte-exactness
-         *   probe-verified; the known documented divergence is CHAR trailing-space data).
-         */
-        internal val VARCHAR_PUSHDOWN = PredicatePushdownController { session, domain ->
-            when (DorisSessionProperties.getStringPushdownMode(session)) {
-                DorisStringPushdownMode.NULL_ONLY -> nullOnlyResult(session, domain)
-                DorisStringPushdownMode.GUARDED -> guardedResult(session, domain)
-                DorisStringPushdownMode.BINARY, DorisStringPushdownMode.FULL -> FULL_PUSHDOWN.apply(session, domain)
-            }
-        }
-
-        /**
-         * CHAR columns: Doris compares STORED bytes (no padding) while Trino compares
-         * trimmed CHAR values — stored trailing-space data UNDER-returns and is undetectable
-         * from the query (probe report, CHAR row). GUARDED therefore keeps CHAR at null-ness
-         * only; BINARY/FULL push with the divergence documented and tested.
-         */
-        internal val CHAR_PUSHDOWN = PredicatePushdownController { session, domain ->
-            if (DorisSessionProperties.getStringPushdownMode(session).allowsFullStringPushdown) {
-                FULL_PUSHDOWN.apply(session, domain)
-            } else {
-                nullOnlyResult(session, domain)
-            }
-        }
-
-        private fun nullOnlyResult(session: ConnectorSession, domain: Domain): DomainPushdownResult {
-            return if (domain.isOnlyNull || domain.values.isAll) {
-                // Null-ness has no collation hazard; pushing it is exact.
-                DomainPushdownResult(domain, Domain.all(domain.type))
-            } else {
-                DISABLE_PUSHDOWN.apply(session, domain)
-            }
-        }
-
-        private fun guardedResult(session: ConnectorSession, domain: Domain): DomainPushdownResult {
-            if (collectDomainSlices(domain).any(::containsNulByte)) {
-                // hazard skip: a NUL-literal miss was observed once (transient, probe
-                // report) — keeping these fully local is always correct
-                return DISABLE_PUSHDOWN.apply(session, domain)
-            }
-            // evidence-tiered: every remaining domain shape is byte-exactness-proven, so it
-            // pushes FULLY (FULL_PUSHDOWN also handles compaction correctly: an over-wide
-            // simplified domain keeps the original as the remaining filter)
-            return FULL_PUSHDOWN.apply(session, domain)
-        }
-
-        internal fun containsNulByte(slice: Slice): Boolean =
-            (0 until slice.length()).any { slice.getByte(it) == 0.toByte() }
 
         /**
          * LARGEINT (signed 128-bit) -> DECIMAL(38,0): wire value is TEXT (RSMD CHAR), so read
@@ -548,88 +447,6 @@ internal class DorisTypeMapping(typeManager: TypeManager) {
             )
         }
 
-        private fun readIpAddress(resultSet: ResultSet, columnIndex: Int): Slice =
-            ipAddressSlice(resultSet.getString(columnIndex))
-
-        /**
-         * Push an IPV4 domain ONLY when every value is an IPv4-mapped address ([isV4MappedIpSlice]);
-         * a real IPv6 literal can never equal an IPV4 column value, so keeping such a domain local
-         * is both correct and lets [ipAddressWriteFunction] always emit a dotted-quad literal.
-         */
-        internal val IPV4_PUSHDOWN = PredicatePushdownController { session, domain ->
-            if (collectDomainSlices(domain).all(::isV4MappedIpSlice)) {
-                FULL_PUSHDOWN.apply(session, domain)
-            } else {
-                DISABLE_PUSHDOWN.apply(session, domain)
-            }
-        }
-
-        /** Gathers every Slice in a domain (discrete values and range bounds). */
-        internal fun collectDomainSlices(domain: Domain): List<Slice> {
-            val slices = ArrayList<Slice>()
-            domain.values.valuesProcessor.consume(
-                { ranges ->
-                    ranges.orderedRanges.forEach { range ->
-                        range.lowValue.ifPresent { slices.add(it as Slice) }
-                        range.highValue.ifPresent { slices.add(it as Slice) }
-                    }
-                },
-                { discrete -> discrete.values.forEach { slices.add(it as Slice) } },
-                { /* all-or-none carries no values */ },
-            )
-            return slices
-        }
-
-        /** True when a 16-byte Trino IPADDRESS slice is IPv4-mapped (`::ffff:a.b.c.d`). */
-        internal fun isV4MappedIpSlice(slice: Slice): Boolean {
-            if (slice.length() != IP_ADDRESS_BYTES) {
-                return false
-            }
-            for (i in 0 until 10) {
-                if (slice.getByte(i).toInt() != 0) {
-                    return false
-                }
-            }
-            return slice.getByte(10) == 0xFF.toByte() && slice.getByte(11) == 0xFF.toByte()
-        }
-
-        /**
-         * Renders a Trino IPADDRESS (16-byte big-endian slice) into the TARGET Doris dialect:
-         * IPV4 -> dotted-quad of the last 4 bytes (caller guarantees v4-mapped via [IPV4_PUSHDOWN]
-         * / the array-rule guard); IPV6 -> fully-expanded 8-group lowercase colon-hex (built from
-         * bytes, never via Guava, which collapses mapped addresses to a dotted form IPV6 rejects).
-         */
-        internal fun renderIpLiteral(slice: Slice, isV4: Boolean): String {
-            val bytes = slice.getBytes()
-            require(bytes.size == IP_ADDRESS_BYTES) { "IPADDRESS slice must be 16 bytes, was ${bytes.size}" }
-            if (isV4) {
-                require(isV4MappedIpSlice(slice)) { "non-IPv4-mapped IPADDRESS cannot render as a Doris IPV4 literal" }
-                return "${bytes[12].toInt() and 0xFF}.${bytes[13].toInt() and 0xFF}." +
-                    "${bytes[14].toInt() and 0xFF}.${bytes[15].toInt() and 0xFF}"
-            }
-            return (0 until 8).joinToString(":") { group ->
-                val hi = bytes[group * 2].toInt() and 0xFF
-                val lo = bytes[group * 2 + 1].toInt() and 0xFF
-                Integer.toHexString((hi shl 8) or lo)
-            }
-        }
-
-        /** Binds an IPADDRESS parameter as its target-dialect text ([renderIpLiteral]); Doris coerces. */
-        internal fun ipAddressWriteFunction(isV4: Boolean): SliceWriteFunction =
-            SliceWriteFunction { statement: PreparedStatement, index: Int, value: Slice ->
-                statement.setString(index, renderIpLiteral(value, isV4))
-            }
-
-        /** Canonical Doris IPV4/IPV6 text -> Trino IPADDRESS slice; unparseable text fails loud. */
-        internal fun ipAddressSlice(text: String): Slice {
-            val address = try {
-                InetAddresses.forString(text)
-            } catch (e: IllegalArgumentException) {
-                throw TrinoException(GENERIC_INTERNAL_ERROR, "Unreadable Doris IPV4/IPV6 wire value: '$text'", e)
-            }
-            return wrappedBuffer(*toTrinoIpAddressBytes(address))
-        }
-
         /**
          * Extracts the element COLUMN_TYPE from an `array<...>` COLUMN_TYPE string, nesting-
          * aware (`array<array<int(11)>>` -> `array<int(11)>`); malformed text fails loud.
@@ -648,21 +465,6 @@ internal class DorisTypeMapping(typeManager: TypeManager) {
             ObjectWriteFunction.of(Block::class.java) { _, _, _ ->
                 throw TrinoException(NOT_SUPPORTED, "The Doris connector is read-only and does not allow any mutating operation")
             }
-
-        /** Trino IPADDRESS representation: 16 bytes, IPv4 as IPv4-mapped IPv6 (::ffff:a.b.c.d). */
-        private fun toTrinoIpAddressBytes(address: InetAddress): ByteArray {
-            return when (address) {
-                is Inet6Address -> address.address
-                is Inet4Address -> ByteArray(IP_ADDRESS_BYTES).also {
-                    it[10] = 0xFF.toByte()
-                    it[11] = 0xFF.toByte()
-                    address.address.copyInto(it, 12)
-                }
-                else -> throw TrinoException(GENERIC_INTERNAL_ERROR, "Unsupported InetAddress subtype: ${address.javaClass.name}")
-            }
-        }
-
-        private const val IP_ADDRESS_BYTES = 16
 
         /**
          * Builds the [JdbcTypeHandle] for a COLUMN_TYPE string. The COLUMN_TYPE string itself

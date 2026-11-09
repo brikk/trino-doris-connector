@@ -113,7 +113,7 @@ internal class DorisArrayPushdownSupport(
             rejected("NULL needle", expression.toString())
             return null
         }
-        if (!DorisTypeMapping.isWithinTemporalRange(column.elementType, value)) {
+        if (!DorisPushdownControllers.isWithinTemporalRange(column.elementType, value)) {
             rejected("temporal needle outside Doris range", expression.toString())
             return null
         }
@@ -134,7 +134,7 @@ internal class DorisArrayPushdownSupport(
             return true
         }
         val slice = value as? Slice ?: return false
-        return DorisTypeMapping.isV4MappedIpSlice(slice)
+        return DorisIpAddress.isV4Mapped(slice)
     }
 
     /**
@@ -168,7 +168,7 @@ internal class DorisArrayPushdownSupport(
                 continue
             }
             val value = readNativeValue(column.elementType, block, i)
-            if (!DorisTypeMapping.isWithinTemporalRange(column.elementType, value)) {
+            if (!DorisPushdownControllers.isWithinTemporalRange(column.elementType, value)) {
                 rejected("temporal array element outside Doris range", expression.toString())
                 return null
             }

@@ -169,9 +169,9 @@ class TestDorisArrayWireDecoder {
         val element = IpAddressElement(ipAddressType, isV4 = true)
         val values = DorisArrayWireDecoder.decode("""["192.168.1.1", "0.0.0.0", "255.255.255.255"]""", element)
         assertThat(values).containsExactly(
-            DorisTypeMapping.ipAddressSlice("192.168.1.1"),
-            DorisTypeMapping.ipAddressSlice("0.0.0.0"),
-            DorisTypeMapping.ipAddressSlice("255.255.255.255"),
+            DorisIpAddress.parse("192.168.1.1"),
+            DorisIpAddress.parse("0.0.0.0"),
+            DorisIpAddress.parse("255.255.255.255"),
         )
         assertThat(DorisArrayWireDecoder.decode("""["2001:db8::ff00:42:8329", "::", "fe80::1"]""", element))
             .hasSize(3)

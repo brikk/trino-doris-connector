@@ -104,7 +104,7 @@ internal sealed class DorisArrayElement {
     /**
      * IPV4/IPV6 -> IPADDRESS: quoted canonical text whose alphabet excludes all structural chars
      * (spike §4). [isV4] preserves the Doris source type (erased by Trino's single 16-byte
-     * IPADDRESS) so pushdown can render the correct dialect literal ([DorisTypeMapping.renderIpLiteral]).
+     * IPADDRESS) so pushdown can render the correct dialect literal ([DorisIpAddress.renderLiteral]).
      */
     data class IpAddressElement(val ipAddressType: Type, val isV4: Boolean) : DorisArrayElement() {
         override val trinoType: Type get() = ipAddressType
