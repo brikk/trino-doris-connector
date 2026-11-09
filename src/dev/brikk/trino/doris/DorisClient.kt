@@ -192,13 +192,7 @@ class DorisClient @Inject constructor(
         assignments: Map<String, ColumnHandle>,
     ): Optional<ParameterizedExpression> {
         val rewritten = connectorExpressionRewriter.rewrite(session, expression, assignments)
-        if (log.isDebugEnabled) {
-            if (rewritten.isPresent) {
-                log.debug("pushdown accepted: %s -> %s", expression, rewritten.get().expression())
-            } else {
-                log.debug("pushdown rejected (unsupported shape): %s", expression)
-            }
-        }
+        logPushdown("pushdown", "unsupported shape", expression, rewritten.map { it.expression() })
         return rewritten
     }
 
@@ -336,9 +330,7 @@ class DorisClient @Inject constructor(
         }
         return try {
             val remoteTableName = handle.requiredNamedRelation.remoteTableName
-            val remoteSchema = remoteTableName.catalogName
-                .or { remoteTableName.schemaName }
-                .orElseThrow { TrinoException(JDBC_ERROR, "Remote table has no schema/catalog: $remoteTableName") }
+            val remoteSchema = remoteSchemaName(remoteTableName)
             val columns = handle.columns.orElseGet {
                 getColumns(session, handle.requiredNamedRelation.schemaTableName, remoteTableName)
             }
@@ -358,9 +350,7 @@ class DorisClient @Inject constructor(
     ): List<JdbcColumnHandle> {
         // Metadata truth = information_schema.columns.COLUMN_TYPE (ledger global rule 2).
         // TABLE_SCHEMA in Doris information_schema is the database, i.e. the JDBC catalog.
-        val remoteSchema = remoteTableName.catalogName
-            .or { remoteTableName.schemaName }
-            .orElseThrow { TrinoException(JDBC_ERROR, "Remote table has no schema/catalog: $remoteTableName") }
+        val remoteSchema = remoteSchemaName(remoteTableName)
         try {
             connectionFactory.openConnection(session).use { connection ->
                 connection.prepareStatement(COLUMNS_QUERY).use { statement ->
@@ -375,6 +365,11 @@ class DorisClient @Inject constructor(
             throw TrinoException(JDBC_ERROR, e)
         }
     }
+
+    private fun remoteSchemaName(remoteTableName: RemoteTableName): String =
+        remoteTableName.catalogName
+            .or { remoteTableName.schemaName }
+            .orElseThrow { TrinoException(JDBC_ERROR, "Remote table has no schema/catalog: $remoteTableName") }
 
     private fun readColumns(session: ConnectorSession, schemaTableName: SchemaTableName, resultSet: ResultSet): List<JdbcColumnHandle> {
         val columns = ImmutableList.builder<JdbcColumnHandle>()
@@ -593,13 +588,7 @@ class DorisClient @Inject constructor(
         assignments: Map<String, ColumnHandle>,
     ): Optional<JdbcExpression> {
         val rewritten = projectFunctionRewriter.rewrite(session, handle, expression, assignments)
-        if (log.isDebugEnabled) {
-            if (rewritten.isPresent) {
-                log.debug("projection pushdown accepted: %s -> %s", expression, rewritten.get().expression)
-            } else {
-                log.debug("projection pushdown rejected (unsupported shape): %s", expression)
-            }
-        }
+        logPushdown("projection pushdown", "unsupported shape", expression, rewritten.map { it.expression })
         return rewritten
     }
 
@@ -609,14 +598,16 @@ class DorisClient @Inject constructor(
         assignments: Map<String, ColumnHandle>,
     ): Optional<JdbcExpression> {
         val rewritten = aggregateFunctionRewriter.rewrite(session, aggregate, assignments)
-        if (log.isDebugEnabled) {
-            if (rewritten.isPresent) {
-                log.debug("aggregate pushdown accepted: %s -> %s", aggregate, rewritten.get().expression)
-            } else {
-                log.debug("aggregate pushdown rejected (no verified family): %s", aggregate)
-            }
-        }
+        logPushdown("aggregate pushdown", "no verified family", aggregate, rewritten.map { it.expression })
         return rewritten
+    }
+
+    private fun logPushdown(kind: String, rejectionReason: String, subject: Any, sql: Optional<String>) {
+        if (sql.isPresent) {
+            log.debug("%s accepted: %s -> %s", kind, subject, sql.get())
+        } else {
+            log.debug("%s rejected (%s): %s", kind, rejectionReason, subject)
+        }
     }
 
     /**
