@@ -21,11 +21,9 @@ import io.trino.plugin.base.expression.ConnectorExpressionPatterns.functionName
 import io.trino.plugin.base.expression.ConnectorExpressionPatterns.type
 import io.trino.plugin.base.expression.ConnectorExpressionRule
 import io.trino.plugin.base.expression.ConnectorExpressionRule.RewriteContext
-import io.trino.plugin.base.expression.ConnectorExpressionRewriter
 import io.trino.plugin.jdbc.QueryParameter
 import io.trino.plugin.jdbc.expression.ParameterizedExpression
 import io.trino.spi.expression.Call
-import io.trino.spi.expression.ConnectorExpression
 import io.trino.spi.expression.FunctionName
 import io.trino.spi.expression.StandardFunctions.AND_FUNCTION_NAME
 import io.trino.spi.expression.StandardFunctions.NOT_FUNCTION_NAME
@@ -53,17 +51,11 @@ import java.util.Optional
  * proven in `TestDorisP2bPushdown.testNotContainsSemanticsPreserved`). The composition rules
  * therefore rewrite children through [valueSafeRewriter] — a rewriter that simply does not
  * contain the predicate-level rules — never through the enclosing rewriter's defaultRewrite.
+ *
+ * `$not(value-safe)` -> `(NOT <child>)`.
  */
-internal class DorisValueSafeRewriter {
-    lateinit var rewriter: ConnectorExpressionRewriter<ParameterizedExpression>
-
-    fun rewrite(context: RewriteContext<ParameterizedExpression>, expression: ConnectorExpression): Optional<ParameterizedExpression> =
-        rewriter.rewrite(context.session, expression, context.assignments)
-}
-
-/** `$not(value-safe)` -> `(NOT <child>)`. */
 internal class RewriteValueSafeNot(
-    private val valueSafeRewriter: DorisValueSafeRewriter,
+    private val valueSafeRewriter: DorisRewriterHolder,
 ) : ConnectorExpressionRule<Call, ParameterizedExpression> {
     override fun getPattern(): Pattern<Call> = PATTERN
 
@@ -82,7 +74,7 @@ internal class RewriteValueSafeNot(
 
 /** `$and(value-safe...)` / `$or(value-safe...)` (variadic) -> `(<child> AND/OR <child> ...)`. */
 internal class RewriteValueSafeLogical(
-    private val valueSafeRewriter: DorisValueSafeRewriter,
+    private val valueSafeRewriter: DorisRewriterHolder,
 ) : ConnectorExpressionRule<Call, ParameterizedExpression> {
     override fun getPattern(): Pattern<Call> = PATTERN
 

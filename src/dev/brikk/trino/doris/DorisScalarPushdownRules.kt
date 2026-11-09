@@ -22,7 +22,6 @@ import io.trino.plugin.base.expression.ConnectorExpressionPatterns.call
 import io.trino.plugin.base.expression.ConnectorExpressionPatterns.constant
 import io.trino.plugin.base.expression.ConnectorExpressionPatterns.functionName
 import io.trino.plugin.base.expression.ConnectorExpressionPatterns.type
-import io.trino.plugin.base.expression.ConnectorExpressionRewriter
 import io.trino.plugin.base.expression.ConnectorExpressionRule
 import io.trino.plugin.base.expression.ConnectorExpressionRule.RewriteContext
 import io.trino.plugin.jdbc.JdbcColumnHandle
@@ -230,14 +229,6 @@ internal class RewriteCharLength : ConnectorExpressionRule<Call, ParameterizedEx
     }
 }
 
-/** Holder wiring the scalar rewriter into rules that need to rewrite through it. */
-internal class DorisScalarRewriterHolder {
-    lateinit var rewriter: ConnectorExpressionRewriter<ParameterizedExpression>
-
-    fun rewrite(context: RewriteContext<ParameterizedExpression>, expression: ConnectorExpression): Optional<ParameterizedExpression> =
-        rewriter.rewrite(context.session, expression, context.assignments)
-}
-
 /**
  * Predicate bridge: `<scalar> <cmp> <scalar>` where at least one side is a FUNCTION shape
  * (plain comparisons can arrive, but are declined here in favor of domain handling). Both
@@ -247,7 +238,7 @@ internal class DorisScalarRewriterHolder {
  * identically on both engines under a top-level conjunct.
  */
 internal class RewriteScalarComparisonBridge(
-    private val scalar: DorisScalarRewriterHolder,
+    private val scalar: DorisRewriterHolder,
 ) : ConnectorExpressionRule<Call, ParameterizedExpression> {
     override fun getPattern(): Pattern<Call> = PATTERN
 
@@ -290,7 +281,7 @@ internal class RewriteScalarComparisonBridge(
 
 /** Predicate bridge: `$is_null(<scalar function shape>)` -> `(<expr> IS NULL)` (value-identical child). */
 internal class RewriteScalarIsNullBridge(
-    private val scalar: DorisScalarRewriterHolder,
+    private val scalar: DorisRewriterHolder,
 ) : ConnectorExpressionRule<Call, ParameterizedExpression> {
     override fun getPattern(): Pattern<Call> = PATTERN
 
@@ -376,7 +367,7 @@ internal class RewriteStartsWith(
  * `GROUP BY year(...)` etc. compose with aggregate pushdown.
  */
 internal class RewriteScalarProjection(
-    private val scalar: DorisScalarRewriterHolder,
+    private val scalar: DorisRewriterHolder,
 ) : io.trino.plugin.base.projection.ProjectFunctionRule<io.trino.plugin.jdbc.JdbcExpression, ParameterizedExpression> {
     override fun getPattern(): Pattern<out ConnectorExpression> = call()
 

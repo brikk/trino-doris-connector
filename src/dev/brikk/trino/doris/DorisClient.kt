@@ -123,7 +123,7 @@ class DorisClient @Inject constructor(
      * - VALUE-SAFE tier: `array_position` comparisons (value-identical on both engines,
      *   [DorisPushdownEvidence.ARRAY_POSITION]) plus NOT/AND/OR composition over that tier
      *   only — safe because Doris's three-valued logic is live-proven identical to Trino's
-     *   (see [DorisValueSafeRewriter] and the P3 composition pins).
+     *   (see [RewriteValueSafeNot] and the P3 composition pins).
      * - PREDICATE-LEVEL tier: `contains` / `arrays_overlap`, whose NULL cells differ at
      *   value level (Trino NULL vs Doris 0/1). They may ONLY surface as top-level WHERE
      *   conjuncts and are structurally excluded from composition: the composition rules
@@ -139,7 +139,7 @@ class DorisClient @Inject constructor(
      * coalesce/nullif/year..second/length over the closed value-type set.
      * Shared by the predicate bridges below and the projection path.
      */
-    private val scalarRewriterHolder = DorisScalarRewriterHolder().also { holder ->
+    private val scalarRewriterHolder = DorisRewriterHolder().also { holder ->
         holder.rewriter = JdbcConnectorExpressionRewriterBuilder.newBuilder()
             .add(RewriteScalarVariable(typeMapping, ::quoted))
             .add(RewriteScalarConstant())
@@ -154,7 +154,7 @@ class DorisClient @Inject constructor(
 
     private val connectorExpressionRewriter: ConnectorExpressionRewriter<ParameterizedExpression> = run {
         val support = DorisArrayPushdownSupport(typeMapping, ::quoted)
-        val valueSafe = DorisValueSafeRewriter()
+        val valueSafe = DorisRewriterHolder()
         val valueSafeRules = listOf(
             RewriteArrayPositionComparison(support),
             // cardinality -> array_size: value-identical on every reachable cell (P5 pins),
