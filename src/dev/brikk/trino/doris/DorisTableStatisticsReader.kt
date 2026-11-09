@@ -28,6 +28,8 @@ import io.trino.spi.type.SmallintType
 import io.trino.spi.type.TinyintType
 import java.math.BigDecimal
 import java.sql.Connection
+import java.sql.ResultSet
+import java.sql.SQLException
 
 /**
  * Doris 4.1.3 statistics reader (PLAN P4 tail "remote statistics"; SR K12 pattern with the
@@ -112,35 +114,37 @@ internal class DorisTableStatisticsReader(
     private fun readColumnStats(connection: Connection, remoteSchema: String, remoteTable: String): Map<String, ColumnStatsRow> {
         val byColumn = LinkedHashMap<String, ColumnStatsRow>()
         val sql = "SHOW COLUMN CACHED STATS ${quote(remoteSchema)}.${quote(remoteTable)}"
-        runCatching {
+        try {
             connection.createStatement().use { statement ->
-                statement.executeQuery(sql).use { resultSet ->
-                    while (resultSet.next()) {
-                        // SHOW emits separate visible-index rows in unspecified order. The
-                        // base index name is the remote table name, including after rename.
-                        val name = resultSet.getString("column_name")
-                        if (name == null || resultSet.getString("index_name") != remoteTable) {
-                            continue
-                        }
-                        byColumn.putIfAbsent(
-                            name,
-                            ColumnStatsRow(
-                                count = resultSet.getString("count")?.toDoubleOrNull(),
-                                ndv = resultSet.getString("ndv")?.toDoubleOrNull(),
-                                numNull = resultSet.getString("num_null")?.toDoubleOrNull(),
-                                dataSize = resultSet.getString("data_size")?.toDoubleOrNull(),
-                                min = resultSet.getString("min"),
-                                max = resultSet.getString("max"),
-                            ),
-                        )
-                    }
-                }
+                statement.executeQuery(sql).use { resultSet -> collectBaseIndexStats(resultSet, remoteTable, byColumn) }
             }
-        }.onFailure { e ->
+        } catch (e: SQLException) {
             // e.g. views — column stats simply unavailable; row count may still be usable
             log.debug("SHOW COLUMN CACHED STATS failed for %s.%s: %s", remoteSchema, remoteTable, e.message)
         }
         return byColumn
+    }
+
+    private fun collectBaseIndexStats(resultSet: ResultSet, remoteTable: String, byColumn: MutableMap<String, ColumnStatsRow>) {
+        while (resultSet.next()) {
+            // SHOW emits separate visible-index rows in unspecified order. The
+            // base index name is the remote table name, including after rename.
+            val name = resultSet.getString("column_name")
+            if (name == null || resultSet.getString("index_name") != remoteTable) {
+                continue
+            }
+            byColumn.putIfAbsent(
+                name,
+                ColumnStatsRow(
+                    count = resultSet.getString("count")?.toDoubleOrNull(),
+                    ndv = resultSet.getString("ndv")?.toDoubleOrNull(),
+                    numNull = resultSet.getString("num_null")?.toDoubleOrNull(),
+                    dataSize = resultSet.getString("data_size")?.toDoubleOrNull(),
+                    min = resultSet.getString("min"),
+                    max = resultSet.getString("max"),
+                ),
+            )
+        }
     }
 
     private fun toColumnStatistics(column: JdbcColumnHandle, stats: ColumnStatsRow, rowCount: Double): ColumnStatistics {
@@ -193,7 +197,11 @@ internal class DorisTableStatisticsReader(
         // BigDecimal accepts every plain numeric rendering Doris emits for the allowed
         // families (incl. LARGEINT/DECIMAL(76) extremes) and REJECTS NaN/Infinity/∞/quoted
         // text — exactly the fail-closed contract we want.
-        val value = runCatching { BigDecimal(text).toDouble() }.getOrNull() ?: return null
+        val value = try {
+            BigDecimal(text).toDouble()
+        } catch (e: NumberFormatException) {
+            return null
+        }
         return if (value.isFinite()) value else null
     }
 
