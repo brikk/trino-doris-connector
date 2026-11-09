@@ -128,7 +128,7 @@ internal class RewriteScalarConstant : ConnectorExpressionRule<Constant, Paramet
         if (!DorisTypeMapping.isWithinTemporalRange(expression.type, value)) {
             return Optional.empty()
         }
-        if (value is Slice && sliceContainsNulByte(value)) {
+        if (value is Slice && DorisTypeMapping.containsNulByte(value)) {
             return Optional.empty() // 0x00 hazard policy, same as the domain guard
         }
         val dorisType = DorisScalarValues.dorisTypeFor(expression.type) ?: return Optional.empty()
@@ -138,11 +138,6 @@ internal class RewriteScalarConstant : ConnectorExpressionRule<Constant, Paramet
                 listOf(QueryParameter(DorisTypeMapping.toTypeHandle(dorisType), expression.type, Optional.of(value))),
             ),
         )
-    }
-
-    companion object {
-        internal fun sliceContainsNulByte(slice: Slice): Boolean =
-            (0 until slice.length()).any { slice.getByte(it) == 0.toByte() }
     }
 }
 

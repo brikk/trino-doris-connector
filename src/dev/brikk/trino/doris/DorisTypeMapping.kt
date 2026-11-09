@@ -392,7 +392,7 @@ internal class DorisTypeMapping(typeManager: TypeManager) {
         }
 
         private fun guardedResult(session: ConnectorSession, domain: Domain): DomainPushdownResult {
-            if (domainValuesContainNulByte(domain)) {
+            if (collectDomainSlices(domain).any(::containsNulByte)) {
                 // hazard skip: a NUL-literal miss was observed once (transient, probe
                 // report) — keeping these fully local is always correct
                 return DISABLE_PUSHDOWN.apply(session, domain)
@@ -403,21 +403,8 @@ internal class DorisTypeMapping(typeManager: TypeManager) {
             return FULL_PUSHDOWN.apply(session, domain)
         }
 
-        /** Scans every domain value (discrete values and range bounds) for a 0x00 byte. */
-        internal fun domainValuesContainNulByte(domain: Domain): Boolean {
-            val slices = ArrayList<Slice>()
-            domain.values.valuesProcessor.consume(
-                { ranges ->
-                    ranges.orderedRanges.forEach { range ->
-                        range.lowValue.ifPresent { slices.add(it as Slice) }
-                        range.highValue.ifPresent { slices.add(it as Slice) }
-                    }
-                },
-                { discrete -> discrete.values.forEach { slices.add(it as Slice) } },
-                { /* all-or-none carries no values */ },
-            )
-            return slices.any { slice -> (0 until slice.length()).any { slice.getByte(it) == 0.toByte() } }
-        }
+        internal fun containsNulByte(slice: Slice): Boolean =
+            (0 until slice.length()).any { slice.getByte(it) == 0.toByte() }
 
         /**
          * LARGEINT (signed 128-bit) -> DECIMAL(38,0): wire value is TEXT (RSMD CHAR), so read
