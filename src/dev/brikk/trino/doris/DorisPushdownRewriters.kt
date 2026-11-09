@@ -113,7 +113,7 @@ internal class DorisPushdownRewriters(typeMapping: DorisTypeMapping, quote: (Str
         ImmutableSet.of<ProjectFunctionRule<JdbcExpression, ParameterizedExpression>>(
             RewriteCastDatetimeToDate(),
             RewriteDateTrunc(),
-            RewriteScalarProjection(scalar),
+            RewriteScalarProjection(),
         ),
     )
 

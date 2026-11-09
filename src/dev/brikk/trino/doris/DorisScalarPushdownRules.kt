@@ -361,9 +361,7 @@ internal class RewriteStartsWith(
  * the Trino expression type exactly) — this is what lets `GROUP BY coalesce(...)`,
  * `GROUP BY year(...)` etc. compose with aggregate pushdown.
  */
-internal class RewriteScalarProjection(
-    private val scalar: DorisRewriterHolder,
-) : io.trino.plugin.base.projection.ProjectFunctionRule<io.trino.plugin.jdbc.JdbcExpression, ParameterizedExpression> {
+internal class RewriteScalarProjection : io.trino.plugin.base.projection.ProjectFunctionRule<io.trino.plugin.jdbc.JdbcExpression, ParameterizedExpression> {
     override fun getPattern(): Pattern<out ConnectorExpression> = call()
 
     override fun rewrite(
