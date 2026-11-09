@@ -34,13 +34,7 @@ import io.trino.spi.expression.ConnectorExpression
 import io.trino.spi.expression.Constant
 import io.trino.spi.expression.FunctionName
 import io.trino.spi.expression.StandardFunctions.COALESCE_FUNCTION_NAME
-import io.trino.spi.expression.StandardFunctions.EQUAL_OPERATOR_FUNCTION_NAME
-import io.trino.spi.expression.StandardFunctions.GREATER_THAN_OPERATOR_FUNCTION_NAME
-import io.trino.spi.expression.StandardFunctions.GREATER_THAN_OR_EQUAL_OPERATOR_FUNCTION_NAME
 import io.trino.spi.expression.StandardFunctions.IS_NULL_FUNCTION_NAME
-import io.trino.spi.expression.StandardFunctions.LESS_THAN_OPERATOR_FUNCTION_NAME
-import io.trino.spi.expression.StandardFunctions.LESS_THAN_OR_EQUAL_OPERATOR_FUNCTION_NAME
-import io.trino.spi.expression.StandardFunctions.NOT_EQUAL_OPERATOR_FUNCTION_NAME
 import io.trino.spi.expression.StandardFunctions.NULLIF_FUNCTION_NAME
 import io.trino.spi.expression.Variable
 import io.trino.spi.type.BigintType.BIGINT
@@ -277,7 +271,7 @@ internal class RewriteScalarComparisonBridge(
         if (leftSql.isEmpty || rightSql.isEmpty) {
             return Optional.empty()
         }
-        val operator = OPERATORS.getValue(expression.functionName)
+        val operator = COMPARISON_OPERATORS.getValue(expression.functionName)
         return Optional.of(
             ParameterizedExpression(
                 "(${leftSql.get().expression()} $operator ${rightSql.get().expression()})",
@@ -287,17 +281,8 @@ internal class RewriteScalarComparisonBridge(
     }
 
     companion object {
-        private val OPERATORS: Map<FunctionName, String> = mapOf(
-            EQUAL_OPERATOR_FUNCTION_NAME to "=",
-            NOT_EQUAL_OPERATOR_FUNCTION_NAME to "<>",
-            LESS_THAN_OPERATOR_FUNCTION_NAME to "<",
-            LESS_THAN_OR_EQUAL_OPERATOR_FUNCTION_NAME to "<=",
-            GREATER_THAN_OPERATOR_FUNCTION_NAME to ">",
-            GREATER_THAN_OR_EQUAL_OPERATOR_FUNCTION_NAME to ">=",
-        )
-
         private val PATTERN: Pattern<Call> = call()
-            .with(functionName().matching { it in OPERATORS.keys })
+            .with(functionName().matching { it in COMPARISON_OPERATORS.keys })
             .with(type().equalTo(BOOLEAN))
             .with(argumentCount().equalTo(2))
     }

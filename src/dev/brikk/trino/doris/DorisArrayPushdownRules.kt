@@ -31,12 +31,6 @@ import io.trino.spi.expression.ConnectorExpression
 import io.trino.spi.expression.Constant
 import io.trino.spi.expression.FunctionName
 import io.trino.spi.expression.StandardFunctions.BETWEEN_FUNCTION_NAME
-import io.trino.spi.expression.StandardFunctions.EQUAL_OPERATOR_FUNCTION_NAME
-import io.trino.spi.expression.StandardFunctions.GREATER_THAN_OPERATOR_FUNCTION_NAME
-import io.trino.spi.expression.StandardFunctions.GREATER_THAN_OR_EQUAL_OPERATOR_FUNCTION_NAME
-import io.trino.spi.expression.StandardFunctions.LESS_THAN_OPERATOR_FUNCTION_NAME
-import io.trino.spi.expression.StandardFunctions.LESS_THAN_OR_EQUAL_OPERATOR_FUNCTION_NAME
-import io.trino.spi.expression.StandardFunctions.NOT_EQUAL_OPERATOR_FUNCTION_NAME
 import io.airlift.slice.Slice
 import io.trino.spi.expression.Variable
 import io.trino.spi.block.Block
@@ -360,7 +354,7 @@ internal class RewriteArrayPositionComparison(
         val operator = COMPARISON_OPERATORS.getValue(expression.functionName)
         val (positionCall, bound, effectiveOperator) = when {
             leftArgument is Call && rightArgument is Constant -> Triple(leftArgument, rightArgument, operator)
-            leftArgument is Constant && rightArgument is Call -> Triple(rightArgument, leftArgument, flip(operator))
+            leftArgument is Constant && rightArgument is Call -> Triple(rightArgument, leftArgument, flipComparison(operator))
             else -> return Optional.empty()
         }
         return rewritePositionComparison(positionCall, bound, effectiveOperator, context)
@@ -392,24 +386,6 @@ internal class RewriteArrayPositionComparison(
 
     companion object {
         private val ARRAY_POSITION = FunctionName("array_position")
-
-        private val COMPARISON_OPERATORS: Map<FunctionName, String> = mapOf(
-            EQUAL_OPERATOR_FUNCTION_NAME to "=",
-            NOT_EQUAL_OPERATOR_FUNCTION_NAME to "<>",
-            LESS_THAN_OPERATOR_FUNCTION_NAME to "<",
-            LESS_THAN_OR_EQUAL_OPERATOR_FUNCTION_NAME to "<=",
-            GREATER_THAN_OPERATOR_FUNCTION_NAME to ">",
-            GREATER_THAN_OR_EQUAL_OPERATOR_FUNCTION_NAME to ">=",
-        )
-
-        /** Operator adjustment when the constant is on the LEFT (`n < array_position(...)`). */
-        private fun flip(operator: String): String = when (operator) {
-            "<" -> ">"
-            "<=" -> ">="
-            ">" -> "<"
-            ">=" -> "<="
-            else -> operator // = and <> are symmetric
-        }
 
         private val PATTERN: Pattern<Call> = call()
             .with(functionName().matching { it in COMPARISON_OPERATORS.keys })
@@ -449,7 +425,7 @@ internal class RewriteCardinalityComparison(
         val operator = COMPARISON_OPERATORS.getValue(expression.functionName)
         val (cardinalityCall, bound, effectiveOperator) = when {
             left is Call && right is Constant -> Triple(left, right, operator)
-            left is Constant && right is Call -> Triple(right, left, flip(operator))
+            left is Constant && right is Call -> Triple(right, left, flipComparison(operator))
             else -> return Optional.empty()
         }
         val column = pushableCardinalityColumn(cardinalityCall, context) ?: return Optional.empty()
@@ -478,23 +454,6 @@ internal class RewriteCardinalityComparison(
 
     companion object {
         private val CARDINALITY = FunctionName("cardinality")
-
-        private val COMPARISON_OPERATORS: Map<FunctionName, String> = mapOf(
-            EQUAL_OPERATOR_FUNCTION_NAME to "=",
-            NOT_EQUAL_OPERATOR_FUNCTION_NAME to "<>",
-            LESS_THAN_OPERATOR_FUNCTION_NAME to "<",
-            LESS_THAN_OR_EQUAL_OPERATOR_FUNCTION_NAME to "<=",
-            GREATER_THAN_OPERATOR_FUNCTION_NAME to ">",
-            GREATER_THAN_OR_EQUAL_OPERATOR_FUNCTION_NAME to ">=",
-        )
-
-        private fun flip(operator: String): String = when (operator) {
-            "<" -> ">"
-            "<=" -> ">="
-            ">" -> "<"
-            ">=" -> "<="
-            else -> operator // = and <> are symmetric
-        }
 
         private val PATTERN: Pattern<Call> = call()
             .with(functionName().matching { it in COMPARISON_OPERATORS.keys || it == BETWEEN_FUNCTION_NAME })
