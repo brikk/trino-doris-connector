@@ -125,6 +125,38 @@ open class TestDorisHaReadCancellation {
     }
 
     @Test
+    fun testReadOnlyConnectionsAllowScanSessionSetup() {
+        for (url in urls.values) {
+            readConnection(url).use { connection ->
+                connection.isReadOnly = true
+                connection.createStatement().use { statement ->
+                    statement.execute("SET query_timeout = 30")
+                    statement.executeQuery("SELECT @@query_timeout").use { result ->
+                        assertThat(result.next()).isTrue()
+                        assertThat(result.getInt(1)).isEqualTo(30)
+                    }
+                }
+            }
+        }
+    }
+
+    @Test
+    fun testReplicationReadOnlyRoutingInProductionOrder() {
+        val url = "jdbc:mysql:replication://127.0.0.1:9130,172.30.81.10:9030/"
+        val pinnedHost = readConnection(url).use { connection ->
+            connection.isReadOnly = true
+            statementHost(connection)
+        }
+        val plainHost = DorisTestSafety.connectSingle(url, properties()).use { connection ->
+            connection.isReadOnly = true
+            statementHost(connection)
+        }
+        println("replication-read-only|pinned=$pinnedHost|plain=$plainHost")
+        assertThat(pinnedHost).isEqualTo("127.0.0.1:9130")
+        assertThat(plainHost).isEqualTo("172.30.81.10:9030")
+    }
+
+    @Test
     fun testPreparedScanKeepsItsPhysicalTargetAfterLogicalRoutingChanges() {
         val url = "jdbc:mysql:replication://127.0.0.1:9130,172.30.81.10:9030/"
         val owner = DorisTestSafety.connectSingle(url, properties())
@@ -223,6 +255,15 @@ open class TestDorisHaReadCancellation {
             }
         }
     }
+
+    private fun statementHost(connection: Connection): String =
+        connection.prepareStatement("SELECT 1").use { statement ->
+            statement.executeQuery().use { result ->
+                assertThat(result.next()).isTrue()
+                assertThat(result.getInt(1)).isEqualTo(1)
+            }
+            statement.unwrap(JdbcStatement::class.java).query.session.hostInfo.hostPortPair
+        }
 
     private fun assertCurrentConnection(owner: Connection, threadId: Long) {
         owner.createStatement().use { statement ->
