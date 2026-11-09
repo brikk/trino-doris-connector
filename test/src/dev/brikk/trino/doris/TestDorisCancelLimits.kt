@@ -190,12 +190,22 @@ class TestDorisCancelLimits {
 
     @Test
     fun testUncheckedProbeFailureReleasesAdmission() {
+        assertProbeFailureReleasesAdmission(IllegalStateException("unchecked probe failure"))
+    }
+
+    @Test
+    fun testErrorDuringProbeReleasesAdmission() {
+        assertThatThrownBy { assertProbeFailureReleasesAdmission(AssertionError("unchecked probe failure")) }
+            .isInstanceOf(AssertionError::class.java).hasMessage("unchecked probe failure")
+    }
+
+    private fun assertProbeFailureReleasesAdmission(failure: Throwable) {
         val slots = Semaphore(1)
         val closes = AtomicInteger()
         val connection = jdbcProxy(Connection::class.java) { method, _ ->
             when (method) {
                 "setNetworkTimeout" -> null
-                "createStatement" -> throw AssertionError("unchecked probe failure")
+                "createStatement" -> throw failure
                 "close" -> { closes.incrementAndGet(); null }
                 else -> throw AssertionError("unexpected helper call: $method")
             }
@@ -203,11 +213,13 @@ class TestDorisCancelLimits {
         val cancel = resources.newCancel(
             { _, _ -> connection }, enabled = true, executor = directExecutor(), requestSlots = slots,
         )
-        assertThatThrownBy { cancel.cancel(session, marker) { false } }
-            .isInstanceOf(AssertionError::class.java).hasMessage("unchecked probe failure")
-        assertThat(slots.availablePermits()).isEqualTo(1)
-        assertThat(closes.get()).isEqualTo(1)
-        assertThat(failures).hasSize(1)
+        try {
+            cancel.cancel(session, marker) { false }
+        } finally {
+            assertThat(slots.availablePermits()).isEqualTo(1)
+            assertThat(closes.get()).isEqualTo(1)
+            assertThat(failures).containsExactly(failure)
+        }
     }
 
     @Test
