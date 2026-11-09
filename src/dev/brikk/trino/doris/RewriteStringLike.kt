@@ -105,11 +105,8 @@ internal class RewriteStringLike(
             return null
         }
         val column = context.getAssignment(variable.name) as? JdbcColumnHandle ?: return null
-        val columnType = column.jdbcTypeHandle.jdbcTypeName().orElse(null) ?: return null
-        return when (DorisColumnType.parse(columnType).baseName) {
-            "varchar", "string", "text" -> column
-            else -> null // char excluded (trailing-space divergence); everything else is not a string column
-        }
+        // char excluded (trailing-space divergence); everything else is not a string column
+        return column.takeIf(DorisColumnType::isNativeString)
     }
 
     private fun varcharConstant(argument: io.trino.spi.expression.ConnectorExpression): Slice? {

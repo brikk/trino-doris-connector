@@ -508,7 +508,7 @@ class DorisClient @Inject constructor(
      * (dev-docs/archive/REPORT-string-comparison-probe-4.1.3.md "ORDER BY").
      */
     private fun isPushableSortKey(session: ConnectorSession, column: JdbcColumnHandle): Boolean = when {
-        column.columnType is VarcharType -> isNativeVarchar(column) &&
+        column.columnType is VarcharType -> DorisColumnType.isNativeString(column) &&
             DorisSessionProperties.getStringPushdownMode(session).allowsFullStringPushdown
         // IPADDRESS: Doris IPV4/IPV6 order == Trino's unsigned big-endian 16-byte order
         // (IpAddressType.comparisonOperator), live-proven byte-exact; NULLS FIRST/LAST native.
@@ -646,7 +646,7 @@ class DorisClient @Inject constructor(
             .firstOrNull {
                 isDecimal256(it) ||
                     (!DorisAggregatePushdown.isExactPushableKeyType(it.columnType) &&
-                        !isNativeVarchar(it))
+                        !DorisColumnType.isNativeString(it))
             }
         if (unsupportedKey != null) {
             log.debug(
@@ -658,11 +658,6 @@ class DorisClient @Inject constructor(
         }
         return true
     }
-
-    private fun isNativeVarchar(column: JdbcColumnHandle): Boolean =
-        column.columnType is VarcharType && column.jdbcTypeHandle.jdbcTypeName()
-            .map { DorisColumnType.parse(it).baseName in setOf("varchar", "string", "text") }
-            .orElse(false)
 
     private fun isDecimal256(column: JdbcColumnHandle): Boolean =
         column.jdbcTypeHandle.jdbcTypeName()

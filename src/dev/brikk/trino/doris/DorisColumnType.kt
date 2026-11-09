@@ -13,8 +13,10 @@
  */
 package dev.brikk.trino.doris
 
-import io.trino.spi.TrinoException
+import io.trino.plugin.jdbc.JdbcColumnHandle
 import io.trino.spi.StandardErrorCode.GENERIC_INTERNAL_ERROR
+import io.trino.spi.TrinoException
+import io.trino.spi.type.VarcharType
 import java.util.Locale
 
 /**
@@ -51,6 +53,17 @@ internal data class DorisColumnType(
             }
             return DorisColumnType(baseName, arguments, raw)
         }
+
+        /**
+         * True for a VARCHAR column backed by a Doris string type. Decimal256 and complex types
+         * rendered as text are also VARCHAR in Trino but do not compare or aggregate as strings.
+         */
+        fun isNativeString(column: JdbcColumnHandle): Boolean =
+            column.columnType is VarcharType && column.jdbcTypeHandle.jdbcTypeName()
+                .map { parse(it).baseName in NATIVE_STRING_TYPES }
+                .orElse(false)
+
+        private val NATIVE_STRING_TYPES = setOf("varchar", "string", "text")
 
         private fun parseArguments(lower: String, openParen: Int, columnType: String): List<Int> {
             val close = lower.indexOf(')', openParen)

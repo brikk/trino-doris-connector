@@ -111,8 +111,7 @@ internal class RewriteScalarVariable(
         }
         val column = context.getAssignment(expression.name) as? JdbcColumnHandle ?: return Optional.empty()
         val remoteType = column.jdbcTypeHandle.jdbcTypeName().orElse(null) ?: return Optional.empty()
-        // Textualized DECIMAL/ARRAY/MAP/STRUCT values are not native strings in Doris.
-        if (expression.type is VarcharType && DorisColumnType.parse(remoteType).baseName !in setOf("varchar", "string", "text")) {
+        if (expression.type is VarcharType && !DorisColumnType.isNativeString(column)) {
             return Optional.empty()
         }
         val mappedType = typeMapping.toColumnMapping(context.session, remoteType).map { it.type }.orElse(null)
@@ -355,8 +354,7 @@ internal class RewriteStartsWith(
             return Optional.empty()
         }
         val column = context.getAssignment(variable.name) as? JdbcColumnHandle ?: return Optional.empty()
-        val columnType = column.jdbcTypeHandle.jdbcTypeName().orElse(null) ?: return Optional.empty()
-        if (DorisColumnType.parse(columnType).baseName !in setOf("varchar", "string", "text")) {
+        if (!DorisColumnType.isNativeString(column)) {
             return Optional.empty() // char excluded (trailing-space divergence)
         }
         val prefix = (expression.arguments[1] as? Constant)?.takeIf { it.type is VarcharType }?.value as? Slice
