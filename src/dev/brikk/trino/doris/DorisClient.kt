@@ -419,7 +419,7 @@ class DorisClient @Inject constructor(
      * ordered rows).
      */
     override fun supportsTopN(session: ConnectorSession, handle: JdbcTableHandle, sortOrder: List<JdbcSortItem>): Boolean =
-        sortOrder.all { !isDecimal256(it.column()) && isPushableSortKey(session, it.column()) }
+        sortOrder.all { !isDecimal256(it.column()) && isPushableTopNKey(session, it.column()) }
 
     /**
      * Native VARCHAR sort keys become TopN-eligible in BINARY/FULL string-pushdown mode: Doris
@@ -429,13 +429,13 @@ class DorisClient @Inject constructor(
      * stored bytes, divergent for trailing-space data and undetectable from the query
      * (dev-docs/archive/REPORT-string-comparison-probe-4.1.3.md "ORDER BY").
      */
-    private fun isPushableSortKey(session: ConnectorSession, column: JdbcColumnHandle): Boolean = when {
+    private fun isPushableTopNKey(session: ConnectorSession, column: JdbcColumnHandle): Boolean = when {
         column.columnType is VarcharType -> DorisColumnType.isNativeString(column) &&
             DorisSessionProperties.getStringPushdownMode(session).allowsFullStringPushdown
         // IPADDRESS: Doris IPV4/IPV6 order == Trino's unsigned big-endian 16-byte order
         // (IpAddressType.comparisonOperator), live-proven byte-exact; NULLS FIRST/LAST native.
         typeMapping.isIpAddress(column.columnType) -> true
-        else -> isPushableSortKey(column.columnType)
+        else -> DorisAggregatePushdown.isExactPushableKeyType(column.columnType)
     }
 
     override fun topNFunction(): Optional<BaseJdbcClient.TopNFunction> {
@@ -539,13 +539,6 @@ class DorisClient @Inject constructor(
             SortOrder.DESC_NULLS_FIRST to "DESC NULLS FIRST",
             SortOrder.DESC_NULLS_LAST to "DESC NULLS LAST",
         )
-
-        /**
-         * Non-text exact types only (KDoc on [supportsTopN] carries the exclusion evidence).
-         * The SAME identity evidence covers min/max arguments and GROUP BY keys, so P4 shares
-         * the set ([DorisAggregatePushdown.isExactPushableKeyType]).
-         */
-        private fun isPushableSortKey(type: Type): Boolean = DorisAggregatePushdown.isExactPushableKeyType(type)
 
         private const val COLUMNS_QUERY = """
             SELECT COLUMN_NAME, COLUMN_TYPE, IS_NULLABLE, COLUMN_COMMENT
