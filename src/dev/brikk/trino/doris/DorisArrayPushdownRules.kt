@@ -74,20 +74,32 @@ internal class DorisArrayPushdownSupport(
      */
     fun pushableArrayColumn(context: RewriteContext<*>, variable: Variable): PushableArrayColumn? {
         val column = context.getAssignment(variable.name) as? JdbcColumnHandle
-            ?: return rejected("no JDBC column handle", variable.name)
+        if (column == null) {
+            logRejection("no JDBC column handle", variable.name)
+            return null
+        }
         val columnType = column.jdbcTypeHandle.jdbcTypeName().orElse(null)
-            ?: return rejected("missing COLUMN_TYPE", variable.name)
+        if (columnType == null) {
+            logRejection("missing COLUMN_TYPE", variable.name)
+            return null
+        }
         if (DorisColumnType.parse(columnType).baseName != "array") {
-            return rejected("not a native Doris array column", variable.name)
+            logRejection("not a native Doris array column", variable.name)
+            return null
         }
         val elementColumnType = DorisTypeMapping.arrayElementColumnType(columnType)
         val element = typeMapping.resolveArrayElement(elementColumnType)
-            ?: return rejected("denied array element type", variable.name)
+        if (element == null) {
+            logRejection("denied array element type", variable.name)
+            return null
+        }
         if (!isPushableElement(element)) {
-            return rejected("unsupported element type for pushdown: ${element.javaClass.simpleName}", variable.name)
+            logRejection("unsupported element type for pushdown: ${element.javaClass.simpleName}", variable.name)
+            return null
         }
         if (variable.type != ArrayType(element.trinoType)) {
-            return rejected("variable/element type mismatch", variable.name)
+            logRejection("variable/element type mismatch", variable.name)
+            return null
         }
         return PushableArrayColumn(
             quotedName = quote(column.columnName),
@@ -98,28 +110,29 @@ internal class DorisArrayPushdownSupport(
     }
 
     /** A needle must be a NON-NULL constant of exactly the element type (NULL semantics diverge; see evidence). */
-    fun literalNeedle(expression: ConnectorExpression, column: PushableArrayColumn): Optional<Any>? {
+    fun literalNeedle(expression: ConnectorExpression, column: PushableArrayColumn): Any? {
         if (expression !is Constant) {
-            rejected("non-literal needle", expression.toString())
+            logRejection("non-literal needle", expression.toString())
             return null
         }
         if (expression.type != column.elementType) {
-            rejected("needle type ${expression.type} != element type ${column.elementType}", expression.toString())
+            logRejection("needle type ${expression.type} != element type ${column.elementType}", expression.toString())
             return null
         }
-        val value = expression.value ?: run {
-            rejected("NULL needle", expression.toString())
+        val value = expression.value
+        if (value == null) {
+            logRejection("NULL needle", expression.toString())
             return null
         }
         if (!DorisPushdownControllers.isWithinTemporalRange(column.elementType, value)) {
-            rejected("temporal needle outside Doris range", expression.toString())
+            logRejection("temporal needle outside Doris range", expression.toString())
             return null
         }
         if (!ipNeedleRenderable(value, column.ipV4)) {
-            rejected("IPADDRESS needle not renderable for a Doris IPV4 column (non-v4-mapped)", expression.toString())
+            logRejection("IPADDRESS needle not renderable for a Doris IPV4 column (non-v4-mapped)", expression.toString())
             return null
         }
-        return Optional.of(value)
+        return value
     }
 
     /**
@@ -149,15 +162,16 @@ internal class DorisArrayPushdownSupport(
         column: PushableArrayColumn,
     ): List<QueryParameter>? {
         if (expression !is Constant) {
-            rejected("non-literal array needle", expression.toString())
+            logRejection("non-literal array needle", expression.toString())
             return null
         }
         if (expression.type != ArrayType(column.elementType)) {
-            rejected("array needle type ${expression.type} != array(${column.elementType})", expression.toString())
+            logRejection("array needle type ${expression.type} != array(${column.elementType})", expression.toString())
             return null
         }
-        val block = expression.value as? Block ?: run {
-            rejected("NULL array needle", expression.toString())
+        val block = expression.value as? Block
+        if (block == null) {
+            logRejection("NULL array needle", expression.toString())
             return null
         }
         val parameters = ArrayList<QueryParameter>(block.positionCount)
@@ -167,12 +181,12 @@ internal class DorisArrayPushdownSupport(
             }
             val value = readNativeValue(column.elementType, block, i)
             if (!DorisPushdownControllers.isWithinTemporalRange(column.elementType, value)) {
-                rejected("temporal array element outside Doris range", expression.toString())
+                logRejection("temporal array element outside Doris range", expression.toString())
                 return null
             }
             if (!ipNeedleRenderable(value, column.ipV4)) {
                 // non-v4-mapped element against a Doris IPV4 column: can never match -> keep local
-                rejected("IPADDRESS array element not renderable for a Doris IPV4 column", expression.toString())
+                logRejection("IPADDRESS array element not renderable for a Doris IPV4 column", expression.toString())
                 return null
             }
             parameters.add(QueryParameter(column.elementTypeHandle, column.elementType, Optional.of(value)))
@@ -180,9 +194,8 @@ internal class DorisArrayPushdownSupport(
         return parameters
     }
 
-    private fun rejected(reason: String, subject: String): PushableArrayColumn? {
+    private fun logRejection(reason: String, subject: String) {
         log.debug("array pushdown rejected (%s): %s", reason, subject)
-        return null
     }
 
     companion object {
@@ -223,7 +236,7 @@ internal class RewriteContains(
         return Optional.of(
             ParameterizedExpression(
                 "(array_contains(${column.quotedName}, ?))",
-                listOf(QueryParameter(column.elementTypeHandle, column.elementType, needle)),
+                listOf(QueryParameter(column.elementTypeHandle, column.elementType, Optional.of(needle))),
             ),
         )
     }
@@ -372,7 +385,7 @@ internal class RewriteArrayPositionComparison(
         return Optional.of(
             ParameterizedExpression(
                 "(array_position(${column.quotedName}, ?) $operator $boundValue)",
-                listOf(QueryParameter(column.elementTypeHandle, column.elementType, needle)),
+                listOf(QueryParameter(column.elementTypeHandle, column.elementType, Optional.of(needle))),
             ),
         )
     }

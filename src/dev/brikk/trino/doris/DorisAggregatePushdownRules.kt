@@ -85,9 +85,8 @@ internal object DorisAggregatePushdown {
     internal fun isExactOrNativeString(column: JdbcColumnHandle): Boolean =
         isExactPushableKeyType(column.columnType) || DorisColumnType.isNativeString(column)
 
-    internal fun rejected(reason: String, subject: Any): Optional<JdbcExpression> {
+    internal fun logRejection(reason: String, subject: Any) {
         log.debug("aggregate pushdown rejected (%s): %s", reason, subject)
-        return Optional.empty()
     }
 }
 
@@ -116,16 +115,18 @@ internal class DorisImplementMinMax : AggregateFunctionRule<JdbcExpression, Para
         val argument = captures.get(ARGUMENT)
         val columnHandle = context.getAssignment(argument.name) as? JdbcColumnHandle ?: return Optional.empty()
         if (columnHandle.columnType != aggregateFunction.outputType) {
-            return DorisAggregatePushdown.rejected(
+            DorisAggregatePushdown.logRejection(
                 "unexpected min/max output type: ${aggregateFunction.outputType}",
                 aggregateFunction,
             )
+            return Optional.empty()
         }
         if (!DorisAggregatePushdown.isExactPushableKeyType(columnHandle.columnType)) {
-            return DorisAggregatePushdown.rejected(
+            DorisAggregatePushdown.logRejection(
                 "min/max argument type not exact-pushable (collation or ordering hazard): ${columnHandle.columnType}",
                 aggregateFunction,
             )
+            return Optional.empty()
         }
         val rewrittenArgument = context.rewriteExpression(argument).orElse(null) ?: return Optional.empty()
         return Optional.of(
@@ -182,16 +183,18 @@ internal class DorisImplementSum : AggregateFunctionRule<JdbcExpression, Paramet
         val columnHandle = context.getAssignment(argument.name) as? JdbcColumnHandle ?: return Optional.empty()
         val argumentType = columnHandle.columnType
         if (argumentType !is DecimalType || argumentType.precision > MAX_SAFE_SUM_PRECISION) {
-            return DorisAggregatePushdown.rejected(
+            DorisAggregatePushdown.logRejection(
                 "sum argument type not overflow-safe (only DECIMAL(p<=$MAX_SAFE_SUM_PRECISION,s) is): $argumentType",
                 aggregateFunction,
             )
+            return Optional.empty()
         }
         // Trino's sum(decimal(p, s)) output type is decimal(38, s) == Doris's sum(decimalv3(p, s))
         // return type (live-probed). Anything else is an engine-shape drift: stay local.
         val outputType = aggregateFunction.outputType
         if (outputType !is DecimalType || outputType.precision != MAX_PRECISION || outputType.scale != argumentType.scale) {
-            return DorisAggregatePushdown.rejected("unexpected sum output type shape: $outputType for $argumentType", aggregateFunction)
+            DorisAggregatePushdown.logRejection("unexpected sum output type shape: $outputType for $argumentType", aggregateFunction)
+            return Optional.empty()
         }
         val rewrittenArgument = context.rewriteExpression(argument).orElse(null) ?: return Optional.empty()
         val function = if (aggregateFunction.isDistinct) "sum(DISTINCT %s)" else "sum(%s)"
@@ -243,16 +246,18 @@ internal class DorisImplementCountDistinct : AggregateFunctionRule<JdbcExpressio
         val argument = captures.get(ARGUMENT)
         val columnHandle = context.getAssignment(argument.name) as? JdbcColumnHandle ?: return Optional.empty()
         if (aggregateFunction.outputType != BIGINT) {
-            return DorisAggregatePushdown.rejected(
+            DorisAggregatePushdown.logRejection(
                 "unexpected count(DISTINCT) output type: ${aggregateFunction.outputType}",
                 aggregateFunction,
             )
+            return Optional.empty()
         }
         if (!DorisAggregatePushdown.isExactPushableKeyType(columnHandle.columnType)) {
-            return DorisAggregatePushdown.rejected(
+            DorisAggregatePushdown.logRejection(
                 "count(DISTINCT) argument type not exact-pushable (collation or distinctness hazard): ${columnHandle.columnType}",
                 aggregateFunction,
             )
+            return Optional.empty()
         }
         val rewrittenArgument = context.rewriteExpression(argument).orElse(null) ?: return Optional.empty()
         return Optional.of(
@@ -304,28 +309,32 @@ internal class DorisImplementMinMaxBy : AggregateFunctionRule<JdbcExpression, Pa
         val valueColumn = context.getAssignment(value.name) as? JdbcColumnHandle ?: return Optional.empty()
         val keyColumn = context.getAssignment(key.name) as? JdbcColumnHandle ?: return Optional.empty()
         if (valueColumn.columnType != aggregateFunction.outputType) {
-            return DorisAggregatePushdown.rejected(
+            DorisAggregatePushdown.logRejection(
                 "unexpected min_by/max_by output type: ${aggregateFunction.outputType}",
                 aggregateFunction,
             )
+            return Optional.empty()
         }
         if (!DorisAggregatePushdown.isExactPushableKeyType(keyColumn.columnType)) {
-            return DorisAggregatePushdown.rejected(
+            DorisAggregatePushdown.logRejection(
                 "min_by/max_by KEY type not exact-pushable: ${keyColumn.columnType}",
                 aggregateFunction,
             )
+            return Optional.empty()
         }
         if (!DorisAggregatePushdown.isExactOrNativeString(valueColumn)) {
-            return DorisAggregatePushdown.rejected(
+            DorisAggregatePushdown.logRejection(
                 "min_by/max_by VALUE type not pushable: ${valueColumn.columnType}",
                 aggregateFunction,
             )
+            return Optional.empty()
         }
         if (valueColumn.isNullable) {
-            return DorisAggregatePushdown.rejected(
+            DorisAggregatePushdown.logRejection(
                 "min_by/max_by VALUE column is NULLABLE (Doris skips NULL-value rows, Trino keeps them): ${valueColumn.columnName}",
                 aggregateFunction,
             )
+            return Optional.empty()
         }
         val rewrittenValue = context.rewriteExpression(value).orElse(null) ?: return Optional.empty()
         val rewrittenKey = context.rewriteExpression(key).orElse(null) ?: return Optional.empty()
@@ -365,13 +374,15 @@ internal class DorisImplementAnyValue : AggregateFunctionRule<JdbcExpression, Pa
         val argument = captures.get(ANY_ARGUMENT)
         val column = context.getAssignment(argument.name) as? JdbcColumnHandle ?: return Optional.empty()
         if (column.columnType != aggregateFunction.outputType) {
-            return DorisAggregatePushdown.rejected(
+            DorisAggregatePushdown.logRejection(
                 "unexpected any_value output type: ${aggregateFunction.outputType}",
                 aggregateFunction,
             )
+            return Optional.empty()
         }
         if (!DorisAggregatePushdown.isExactOrNativeString(column)) {
-            return DorisAggregatePushdown.rejected("any_value argument type not pushable: ${column.columnType}", aggregateFunction)
+            DorisAggregatePushdown.logRejection("any_value argument type not pushable: ${column.columnType}", aggregateFunction)
+            return Optional.empty()
         }
         val rewrittenArgument = context.rewriteExpression(argument).orElse(null) ?: return Optional.empty()
         return Optional.of(
@@ -408,15 +419,18 @@ internal class DorisImplementApproxDistinct : AggregateFunctionRule<JdbcExpressi
         context: RewriteContext<ParameterizedExpression>,
     ): Optional<JdbcExpression> {
         if (!DorisSessionProperties.isApproximatePushdownEnabled(context.session)) {
-            return DorisAggregatePushdown.rejected("approximate pushdown disabled (doris.approximate-pushdown)", aggregateFunction)
+            DorisAggregatePushdown.logRejection("approximate pushdown disabled (doris.approximate-pushdown)", aggregateFunction)
+            return Optional.empty()
         }
         val argument = captures.get(APPROX_ARGUMENT)
         val column = context.getAssignment(argument.name) as? JdbcColumnHandle ?: return Optional.empty()
         if (aggregateFunction.outputType != BIGINT) {
-            return DorisAggregatePushdown.rejected("approx_distinct output type: ${aggregateFunction.outputType}", aggregateFunction)
+            DorisAggregatePushdown.logRejection("approx_distinct output type: ${aggregateFunction.outputType}", aggregateFunction)
+            return Optional.empty()
         }
         if (!DorisAggregatePushdown.isExactOrNativeString(column)) {
-            return DorisAggregatePushdown.rejected("approx_distinct argument type not pushable: ${column.columnType}", aggregateFunction)
+            DorisAggregatePushdown.logRejection("approx_distinct argument type not pushable: ${column.columnType}", aggregateFunction)
+            return Optional.empty()
         }
         val rewrittenArgument = context.rewriteExpression(argument).orElse(null) ?: return Optional.empty()
         return Optional.of(
