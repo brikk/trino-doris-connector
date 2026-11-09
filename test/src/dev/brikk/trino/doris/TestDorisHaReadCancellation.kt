@@ -50,6 +50,7 @@ open class TestDorisHaReadCancellation {
         val closes = AtomicInteger()
         val owner = Proxy.newProxyInstance(Connection::class.java.classLoader, arrayOf(Connection::class.java)) { _, method, _ ->
             when (method.name) {
+                "setReadOnly" -> null
                 "unwrap" -> throw SQLException("unsupported physical identity")
                 "close" -> { closes.incrementAndGet(); null }
                 else -> error("Unexpected call ${method.name}")
@@ -65,6 +66,7 @@ open class TestDorisHaReadCancellation {
         val closeFailure = SQLException("owner close failed")
         val owner = Proxy.newProxyInstance(Connection::class.java.classLoader, arrayOf(Connection::class.java)) { _, method, _ ->
             when (method.name) {
+                "setReadOnly" -> null
                 "unwrap" -> throw pinFailure
                 "close" -> throw closeFailure
                 else -> error("Unexpected call ${method.name}")
@@ -72,6 +74,21 @@ open class TestDorisHaReadCancellation {
         } as Connection
         assertThatThrownBy { DorisReadDriver.pin(owner) }.isSameAs(pinFailure)
         assertThat(pinFailure.suppressed).containsExactly(closeFailure)
+    }
+
+    @Test
+    fun testReadOnlySetupFailureClosesOwner() {
+        val failure = SQLException("read-only setup failed")
+        val closes = AtomicInteger()
+        val owner = Proxy.newProxyInstance(Connection::class.java.classLoader, arrayOf(Connection::class.java)) { _, method, _ ->
+            when (method.name) {
+                "setReadOnly" -> throw failure
+                "close" -> { closes.incrementAndGet(); null }
+                else -> error("Unexpected call ${method.name}")
+            }
+        } as Connection
+        assertThatThrownBy { DorisReadDriver.pin(owner) }.isSameAs(failure)
+        assertThat(closes.get()).isEqualTo(1)
     }
 
     @Test
@@ -152,7 +169,7 @@ open class TestDorisHaReadCancellation {
             statementHost(connection)
         }
         println("replication-read-only|pinned=$pinnedHost|plain=$plainHost")
-        assertThat(pinnedHost).isEqualTo("127.0.0.1:9130")
+        assertThat(pinnedHost).isEqualTo("172.30.81.10:9030")
         assertThat(plainHost).isEqualTo("172.30.81.10:9030")
     }
 

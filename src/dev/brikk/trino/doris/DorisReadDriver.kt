@@ -23,7 +23,7 @@ import java.util.Properties
 import java.util.concurrent.Executor
 
 /**
- * Connector/J 26.7.0 performs ordinary URL host selection at connect time. Thereafter a
+ * Connector/J selects a read-only target at connect time. Thereafter a
  * connector read connection is one physical attempt, not a mutable HA routing proxy.
  * Trino owns retries; no statement/result may silently migrate after execution begins.
  * This runs below DriverConnectionFactory's telemetry wrappers, preserving instrumentation.
@@ -36,6 +36,8 @@ internal class DorisReadDriver : NonRegisteringDriver() {
         /** Resolve only while idle, before any caller can execute a statement. */
         internal fun pin(owner: Connection): Connection {
             try {
+                // All connector traffic is read-only, including metadata; select its route before pinning.
+                owner.isReadOnly = true
                 val selected = physicalConnection(owner)
                 // StatementImpl otherwise records a MultiHostMySQLConnection: its
                 // getSession() follows later routing changes, even after unwrapping
