@@ -42,6 +42,11 @@ source. Only comments/paths and one non-routing evidence-description string
 changed outside Markdown; no admission, SQL generation, golden pin, workflow or
 CI trigger was changed. This maintenance check is not a new CI automation lane.
 
+Since that checkpoint the registry check moved from catalog creation to a unit
+test and its dependency to test scope, so the assembled plugin has 76 JARs
+(no brikk-sql-metadata or kotlinx-serialization). That change has not been
+through the qualification above.
+
 ## Repeating qualification
 
 Use [Development](DEVELOPMENT.md) for commands and authorization. Required live

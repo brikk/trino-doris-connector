@@ -88,11 +88,6 @@ dependencies {
     // com.mysql.cj.jdbc.Driver + ConnectionUrlParser at compile time (same as upstream trino-mysql,
     // where the driver is compile scope), so this is `implementation`, not `runtimeOnly`.
     implementation(libs.mysql.jdbc)
-    // brikk-sql-metadata: hazard-registry evidence for every pushdown rule (PLAN G3/§6.3) —
-    // the featherweight embeddable module is the sanctioned PRODUCTION dependency. Bundles
-    // kotlinx-serialization-core/json into the plugin dir (NOT in Trino's parent-first list,
-    // so plugin-local is correct); kotlin-stdlib is already bundled (Kotlin connector).
-    implementation(libs.brikk.sql.metadata)
     runtimeOnly("io.airlift:log-manager")
 
     // --- Provided / parent-first SPI set: compile against, never bundle ---
@@ -117,6 +112,8 @@ dependencies {
     }
     testImplementation("io.trino:trino-testing")
     testImplementation("io.airlift:testing")
+    // Hazard registry the pushdown rules were proven against; checked by TestDorisPushdownEvidenceDrift.
+    testImplementation(libs.brikk.sql.metadata)
     // junit/assertj/kotlin-test come from the buildlogic.kotlin.common convention
 }
 
@@ -230,10 +227,6 @@ val verifyPluginAssembly by tasks.registering {
             "trino-base-jdbc-",
             "trino-plugin-toolkit-",
             "mysql-connector-j-",
-            // the pushdown-evidence registry and its serialization runtime (plugin-local)
-            "brikk-sql-metadata-jvmMain-",
-            "kotlinx-serialization-core-jvm-",
-            "kotlinx-serialization-json-jvm-",
         )
         val missing = requiredPrefixes.filter { prefix -> jars.none { it.startsWith(prefix) } }
         check(missing.isEmpty()) { "expected bundled jars missing (prefixes): $missing; got $jars" }
