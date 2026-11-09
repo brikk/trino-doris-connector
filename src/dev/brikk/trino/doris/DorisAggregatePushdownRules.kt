@@ -35,6 +35,7 @@ import io.trino.spi.connector.AggregateFunction
 import io.trino.spi.expression.Variable
 import io.trino.spi.type.BigintType.BIGINT
 import io.trino.spi.type.DecimalType
+import io.trino.spi.type.Decimals.MAX_PRECISION
 import io.trino.spi.type.Type
 import java.util.Optional
 import java.util.concurrent.ConcurrentHashMap
@@ -185,7 +186,7 @@ internal class DorisImplementSum : AggregateFunctionRule<JdbcExpression, Paramet
         // Trino's sum(decimal(p, s)) output type is decimal(38, s) == Doris's sum(decimalv3(p, s))
         // return type (live-probed). Anything else is an engine-shape drift: stay local.
         val outputType = aggregateFunction.outputType
-        if (outputType !is DecimalType || outputType.precision != SUM_RESULT_PRECISION || outputType.scale != argumentType.scale) {
+        if (outputType !is DecimalType || outputType.precision != MAX_PRECISION || outputType.scale != argumentType.scale) {
             return DorisAggregatePushdown.rejected("unexpected sum output type shape: $outputType for $argumentType", aggregateFunction)
         }
         val rewrittenArgument = context.rewriteExpression(argument).orElseThrow()
@@ -194,7 +195,7 @@ internal class DorisImplementSum : AggregateFunctionRule<JdbcExpression, Paramet
             JdbcExpression(
                 function.format(rewrittenArgument.expression()),
                 rewrittenArgument.parameters(),
-                DorisTypeMapping.toTypeHandle("decimalv3($SUM_RESULT_PRECISION, ${argumentType.scale})"),
+                DorisTypeMapping.toTypeHandle("decimalv3($MAX_PRECISION, ${argumentType.scale})"),
             ),
         )
     }
@@ -209,8 +210,6 @@ internal class DorisImplementSum : AggregateFunctionRule<JdbcExpression, Paramet
          * with Trino's short-decimal boundary.
          */
         internal const val MAX_SAFE_SUM_PRECISION = 18
-
-        private const val SUM_RESULT_PRECISION = 38
     }
 }
 

@@ -57,6 +57,7 @@ import io.trino.spi.type.ArrayType
 import io.trino.spi.type.CharType.createCharType
 import io.trino.spi.type.DateType.DATE
 import io.trino.spi.type.DecimalType.createDecimalType
+import io.trino.spi.type.Decimals.MAX_PRECISION
 import io.trino.spi.type.DoubleType.DOUBLE
 import io.trino.spi.type.Int128
 import io.trino.spi.type.RealType.REAL
@@ -209,7 +210,7 @@ internal class DorisTypeMapping(typeManager: TypeManager) {
 
     private fun decimalArrayElement(parsed: DorisColumnType): DorisArrayElement? {
         val (precision, scale) = decimalPrecisionAndScale(parsed)
-        if (precision > MAX_TRINO_DECIMAL_PRECISION) {
+        if (precision > MAX_PRECISION) {
             // Decimal256 array elements exceed Trino's DECIMAL ceiling -> denied leaf.
             return null
         }
@@ -234,7 +235,7 @@ internal class DorisTypeMapping(typeManager: TypeManager) {
      */
     private fun decimalMapping(parsed: DorisColumnType): ColumnMapping {
         val (precision, scale) = decimalPrecisionAndScale(parsed)
-        if (precision > MAX_TRINO_DECIMAL_PRECISION) {
+        if (precision > MAX_PRECISION) {
             return unboundedVarcharTextMapping()
         }
         return decimalColumnMapping(createDecimalType(precision, scale))
@@ -301,10 +302,7 @@ internal class DorisTypeMapping(typeManager: TypeManager) {
         /** Complex types whose wire text is a proven server-rendered grammar (PROBE §"wire-format"). */
         private val TEXT_SAFE_COMPLEX_TYPES = setOf("array", "map", "struct")
 
-        private const val MAX_TRINO_DECIMAL_PRECISION = 38
         internal const val MAX_DATETIME_PRECISION = 6
-        private const val DORIS_MAX_DATETIME_PRECISION = MAX_DATETIME_PRECISION
-        private const val LARGEINT_DECIMAL_PRECISION = 38
 
         private val MIN_DORIS_DATE = LocalDate.of(0, 1, 1).toEpochDay()
         private val MAX_DORIS_DATE = LocalDate.of(9999, 12, 31).toEpochDay()
@@ -334,7 +332,7 @@ internal class DorisTypeMapping(typeManager: TypeManager) {
         }
 
         /** Max unscaled value representable in DECIMAL(38,0): 10^38 - 1. */
-        private val DECIMAL_38_MAX: BigInteger = BigInteger.TEN.pow(LARGEINT_DECIMAL_PRECISION).subtract(BigInteger.ONE)
+        private val DECIMAL_38_MAX: BigInteger = BigInteger.TEN.pow(MAX_PRECISION).subtract(BigInteger.ONE)
 
         /**
          * G5 string-domain policy, mode-resolved per query (probe evidence:
@@ -409,7 +407,7 @@ internal class DorisTypeMapping(typeManager: TypeManager) {
          * every value in a DECIMAL(38,0) domain is representable by construction.
          */
         internal fun largeintColumnMapping(): ColumnMapping {
-            val decimalType = createDecimalType(LARGEINT_DECIMAL_PRECISION, 0)
+            val decimalType = createDecimalType(MAX_PRECISION, 0)
             return ColumnMapping.objectMapping(
                 decimalType,
                 ObjectReadFunction.of(Int128::class.java) { resultSet, columnIndex ->
@@ -525,7 +523,7 @@ internal class DorisTypeMapping(typeManager: TypeManager) {
          */
         internal fun timestampType(parsed: DorisColumnType): TimestampType {
             val precision = parsed.arguments.firstOrNull() ?: 0
-            if (precision !in 0..DORIS_MAX_DATETIME_PRECISION) {
+            if (precision !in 0..MAX_DATETIME_PRECISION) {
                 throw TrinoException(GENERIC_INTERNAL_ERROR, "Unsupported Doris DATETIME precision (max proven is 6): '${parsed.raw}'")
             }
             return createTimestampType(precision)
@@ -552,8 +550,6 @@ internal class DorisTypeMapping(typeManager: TypeManager) {
 
         private fun readIpAddress(resultSet: ResultSet, columnIndex: Int): Slice =
             ipAddressSlice(resultSet.getString(columnIndex))
-
-        private const val IP_SLICE_BYTES = 16
 
         /**
          * Push an IPV4 domain ONLY when every value is an IPv4-mapped address ([isV4MappedIpSlice]);
@@ -586,7 +582,7 @@ internal class DorisTypeMapping(typeManager: TypeManager) {
 
         /** True when a 16-byte Trino IPADDRESS slice is IPv4-mapped (`::ffff:a.b.c.d`). */
         internal fun isV4MappedIpSlice(slice: Slice): Boolean {
-            if (slice.length() != IP_SLICE_BYTES) {
+            if (slice.length() != IP_ADDRESS_BYTES) {
                 return false
             }
             for (i in 0 until 10) {
@@ -605,7 +601,7 @@ internal class DorisTypeMapping(typeManager: TypeManager) {
          */
         internal fun renderIpLiteral(slice: Slice, isV4: Boolean): String {
             val bytes = slice.getBytes()
-            require(bytes.size == IP_SLICE_BYTES) { "IPADDRESS slice must be 16 bytes, was ${bytes.size}" }
+            require(bytes.size == IP_ADDRESS_BYTES) { "IPADDRESS slice must be 16 bytes, was ${bytes.size}" }
             if (isV4) {
                 require(isV4MappedIpSlice(slice)) { "non-IPv4-mapped IPADDRESS cannot render as a Doris IPV4 literal" }
                 return "${bytes[12].toInt() and 0xFF}.${bytes[13].toInt() and 0xFF}." +
@@ -657,7 +653,7 @@ internal class DorisTypeMapping(typeManager: TypeManager) {
         private fun toTrinoIpAddressBytes(address: InetAddress): ByteArray {
             return when (address) {
                 is Inet6Address -> address.address
-                is Inet4Address -> ByteArray(IPV6_BYTES).also {
+                is Inet4Address -> ByteArray(IP_ADDRESS_BYTES).also {
                     it[10] = 0xFF.toByte()
                     it[11] = 0xFF.toByte()
                     address.address.copyInto(it, 12)
@@ -666,7 +662,7 @@ internal class DorisTypeMapping(typeManager: TypeManager) {
             }
         }
 
-        private const val IPV6_BYTES = 16
+        private const val IP_ADDRESS_BYTES = 16
 
         /**
          * Builds the [JdbcTypeHandle] for a COLUMN_TYPE string. The COLUMN_TYPE string itself
@@ -711,7 +707,7 @@ internal class DorisTypeMapping(typeManager: TypeManager) {
         internal fun isDecimal256(columnType: String): Boolean {
             val parsed = DorisColumnType.parse(columnType)
             return (parsed.baseName == "decimal" || parsed.baseName == "decimalv3") &&
-                parsed.arguments.firstOrNull()?.let { it > MAX_TRINO_DECIMAL_PRECISION } == true
+                parsed.arguments.firstOrNull()?.let { it > MAX_PRECISION } == true
         }
     }
 }

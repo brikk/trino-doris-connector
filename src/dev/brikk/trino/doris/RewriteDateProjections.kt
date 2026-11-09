@@ -102,7 +102,7 @@ internal class RewriteDateTrunc : ProjectFunctionRule<JdbcExpression, Parameteri
         val unit = constantUnit(call.arguments[0]) ?: return Optional.empty()
         val source = pushableDatetimeColumn(call.arguments[1]) ?: return Optional.empty()
         val resultType = call.type as? TimestampType ?: return Optional.empty()
-        if (resultType.precision > DORIS_MAX_DATETIME_PRECISION) {
+        if (resultType.precision > DorisTypeMapping.MAX_DATETIME_PRECISION) {
             return Optional.empty()
         }
         val rewritten = context.rewriteExpression(source).orElse(null) ?: return Optional.empty()
@@ -129,8 +129,6 @@ internal class RewriteDateTrunc : ProjectFunctionRule<JdbcExpression, Parameteri
         /** Live-proven identical truncation semantics per unit (probe + differential pins; week denied — see KDoc). */
         private val PROVEN_UNITS = setOf("second", "minute", "hour", "day", "month", "quarter", "year")
 
-        private const val DORIS_MAX_DATETIME_PRECISION = 6
-
         private val PATTERN: Pattern<Call> = call()
             .with(functionName().equalTo(FunctionName("date_trunc")))
             .with(argumentCount().equalTo(2))
@@ -141,5 +139,5 @@ internal class RewriteDateTrunc : ProjectFunctionRule<JdbcExpression, Parameteri
 private fun pushableDatetimeColumn(argument: ConnectorExpression): Variable? {
     val variable = argument as? Variable ?: return null
     val type = variable.type as? TimestampType ?: return null
-    return variable.takeIf { type.precision <= 6 }
+    return variable.takeIf { type.precision <= DorisTypeMapping.MAX_DATETIME_PRECISION }
 }

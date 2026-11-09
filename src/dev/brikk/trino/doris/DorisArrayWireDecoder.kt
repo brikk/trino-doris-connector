@@ -62,7 +62,7 @@ internal object DorisArrayWireDecoder {
     private val DATETIME_FORMATTER: DateTimeFormatter = DateTimeFormatterBuilder()
         .appendPattern("uuuu-MM-dd HH:mm:ss")
         .optionalStart()
-        .appendFraction(ChronoField.NANO_OF_SECOND, 1, 6, true)
+        .appendFraction(ChronoField.NANO_OF_SECOND, 1, DorisTypeMapping.MAX_DATETIME_PRECISION, true)
         .optionalEnd()
         .toFormatter()
         .withResolverStyle(ResolverStyle.STRICT)

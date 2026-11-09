@@ -19,6 +19,7 @@ import io.trino.spi.type.BooleanType.BOOLEAN
 import io.trino.spi.type.DateType.DATE
 import io.trino.spi.type.DecimalType
 import io.trino.spi.type.DecimalType.createDecimalType
+import io.trino.spi.type.Decimals.MAX_PRECISION
 import io.trino.spi.type.DoubleType.DOUBLE
 import io.trino.spi.type.IntegerType.INTEGER
 import io.trino.spi.type.RealType.REAL
@@ -68,7 +69,7 @@ internal sealed class DorisArrayElement {
      * exceed DECIMAL(38,0); never clamp (ledger §A; spike §7.4).
      */
     object LargeintElement : DorisArrayElement() {
-        override val trinoType: Type = createDecimalType(38, 0)
+        override val trinoType: Type = createDecimalType(MAX_PRECISION, 0)
     }
 
     /** DECIMAL(p<=38, s): wire preserves trailing zeros/scale; decode with BigDecimal, no double round-trip (spike F2). */
