@@ -158,7 +158,10 @@ internal object DorisArrayWireDecoder {
                 is DorisArrayElement.DateElement,
                 is DorisArrayElement.TimestampElement,
                 is DorisArrayElement.IpAddressElement,
-                -> convertQuoted(element, parseQuoted(element), position)
+                -> {
+                    val start = position
+                    convertQuoted(element, parseQuoted(element), start)
+                }
                 else -> parseBare(element)
             }
         }

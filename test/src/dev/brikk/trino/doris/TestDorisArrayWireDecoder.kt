@@ -224,6 +224,18 @@ class TestDorisArrayWireDecoder {
     }
 
     @Test
+    fun testMalformedQuotedElementsReportTheirStartOffset() {
+        assertThatThrownBy { DorisArrayWireDecoder.decode("""["2021-01-01", "2021-13-99"]""", DateElement) }
+            .isInstanceOf(TrinoException::class.java)
+            .hasMessageContaining("malformed DATE element '2021-13-99'")
+            .hasMessageContaining("(at wire offset 15)")
+        assertThatThrownBy { DorisArrayWireDecoder.decode("""["2021-06-15 12:34:56.789012"]""", TimestampElement(createTimestampType(0))) }
+            .isInstanceOf(TrinoException::class.java)
+            .hasMessageContaining("does not fit")
+            .hasMessageContaining("(at wire offset 1)")
+    }
+
+    @Test
     fun testNullBoundaryGuard() {
         // 'null' as a prefix of a longer bare token is not a valid element
         assertThatThrownBy { DorisArrayWireDecoder.decode("[nullx]", IntegerElement) }
