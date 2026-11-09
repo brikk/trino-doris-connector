@@ -22,20 +22,23 @@ import io.trino.plugin.base.expression.ConnectorExpressionPatterns.call
 import io.trino.plugin.base.expression.ConnectorExpressionPatterns.constant
 import io.trino.plugin.base.expression.ConnectorExpressionPatterns.functionName
 import io.trino.plugin.base.expression.ConnectorExpressionPatterns.type
+import io.trino.plugin.base.expression.ConnectorExpressionPatterns.variable
 import io.trino.plugin.base.expression.ConnectorExpressionRule
 import io.trino.plugin.base.expression.ConnectorExpressionRule.RewriteContext
+import io.trino.plugin.base.projection.ProjectFunctionRule
 import io.trino.plugin.jdbc.JdbcColumnHandle
+import io.trino.plugin.jdbc.JdbcExpression
 import io.trino.plugin.jdbc.QueryParameter
 import io.trino.plugin.jdbc.expression.ParameterizedExpression
 import io.trino.spi.connector.ConnectorSession
+import io.trino.spi.connector.ConnectorTableHandle
 import io.trino.spi.expression.Call
 import io.trino.spi.expression.ConnectorExpression
 import io.trino.spi.expression.Constant
 import io.trino.spi.expression.FunctionName
-import io.trino.spi.expression.StandardFunctions.COALESCE_FUNCTION_NAME
 import io.trino.spi.expression.StandardFunctions.IS_NULL_FUNCTION_NAME
-import io.trino.spi.expression.StandardFunctions.NULLIF_FUNCTION_NAME
 import io.trino.spi.expression.Variable
+import io.trino.spi.type.BigintType
 import io.trino.spi.type.BigintType.BIGINT
 import io.trino.spi.type.BooleanType
 import io.trino.spi.type.BooleanType.BOOLEAN
@@ -68,7 +71,7 @@ import java.util.Optional
 internal object DorisScalarValues {
     /** Closed value-type set for the scalar tier. */
     fun isValueType(type: Type): Boolean = when (type) {
-        is TinyintType, is SmallintType, is IntegerType, is io.trino.spi.type.BigintType,
+        is TinyintType, is SmallintType, is IntegerType, is BigintType,
         is DecimalType, is DateType, is BooleanType, is VarcharType,
         -> true
         is TimestampType -> type.precision <= DorisTypeMapping.MAX_DATETIME_PRECISION
@@ -80,7 +83,7 @@ internal object DorisScalarValues {
         is TinyintType -> "tinyint"
         is SmallintType -> "smallint"
         is IntegerType -> "int"
-        is io.trino.spi.type.BigintType -> "bigint"
+        is BigintType -> "bigint"
         is BooleanType -> "boolean"
         is DateType -> "date"
         is TimestampType -> if (type.precision <= DorisTypeMapping.MAX_DATETIME_PRECISION) "datetime(${type.precision})" else null
@@ -95,8 +98,7 @@ internal class RewriteScalarVariable(
     private val typeMapping: DorisTypeMapping,
     private val quote: (String) -> String,
 ) : ConnectorExpressionRule<Variable, ParameterizedExpression> {
-    override fun getPattern(): Pattern<Variable> =
-        io.trino.plugin.base.expression.ConnectorExpressionPatterns.variable()
+    override fun getPattern(): Pattern<Variable> = variable()
 
     override fun rewrite(expression: Variable, captures: Captures, context: RewriteContext<ParameterizedExpression>): Optional<ParameterizedExpression> {
         if (!DorisScalarValues.isValueType(expression.type)) {
@@ -361,22 +363,22 @@ internal class RewriteStartsWith(
  * the Trino expression type exactly) — this is what lets `GROUP BY coalesce(...)`,
  * `GROUP BY year(...)` etc. compose with aggregate pushdown.
  */
-internal class RewriteScalarProjection : io.trino.plugin.base.projection.ProjectFunctionRule<io.trino.plugin.jdbc.JdbcExpression, ParameterizedExpression> {
+internal class RewriteScalarProjection : ProjectFunctionRule<JdbcExpression, ParameterizedExpression> {
     override fun getPattern(): Pattern<out ConnectorExpression> = call()
 
     override fun rewrite(
-        handle: io.trino.spi.connector.ConnectorTableHandle,
+        handle: ConnectorTableHandle,
         expression: ConnectorExpression,
         captures: Captures,
-        context: io.trino.plugin.base.projection.ProjectFunctionRule.RewriteContext<ParameterizedExpression>,
-    ): Optional<io.trino.plugin.jdbc.JdbcExpression> {
+        context: ProjectFunctionRule.RewriteContext<ParameterizedExpression>,
+    ): Optional<JdbcExpression> {
         val dorisType = DorisScalarValues.dorisTypeFor(expression.type) ?: return Optional.empty()
         val rewritten = context.rewriteExpression(expression)
         if (rewritten.isEmpty) {
             return Optional.empty()
         }
         return Optional.of(
-            io.trino.plugin.jdbc.JdbcExpression(
+            JdbcExpression(
                 rewritten.get().expression(),
                 rewritten.get().parameters(),
                 DorisTypeMapping.toTypeHandle(dorisType),

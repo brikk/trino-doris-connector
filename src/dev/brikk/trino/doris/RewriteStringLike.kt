@@ -27,6 +27,7 @@ import io.trino.plugin.jdbc.QueryParameter
 import io.trino.plugin.jdbc.expression.ParameterizedExpression
 import io.trino.spi.connector.ConnectorSession
 import io.trino.spi.expression.Call
+import io.trino.spi.expression.ConnectorExpression
 import io.trino.spi.expression.Constant
 import io.trino.spi.expression.StandardFunctions.LIKE_FUNCTION_NAME
 import io.trino.spi.expression.Variable
@@ -99,7 +100,7 @@ internal class RewriteStringLike(
         )
     }
 
-    private fun pushableStringColumn(argument: io.trino.spi.expression.ConnectorExpression, context: RewriteContext<*>): JdbcColumnHandle? {
+    private fun pushableStringColumn(argument: ConnectorExpression, context: RewriteContext<*>): JdbcColumnHandle? {
         val variable = argument as? Variable ?: return null
         if (variable.type !is VarcharType) {
             return null
@@ -109,7 +110,7 @@ internal class RewriteStringLike(
         return column.takeIf(DorisColumnType::isNativeString)
     }
 
-    private fun varcharConstant(argument: io.trino.spi.expression.ConnectorExpression): Slice? {
+    private fun varcharConstant(argument: ConnectorExpression): Slice? {
         val constant = argument as? Constant ?: return null
         if (constant.type !is VarcharType) {
             return null

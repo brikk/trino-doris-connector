@@ -24,6 +24,7 @@ import io.trino.plugin.base.projection.ProjectFunctionRule
 import io.trino.plugin.base.projection.ProjectFunctionRule.RewriteContext
 import io.trino.plugin.jdbc.JdbcExpression
 import io.trino.plugin.jdbc.expression.ParameterizedExpression
+import io.trino.spi.connector.ConnectorTableHandle
 import io.trino.spi.expression.Call
 import io.trino.spi.expression.ConnectorExpression
 import io.trino.spi.expression.Constant
@@ -51,7 +52,7 @@ internal class RewriteCastDatetimeToDate : ProjectFunctionRule<JdbcExpression, P
     override fun getPattern(): Pattern<out ConnectorExpression> = PATTERN
 
     override fun rewrite(
-        handle: io.trino.spi.connector.ConnectorTableHandle,
+        handle: ConnectorTableHandle,
         expression: ConnectorExpression,
         captures: Captures,
         context: RewriteContext<ParameterizedExpression>,
@@ -93,7 +94,7 @@ internal class RewriteDateTrunc : ProjectFunctionRule<JdbcExpression, Parameteri
     override fun getPattern(): Pattern<out ConnectorExpression> = PATTERN
 
     override fun rewrite(
-        handle: io.trino.spi.connector.ConnectorTableHandle,
+        handle: ConnectorTableHandle,
         expression: ConnectorExpression,
         captures: Captures,
         context: RewriteContext<ParameterizedExpression>,

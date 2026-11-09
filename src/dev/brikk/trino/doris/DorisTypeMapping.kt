@@ -18,6 +18,7 @@ import dev.brikk.trino.doris.DorisPushdownControllers.IPV4_PUSHDOWN
 import dev.brikk.trino.doris.DorisPushdownControllers.TEMPORAL_PUSHDOWN
 import dev.brikk.trino.doris.DorisPushdownControllers.VARCHAR_PUSHDOWN
 import io.trino.plugin.jdbc.ColumnMapping
+import io.trino.plugin.jdbc.DoubleReadFunction
 import io.trino.plugin.jdbc.JdbcTypeHandle
 import io.trino.plugin.jdbc.LongReadFunction
 import io.trino.plugin.jdbc.ObjectReadFunction
@@ -366,7 +367,7 @@ internal class DorisTypeMapping(typeManager: TypeManager) {
         private fun dorisDoubleColumnMapping(): ColumnMapping {
             return ColumnMapping.doubleMapping(
                 DOUBLE,
-                object : io.trino.plugin.jdbc.DoubleReadFunction {
+                object : DoubleReadFunction {
                     override fun isNull(resultSet: ResultSet, columnIndex: Int): Boolean {
                         resultSet.getString(columnIndex)
                         return resultSet.wasNull()

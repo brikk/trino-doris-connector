@@ -33,9 +33,16 @@ import io.trino.plugin.jdbc.JdbcExpression
 import io.trino.plugin.jdbc.expression.ParameterizedExpression
 import io.trino.spi.connector.AggregateFunction
 import io.trino.spi.expression.Variable
+import io.trino.spi.type.BigintType
 import io.trino.spi.type.BigintType.BIGINT
+import io.trino.spi.type.BooleanType
+import io.trino.spi.type.DateType
 import io.trino.spi.type.DecimalType
 import io.trino.spi.type.Decimals.MAX_PRECISION
+import io.trino.spi.type.IntegerType
+import io.trino.spi.type.SmallintType
+import io.trino.spi.type.TimestampType
+import io.trino.spi.type.TinyintType
 import io.trino.spi.type.Type
 import java.util.Optional
 import java.util.concurrent.ConcurrentHashMap
@@ -69,14 +76,14 @@ internal object DorisAggregatePushdown {
      * - JSON/IPADDRESS/ARRAY: not admitted by this aggregate argument gate.
      */
     internal fun isExactPushableKeyType(type: Type): Boolean = when (type) {
-        is io.trino.spi.type.TinyintType,
-        is io.trino.spi.type.SmallintType,
-        is io.trino.spi.type.IntegerType,
-        is io.trino.spi.type.BigintType,
-        is io.trino.spi.type.DecimalType,
-        is io.trino.spi.type.DateType,
-        is io.trino.spi.type.TimestampType,
-        is io.trino.spi.type.BooleanType,
+        is TinyintType,
+        is SmallintType,
+        is IntegerType,
+        is BigintType,
+        is DecimalType,
+        is DateType,
+        is TimestampType,
+        is BooleanType,
         -> true
         else -> false
     }

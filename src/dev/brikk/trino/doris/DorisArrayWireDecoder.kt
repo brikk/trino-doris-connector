@@ -13,6 +13,7 @@
  */
 package dev.brikk.trino.doris
 
+import com.google.common.base.VerifyException
 import io.trino.plugin.jdbc.StandardColumnMappings.toTrinoTimestamp
 import io.trino.spi.StandardErrorCode.GENERIC_INTERNAL_ERROR
 import io.trino.spi.TrinoException
@@ -309,7 +310,7 @@ internal object DorisArrayWireDecoder {
             }
             try {
                 return toTrinoTimestamp(element.timestampType, localDateTime)
-            } catch (e: com.google.common.base.VerifyException) {
+            } catch (e: VerifyException) {
                 // wire fraction finer than the declared precision — outside the grammar
                 fail("DATETIME element '$raw' does not fit ${element.timestampType}: ${e.message}", at)
             }
