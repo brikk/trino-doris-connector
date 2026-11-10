@@ -35,10 +35,9 @@ import java.util.TimeZone
  * query per pushed family is result-identical across all three.
  */
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
-class TestDorisTimezoneAudit : AbstractTestQueryFramework() {
+class TestDorisTimezoneAudit : DorisPushdownTest("p5_tz", { provisionFixture() }) {
     override fun createQueryRunner(): QueryRunner {
-        provisionFixture()
-        val runner = DorisQueryRunner.builder().build()
+        val runner = super.createQueryRunner()
         for ((catalog, zone) in listOf("tz_tokyo" to "Asia/Tokyo", "tz_ny" to "America/New_York")) {
             runner.createCatalog(
                 catalog,
@@ -56,15 +55,6 @@ class TestDorisTimezoneAudit : AbstractTestQueryFramework() {
     private fun sessionInZone(zoneId: String): Session = Session.builder(session)
         .setTimeZoneKey(TimeZoneKey.getTimeZoneKey(zoneId))
         .build()
-
-    private fun rows(session: Session, sql: String): List<String> =
-        computeActual(session, sql).materializedRows.map { it.toString() }.sorted()
-
-    private fun remoteSql(session: Session, sql: String): String {
-        val execution = getDistributedQueryRunner().executeWithPlan(session, sql)
-        val marker = DorisRemoteQueryModifier.marker(execution.queryId().toString())
-        return DorisTestCluster.awaitAuditLogStatements(marker, 60_000).single { it.contains("p5_tz") }
-    }
 
     // --- item 1: parameter-binding zone matrix ---
 

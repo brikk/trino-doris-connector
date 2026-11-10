@@ -30,13 +30,7 @@ import org.junit.jupiter.api.TestInstance
  * => identical composite values.
  */
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
-class TestDorisP3Composition : AbstractTestQueryFramework() {
-    override fun createQueryRunner(): QueryRunner {
-        provisionFixture()
-        return DorisQueryRunner.builder().build()
-    }
-
-    private fun noPushdownSession(): Session = fullyLocalSession(session)
+class TestDorisP3Composition : DorisPushdownTest("p3_composition", { provisionFixture() }) {
 
     // --- 3VL pins (both engines) ---
 
@@ -118,19 +112,11 @@ class TestDorisP3Composition : AbstractTestQueryFramework() {
     // --- helpers ---
 
     private fun assertPushedAndEquivalent(predicate: String) {
-        val sql = "SELECT id FROM doris.p3_composition.t WHERE $predicate"
-        assertThat(query(sql)).isFullyPushedDown()
-        val pushed = computeActual("$sql ORDER BY id").onlyColumn.toList()
-        val local = computeActual(noPushdownSession(), "$sql ORDER BY id").onlyColumn.toList()
-        assertThat(pushed).describedAs(predicate).isEqualTo(local)
+        assertPushedAndIdentical("SELECT id FROM doris.p3_composition.t WHERE $predicate")
     }
 
     private fun assertLocalAndEquivalent(predicate: String) {
-        val sql = "SELECT id FROM doris.p3_composition.t WHERE $predicate"
-        assertThat(query(sql)).isNotFullyPushedDown(FilterNode::class.java)
-        val withRules = computeActual("$sql ORDER BY id").onlyColumn.toList()
-        val local = computeActual(noPushdownSession(), "$sql ORDER BY id").onlyColumn.toList()
-        assertThat(withRules).describedAs(predicate).isEqualTo(local)
+        assertLocalAndIdentical("SELECT id FROM doris.p3_composition.t WHERE $predicate", FilterNode::class.java)
     }
 
     companion object {

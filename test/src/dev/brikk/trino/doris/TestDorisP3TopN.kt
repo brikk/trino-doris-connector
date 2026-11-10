@@ -27,11 +27,7 @@ import org.junit.jupiter.api.TestInstance
  * always WITH the LIMIT. Differentials run against `topn_pushdown_enabled=false`.
  */
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
-class TestDorisP3TopN : AbstractTestQueryFramework() {
-    override fun createQueryRunner(): QueryRunner {
-        provisionFixture()
-        return DorisQueryRunner.builder().build()
-    }
+class TestDorisP3TopN : DorisPushdownTest("p3_topn", { provisionFixture() }) {
 
     private fun noTopNSession(): Session = fullyLocalSession(session)
 
@@ -106,11 +102,7 @@ class TestDorisP3TopN : AbstractTestQueryFramework() {
 
     @Test
     fun testRemoteTopNSqlShape() {
-        val execution = getDistributedQueryRunner()
-            .executeWithPlan(session, "SELECT c_int FROM doris.p3_topn.t ORDER BY c_int ASC NULLS LAST LIMIT 4")
-        val marker = DorisRemoteQueryModifier.marker(execution.queryId().toString())
-        val statements = DorisTestCluster.awaitAuditLogStatements(marker, 60_000)
-        val scan = statements.single { it.contains("p3_topn") }
+        val scan = remoteSql("SELECT c_int FROM doris.p3_topn.t ORDER BY c_int ASC NULLS LAST LIMIT 4")
         assertThat(scan).contains("ORDER BY `c_int` ASC NULLS LAST LIMIT 4")
     }
 

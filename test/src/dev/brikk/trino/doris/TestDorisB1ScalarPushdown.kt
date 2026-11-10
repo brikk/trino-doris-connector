@@ -30,11 +30,7 @@ import org.junit.jupiter.api.TestInstance
  * direct Doris oracle. Probe verdicts: `dev-docs/archive/NOTES-readonly-max-batch1.md`.
  */
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
-class TestDorisB1ScalarPushdown : AbstractTestQueryFramework() {
-    override fun createQueryRunner(): QueryRunner {
-        provisionFixture()
-        return DorisQueryRunner.builder().build()
-    }
+class TestDorisB1ScalarPushdown : DorisPushdownTest("b1_scalar", { provisionFixture() }) {
 
     private val local: Session
         get() = fullyLocalSession(session)
@@ -42,22 +38,6 @@ class TestDorisB1ScalarPushdown : AbstractTestQueryFramework() {
     private fun modeSession(mode: String): Session = Session.builder(session)
         .setCatalogSessionProperty(DorisQueryRunner.CATALOG, "string_pushdown_mode", mode)
         .build()
-
-    private fun rows(session: Session, sql: String): List<String> =
-        computeActual(session, sql).materializedRows.map { it.toString() }.sorted()
-
-    private fun assertPushedAndIdentical(sql: String, session: Session = getSession()) {
-        assertThat(query(session, sql)).describedAs(sql).isFullyPushedDown()
-        assertThat(rows(session, sql)).describedAs(sql).isEqualTo(rows(local, sql))
-    }
-
-    private fun remoteSql(session: Session, sql: String): String {
-        val execution = getDistributedQueryRunner().executeWithPlan(session, sql)
-        val marker = DorisRemoteQueryModifier.marker(execution.queryId().toString())
-        return DorisTestCluster.awaitAuditLogStatements(marker, 60_000).single { it.contains("b1_scalar") }
-    }
-
-    private fun remoteSql(sql: String): String = remoteSql(session, sql)
 
     // --- item 1: CASE / IF — ENGINE-DENIED, pinned ---
 

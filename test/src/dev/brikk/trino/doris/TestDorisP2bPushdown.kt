@@ -28,13 +28,7 @@ import org.junit.jupiter.api.TestInstance
  * plan-shape assertions, and audit-log proof of the generated remote SQL.
  */
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
-class TestDorisP2bPushdown : AbstractTestQueryFramework() {
-    override fun createQueryRunner(): QueryRunner {
-        provisionFixture()
-        return DorisQueryRunner.builder().build()
-    }
-
-    private fun noPushdownSession(): Session = fullyLocalSession(session)
+class TestDorisP2bPushdown : DorisPushdownTest("p2b_pushdown", { provisionFixture() }) {
 
     // --- truth-table pins: the safety arguments live and die by these exact cells ---
 
@@ -268,34 +262,14 @@ class TestDorisP2bPushdown : AbstractTestQueryFramework() {
     // --- helpers ---
 
     private fun assertPushedAndEquivalent(predicate: String) {
-        val sql = "SELECT id FROM doris.p2b_pushdown.t WHERE $predicate"
-        // isFullyPushedDown also verifies results against the pushdown-disabled session.
-        assertThat(query(sql)).isFullyPushedDown()
-        // explicit differential belt (ordered):
-        val pushed = computeActual("$sql ORDER BY id").onlyColumn.toList()
-        val local = computeActual(noPushdownSession(), "$sql ORDER BY id").onlyColumn.toList()
-        assertThat(pushed).describedAs(predicate).isEqualTo(local)
+        assertPushedAndIdentical("SELECT id FROM doris.p2b_pushdown.t WHERE $predicate")
     }
 
     private fun assertLocalAndEquivalent(predicate: String) {
-        val sql = "SELECT id FROM doris.p2b_pushdown.t WHERE $predicate"
-        assertThat(query(sql)).isNotFullyPushedDown(FilterNode::class.java)
-        val withRules = computeActual("$sql ORDER BY id").onlyColumn.toList()
-        val local = computeActual(noPushdownSession(), "$sql ORDER BY id").onlyColumn.toList()
-        assertThat(withRules).describedAs(predicate).isEqualTo(local)
-    }
-
-    private fun assertRemoteSqlContains(sql: String, expectedFragment: String) {
-        val execution = getDistributedQueryRunner().executeWithPlan(session, sql)
-        val marker = DorisRemoteQueryModifier.marker(execution.queryId().toString())
-        val statements = DorisTestCluster.awaitAuditLogStatements(marker, AUDIT_LOG_TIMEOUT_MILLIS)
-        val scan = statements.single { it.contains("`t`") || it.contains("p2b_pushdown") }
-        assertThat(scan).describedAs(sql).contains(expectedFragment)
+        assertLocalAndIdentical("SELECT id FROM doris.p2b_pushdown.t WHERE $predicate", FilterNode::class.java)
     }
 
     companion object {
-        private const val AUDIT_LOG_TIMEOUT_MILLIS = 60_000L
-
         private fun provisionFixture() {
             DorisTestCluster.executeAsRoot(
                 "DROP DATABASE IF EXISTS p2b_pushdown",

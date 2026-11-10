@@ -30,11 +30,7 @@ import org.junit.jupiter.api.TestInstance
  * ground truth) and the direct Doris oracle, with plan-shape and audit-log assertions.
  */
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
-class TestDorisP4StringPushdown : AbstractTestQueryFramework() {
-    override fun createQueryRunner(): QueryRunner {
-        provisionFixture()
-        return DorisQueryRunner.builder().build()
-    }
+class TestDorisP4StringPushdown : DorisPushdownTest("p4_strings", { provisionFixture() }) {
 
     private fun modeSession(mode: DorisStringPushdownMode): Session = Session.builder(session)
         .setCatalogSessionProperty(DorisQueryRunner.CATALOG, "string_pushdown_mode", mode.name)
@@ -278,13 +274,6 @@ class TestDorisP4StringPushdown : AbstractTestQueryFramework() {
                     .hasMessageContaining("Escape string must be a single character")
             }
         }
-    }
-
-    private fun remoteSql(session: Session, sql: String): String {
-        val execution = getDistributedQueryRunner().executeWithPlan(session, sql)
-        val marker = DorisRemoteQueryModifier.marker(execution.queryId().toString())
-        val statements = DorisTestCluster.awaitAuditLogStatements(marker, 60_000)
-        return statements.single { it.contains("p4_strings") }
     }
 
     companion object {

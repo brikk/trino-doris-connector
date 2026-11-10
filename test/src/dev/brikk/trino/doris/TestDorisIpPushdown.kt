@@ -32,13 +32,7 @@ import org.junit.jupiter.api.TestInstance
  * `arrays_overlap` does NOT, so the constant-array form casts each element explicitly.
  */
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
-class TestDorisIpPushdown : AbstractTestQueryFramework() {
-    override fun createQueryRunner(): QueryRunner {
-        provisionFixture()
-        return DorisQueryRunner.builder().build()
-    }
-
-    private fun noPushdownSession(): Session = fullyLocalSession(session)
+class TestDorisIpPushdown : DorisPushdownTest("ip_pushdown", { provisionFixture() }) {
 
     // --- domain pushdown: =, IN, range, IS NULL ---
 
@@ -102,7 +96,7 @@ class TestDorisIpPushdown : AbstractTestQueryFramework() {
             val sql = "SELECT id FROM doris.ip_pushdown.t ORDER BY $col ASC NULLS FIRST, id LIMIT 3"
             assertThat(query(sql)).ordered().isFullyPushedDown()
             val pushed = computeActual(sql).onlyColumn.toList()
-            val local = computeActual(noPushdownSession(), sql).onlyColumn.toList()
+            val local = computeActual(fullyLocalSession(session), sql).onlyColumn.toList()
             assertThat(pushed).describedAs("TopN $col").isEqualTo(local)
         }
     }
@@ -132,32 +126,14 @@ class TestDorisIpPushdown : AbstractTestQueryFramework() {
     // --- helpers ---
 
     private fun assertPushedAndEquivalent(predicate: String) {
-        val sql = "SELECT id FROM doris.ip_pushdown.t WHERE $predicate"
-        assertThat(query(sql)).isFullyPushedDown()
-        val pushed = computeActual("$sql ORDER BY id").onlyColumn.toList()
-        val local = computeActual(noPushdownSession(), "$sql ORDER BY id").onlyColumn.toList()
-        assertThat(pushed).describedAs(predicate).isEqualTo(local)
+        assertPushedAndIdentical("SELECT id FROM doris.ip_pushdown.t WHERE $predicate")
     }
 
     private fun assertLocalAndEquivalent(predicate: String) {
-        val sql = "SELECT id FROM doris.ip_pushdown.t WHERE $predicate"
-        assertThat(query(sql)).isNotFullyPushedDown(FilterNode::class.java)
-        val withRules = computeActual("$sql ORDER BY id").onlyColumn.toList()
-        val local = computeActual(noPushdownSession(), "$sql ORDER BY id").onlyColumn.toList()
-        assertThat(withRules).describedAs(predicate).isEqualTo(local)
-    }
-
-    private fun assertRemoteSqlContains(sql: String, expectedFragment: String) {
-        val execution = getDistributedQueryRunner().executeWithPlan(session, sql)
-        val marker = DorisRemoteQueryModifier.marker(execution.queryId().toString())
-        val statements = DorisTestCluster.awaitAuditLogStatements(marker, AUDIT_LOG_TIMEOUT_MILLIS)
-        val scan = statements.single { it.contains("`t`") || it.contains("ip_pushdown") }
-        assertThat(scan).describedAs(sql).contains(expectedFragment)
+        assertLocalAndIdentical("SELECT id FROM doris.ip_pushdown.t WHERE $predicate", FilterNode::class.java)
     }
 
     companion object {
-        private const val AUDIT_LOG_TIMEOUT_MILLIS = 60_000L
-
         private fun provisionFixture() {
             DorisTestCluster.executeAsRoot(
                 "DROP DATABASE IF EXISTS ip_pushdown",

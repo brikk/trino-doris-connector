@@ -26,30 +26,10 @@ import org.junit.jupiter.api.TestInstance
  * `dev-docs/archive/NOTES-readonly-max-batch3.md`.
  */
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
-class TestDorisB3DistinctHaving : AbstractTestQueryFramework() {
-    override fun createQueryRunner(): QueryRunner {
-        provisionFixture()
-        return DorisQueryRunner.builder().build()
-    }
+class TestDorisB3DistinctHaving : DorisPushdownTest("b3_dist", { provisionFixture() }) {
 
     private val noAggPushdown: Session
         get() = fullyLocalSession(session)
-
-    private fun rows(session: Session, sql: String): List<String> =
-        computeActual(session, sql).materializedRows.map { it.toString() }.sorted()
-
-    private fun assertPushedAndIdentical(sql: String) {
-        assertThat(query(sql)).describedAs(sql).isFullyPushedDown()
-        assertThat(rows(session, sql)).describedAs(sql).isEqualTo(rows(noAggPushdown, sql))
-    }
-
-    private fun remoteSql(session: Session, sql: String): String {
-        val execution = getDistributedQueryRunner().executeWithPlan(session, sql)
-        val marker = DorisRemoteQueryModifier.marker(execution.queryId().toString())
-        return DorisTestCluster.awaitAuditLogStatements(marker, 60_000).single { it.contains("b3_dist") }
-    }
-
-    private fun remoteSql(sql: String): String = remoteSql(session, sql)
 
     // --- item 1: DISTINCT ---
 

@@ -36,11 +36,7 @@ import java.time.format.DateTimeFormatter
  * is never touched.
  */
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
-class TestDorisP2aArray : AbstractTestQueryFramework() {
-    override fun createQueryRunner(): QueryRunner {
-        provisionFixture()
-        return DorisQueryRunner.builder().build()
-    }
+class TestDorisP2aArray : DorisPushdownTest("p2a_array", { provisionFixture() }) {
 
     // --- type surface ---
 

@@ -28,11 +28,7 @@ import org.junit.jupiter.api.TestInstance
  * scenario through this connector is [testDeleteIsDeniedTheStockDeleteDangerIsClosed].
  */
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
-class TestDorisReadOnly : AbstractTestQueryFramework() {
-    override fun createQueryRunner(): QueryRunner {
-        provisionFixture()
-        return DorisQueryRunner.builder().build()
-    }
+class TestDorisReadOnly : DorisPushdownTest("p1_readonly", { provisionFixture() }) {
 
     private fun rowCount(): Long = DorisTestCluster.queryScalar("SELECT COUNT(*) FROM p1_readonly.t")!!.toLong()
 

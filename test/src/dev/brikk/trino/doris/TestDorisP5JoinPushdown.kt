@@ -21,11 +21,7 @@ import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.TestInstance
 
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
-class TestDorisP5JoinPushdown : AbstractTestQueryFramework() {
-    override fun createQueryRunner(): QueryRunner {
-        provisionFixture()
-        return DorisQueryRunner.builder().build()
-    }
+class TestDorisP5JoinPushdown : DorisPushdownTest("p5_join", { provisionFixture() }) {
 
     private fun joinSession(strategy: String): Session = Session.builder(session)
         .setCatalogSessionProperty(DorisQueryRunner.CATALOG, "join_pushdown_enabled", "true")
@@ -35,20 +31,7 @@ class TestDorisP5JoinPushdown : AbstractTestQueryFramework() {
     private val eager: Session get() = joinSession("EAGER")
     private val automatic: Session get() = joinSession("AUTOMATIC")
 
-    /** Rows sorted client-side so plan shape (no ORDER BY) stays pushdown-assertable. */
-    private fun rows(session: Session, sql: String): List<String> =
-        computeActual(session, sql).materializedRows.map { it.toString() }.sorted()
-
-    private fun assertPushedAndIdentical(sql: String) {
-        assertThat(query(eager, sql)).describedAs(sql).isFullyPushedDown()
-        assertThat(rows(eager, sql)).describedAs(sql).isEqualTo(rows(fullyLocalSession(eager), sql))
-    }
-
-    private fun remoteStatements(session: Session, sql: String): List<String> {
-        val execution = getDistributedQueryRunner().executeWithPlan(session, sql)
-        val marker = DorisRemoteQueryModifier.marker(execution.queryId().toString())
-        return DorisTestCluster.awaitAuditLogStatements(marker, 60_000).filter { it.contains("p5_join") }
-    }
+    override val pushdownSession: Session get() = eager
 
     // --- gating ---
 

@@ -28,11 +28,7 @@ import org.junit.jupiter.api.TestInstance
  * both engines are PINNED here; probe verdicts in `dev-docs/archive/NOTES-p5-batch.md`.
  */
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
-class TestDorisP5Batch : AbstractTestQueryFramework() {
-    override fun createQueryRunner(): QueryRunner {
-        provisionFixture()
-        return DorisQueryRunner.builder().build()
-    }
+class TestDorisP5Batch : DorisPushdownTest("p5_batch", { provisionFixture() }) {
 
     private fun jsonIds(predicate: String): List<Any?> =
         computeActual("SELECT id FROM doris.p5_batch.j WHERE $predicate ORDER BY id").onlyColumn.toList()
@@ -42,15 +38,6 @@ class TestDorisP5Batch : AbstractTestQueryFramework() {
 
     private fun jsonIdsLocal(predicate: String): List<Any?> =
         computeActual(fullyLocalSession(session), "SELECT id FROM doris.p5_batch.j WHERE $predicate ORDER BY id").onlyColumn.toList()
-
-    private fun remoteSql(session: Session, sql: String): String {
-        val execution = getDistributedQueryRunner().executeWithPlan(session, sql)
-        val marker = DorisRemoteQueryModifier.marker(execution.queryId().toString())
-        val statements = DorisTestCluster.awaitAuditLogStatements(marker, 60_000)
-        return statements.single { it.contains("p5_batch") }
-    }
-
-    private fun remoteSql(sql: String): String = remoteSql(session, sql)
 
     // --- json_extract_scalar equality ---
 

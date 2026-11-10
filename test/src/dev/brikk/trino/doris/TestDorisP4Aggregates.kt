@@ -32,11 +32,7 @@ import java.math.BigDecimal
  * narrative in `dev-docs/archive/NOTES-p4-aggregates.md`.
  */
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
-class TestDorisP4Aggregates : AbstractTestQueryFramework() {
-    override fun createQueryRunner(): QueryRunner {
-        provisionFixture()
-        return DorisQueryRunner.builder().build()
-    }
+class TestDorisP4Aggregates : DorisPushdownTest("p4_agg", { provisionFixture() }) {
 
     private fun noAggSession(): Session = Session.builder(session)
         .setCatalogSessionProperty(DorisQueryRunner.CATALOG, "aggregation_pushdown_enabled", "false")
@@ -261,9 +257,7 @@ class TestDorisP4Aggregates : AbstractTestQueryFramework() {
         assertThat(computeActual(sql).onlyValue).isEqualTo(2L) // rows 1 and 5
         assertSameAsLocal(sql)
 
-        val execution = getDistributedQueryRunner().executeWithPlan(session, sql)
-        val marker = DorisRemoteQueryModifier.marker(execution.queryId().toString())
-        val statement = DorisTestCluster.awaitAuditLogStatements(marker, 60_000).single { it.contains("p4_agg") }
+        val statement = remoteSql(sql)
         assertThat(statement).contains("count(*)")
         assertThat(statement).contains("array_contains(`c_arr`, 7)")
         assertThat(statement).contains("`c_int` >= 1")
@@ -271,12 +265,9 @@ class TestDorisP4Aggregates : AbstractTestQueryFramework() {
 
     @Test
     fun testRemoteAggregateSqlShapes() {
-        val execution = getDistributedQueryRunner().executeWithPlan(
-            session,
+        val statement = remoteSql(
             "SELECT g_int, count(*), sum(c_dec), min(c_int), max(c_dt6) FROM doris.p4_agg.t GROUP BY g_int",
         )
-        val marker = DorisRemoteQueryModifier.marker(execution.queryId().toString())
-        val statement = DorisTestCluster.awaitAuditLogStatements(marker, 60_000).single { it.contains("p4_agg") }
         assertThat(statement).contains("count(*)")
         assertThat(statement).contains("sum(`c_dec`)")
         assertThat(statement).contains("min(`c_int`)")

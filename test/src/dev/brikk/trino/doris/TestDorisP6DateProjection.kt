@@ -27,28 +27,10 @@ import org.junit.jupiter.api.TestInstance
  * unpushed plan (`complex_expression_pushdown = false` disables convertProjection wiring).
  */
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
-class TestDorisP6DateProjection : AbstractTestQueryFramework() {
-    override fun createQueryRunner(): QueryRunner {
-        provisionFixture()
-        return DorisQueryRunner.builder().build()
-    }
+class TestDorisP6DateProjection : DorisPushdownTest("p6_dates", { provisionFixture() }) {
 
     private val local: io.trino.Session
         get() = fullyLocalSession(session)
-
-    private fun rows(session: io.trino.Session, sql: String): List<String> =
-        computeActual(session, sql).materializedRows.map { it.toString() }.sorted()
-
-    private fun assertPushedAndIdentical(sql: String) {
-        assertThat(query(sql)).describedAs(sql).isFullyPushedDown()
-        assertThat(rows(session, sql)).describedAs(sql).isEqualTo(rows(local, sql))
-    }
-
-    private fun remoteSql(sql: String): String {
-        val execution = getDistributedQueryRunner().executeWithPlan(session, sql)
-        val marker = DorisRemoteQueryModifier.marker(execution.queryId().toString())
-        return DorisTestCluster.awaitAuditLogStatements(marker, 60_000).single { it.contains("p6_dates") }
-    }
 
     // --- projection-only pushdown, all three user spellings ---
 
