@@ -38,31 +38,18 @@ import io.trino.spi.type.VarcharType.VARCHAR
 import java.util.Optional
 
 /**
- * `json_extract_scalar(json_col, '$.path') = 'literal'` (either orientation) ->
- * `(json_unquote(json_extract(`col`, ?)) = ?)` — registry verdict CONDITIONALLY_EQUIVALENT,
- * scope-restricted by the connector's own P5 live probe (`dev-docs/archive/NOTES-p5-batch.md`) to the shapes
- * where the two engines are proven cell-identical THROUGH the connector:
+ * Pushed only where the engines agree:
  *
- * - EQUALITY ONLY. `<>`, `IS NULL`, and `IS NOT NULL` forms are NOT pushable: at a
- *   non-scalar path value (object/array) Trino returns SQL NULL while Doris returns the
- *   JSON text (`'{"b":1}'` / `'[1,2]'`) — a data-dependent divergence no literal guard can
- *   see. Under `=` with the literal guards below, both engines drop such rows identically.
- * - The PATH must contain only simple dotted field names (`$.key`, `$.a.b`). All
- *   subscripts stay local: Doris treats [0] on non-arrays as identity, while Trino can
- *   interpret numeric tokens as object keys (R-02). Quoted-key syntaxes also differ
- *   (Trino `$["a.b"]` vs Doris `$."a.b"`) and stay local.
- * - The LITERAL must not start with `{`/`[` (could equal Doris's non-scalar text where
- *   Trino sees NULL — over-return), must not look like a JSON number (both engines
- *   canonicalize number text INDEPENDENTLY and diverge: Doris `1e+30`/`1.5e-07`/`-0` vs
- *   Trino 484 `1.0E30`/`1.5E-7`/`0` — under-return through a pushed filter), and must not
- *   contain NUL (P4 policy). Non-finite spellings (`inf`, `NaN`, etc.) stay local too:
- *   Doris can persist exponent overflow as invalid JSON and extract the text `inf`.
- *   `'true'`/`'false'`/`'null'` are proven identical and push.
+ * - Equality only, as a top-level WHERE conjunct. For an object or array at the path, Trino
+ *   returns NULL while Doris returns the JSON text; with the literal checks below `=` drops
+ *   those rows on both engines, but `<>`, IS NULL or NOT would not.
+ * - Plain dotted field paths only: Doris treats `[0]` on a non-array as identity, Trino can read
+ *   numeric tokens as object keys, and the quoted-key syntaxes differ.
+ * - Literals stay local if they start with `{` or `[`, look like a number (the engines format
+ *   numbers differently, e.g. `1e+30` and `1.0E30`), spell a non-finite number (Doris can
+ *   extract `inf` from overflowed JSON) or contain 0x00.
  *
- * JSON-null-at-path and missing-key both yield SQL NULL on BOTH engines (live-proven —
- * Doris `json_unquote(json_extract(...))` returns SQL NULL for JSON null, unlike MySQL's
- * `'null'` text), so `=` needs no null-shape guard. Predicate-level tier: top-level WHERE
- * conjuncts only, never composed (a remote `NOT` would flip the both-drop divergent cells).
+ * A JSON null and a missing key both yield SQL NULL on both engines.
  */
 internal class RewriteJsonExtractScalarEquality(
     private val quote: (String) -> String,
@@ -72,7 +59,6 @@ internal class RewriteJsonExtractScalarEquality(
     override fun rewrite(expression: Call, captures: Captures, context: RewriteContext<ParameterizedExpression>): Optional<ParameterizedExpression> {
         val left = expression.arguments[0]
         val right = expression.arguments[1]
-        // '=' is symmetric — accept both orientations
         val (extractCall, literal) = when {
             left is Call && right is Constant -> left to right
             left is Constant && right is Call -> right to left
@@ -98,7 +84,7 @@ internal class RewriteJsonExtractScalarEquality(
         )
     }
 
-    /** A Variable over a native Doris JSON column (VARIANT is excluded until separately proven). */
+    /** Native Doris JSON only; VARIANT, which also maps to Trino JSON, is not admitted. */
     private fun pushableJsonColumn(argument: ConnectorExpression, context: RewriteContext<*>): JdbcColumnHandle? {
         val variable = argument as? Variable ?: return null
         if (variable.type.baseName != StandardTypes.JSON) {
@@ -109,7 +95,6 @@ internal class RewriteJsonExtractScalarEquality(
         return if (DorisColumnType.parse(columnType).baseName == "json") column else null
     }
 
-    /** Constant dotted-field path only; runtime JSON shape makes subscript traversal unsafe. */
     private fun simplePath(argument: ConnectorExpression): Slice? {
         val constant = argument as? Constant ?: return null
         if (constant.type !is VarcharType) {
@@ -119,7 +104,6 @@ internal class RewriteJsonExtractScalarEquality(
         return if (SIMPLE_PATH.matches(slice.toStringUtf8())) slice else null
     }
 
-    /** Non-NULL varchar literal that cannot collide with a probe-flagged divergent cell. */
     private fun safeLiteral(constant: Constant): Slice? {
         if (constant.type !is VarcharType) {
             return null
@@ -141,10 +125,9 @@ internal class RewriteJsonExtractScalarEquality(
     companion object {
         private val JSON_EXTRACT_SCALAR = FunctionName("json_extract_scalar")
 
-        /** `$.key`, `$.a.b`, ...; never array subscripts, even when the stored values happen to be arrays. */
         private val SIMPLE_PATH = Regex("""\$(\.[A-Za-z_][A-Za-z0-9_]*)+""")
 
-        /** Broad "could be a number rendering on either engine" test — anything matching stays local. */
+        /** Deliberately broad: anything either engine might print as a number stays local. */
         private val NUMERIC_LOOKING = Regex("""[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?""")
 
         private val NON_FINITE_LOOKING = Regex("""[+-]?(inf(inity)?|nan)""", RegexOption.IGNORE_CASE)
