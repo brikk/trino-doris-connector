@@ -35,24 +35,7 @@ import io.trino.spi.type.BooleanType.BOOLEAN
 import io.trino.spi.type.VarcharType
 import java.util.Optional
 
-/**
- * `value LIKE pattern [ESCAPE escape]` pushdown — enabled ONLY in BINARY/FULL string-pushdown
- * mode. Probe evidence (`dev-docs/archive/REPORT-string-comparison-probe-4.1.3.md`, LIKE section):
- * - Doris LIKE matching is byte/character semantics identical to Trino (case-sensitive,
- *   `%`/`_` identical, `_` is one CHARACTER incl. 4-byte emoji).
- * - Trino's NO-escape LIKE treats `\` as a LITERAL, while Doris's default escape IS `\` —
- *   the exact fix is doubling backslashes in the rendered pattern (probe-proven:
- *   Doris `'a\\b'` matches the literal `a\b`).
- * - With an explicit `ESCAPE 'x'`, Doris honors ONLY the declared escape char (backslash
- *   becomes literal — probed), matching Trino's ESCAPE contract, so the 3-arg form pushes
- *   with the pattern untouched only for a single non-NUL ASCII escape. Doris 4.1.5
- *   rejects non-ASCII escape characters that Trino accepts (R-07).
- * - Patterns/escapes containing a NUL byte are never pushed (the probe's NUL under-return).
- *
- * Guards: the value must be a Variable over a native `varchar`/`string` Doris column (CHAR is
- * excluded — trailing-space stored data diverges, see the CHAR controller); the pattern (and
- * escape, if present) must be non-NULL varchar constants.
- */
+/** Doris LIKE is case-sensitive and matches `_` to one character, even a 4-byte one, as Trino does. */
 internal class RewriteStringLike(
     private val quote: (String) -> String,
 ) : ConnectorExpressionRule<Call, ParameterizedExpression> {
@@ -74,7 +57,7 @@ internal class RewriteStringLike(
         val quotedColumn = quote(column.columnName)
 
         if (expression.arguments.size == 2) {
-            // Trino no-escape semantics: backslash is literal -> double it for Doris's default escape.
+            // Without ESCAPE, Trino treats a backslash literally but Doris uses it as the escape.
             val dorisPattern = utf8Slice(patternText.replace("\\", "\\\\"))
             return Optional.of(
                 ParameterizedExpression(
@@ -86,6 +69,7 @@ internal class RewriteStringLike(
 
         val escape = varcharConstant(expression.arguments[2]) ?: return Optional.empty()
         val escapeText = escape.toStringUtf8()
+        // Doris honours only the declared escape, as Trino does, but rejects non-ASCII escapes.
         if (escapeText.length != 1 || escapeText[0] !in '\u0001'..'\u007f') {
             return Optional.empty()
         }
@@ -106,7 +90,7 @@ internal class RewriteStringLike(
             return null
         }
         val column = context.getAssignment(variable.name) as? JdbcColumnHandle ?: return null
-        // char excluded (trailing-space divergence); everything else is not a string column
+        // CHAR excluded (trailing spaces)
         return column.takeIf(DorisColumnType::isNativeString)
     }
 
