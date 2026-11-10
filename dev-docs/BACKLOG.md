@@ -79,7 +79,7 @@ backlog. Existing release mechanics are in [Releasing](RELEASING.md).
   [brikk-sql#1](https://github.com/brikk/brikk-sql/issues/1) is an evidence correction,
   not a consumer release dependency or permission to re-enable the rules.
 - **E-28:** done. The registry check moved from catalog creation to
-  `TestDorisPushdownEvidenceDrift`, and the metadata dependency to test scope.
+  `TestDorisFunctionRegistryVerdicts`, and the metadata dependency to test scope.
 - **ADBC / Arrow Flight (D-02):** parked, not implemented or a release prerequisite.
   Retain JDBC as default/control plane and correctness reference; an opt-in result
   transport needs direct BE reachability (including NAT/k8s constraints), fresh

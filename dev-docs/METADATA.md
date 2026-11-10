@@ -5,7 +5,7 @@ a test-scope dependency; the plugin does not bundle it. Its version is in
 [the version catalog](../gradle/libs.versions.toml).
 Do not replace the immutable release with a mutable snapshot or automatically bump it.
 
-[TestDorisPushdownEvidenceDrift](../test/src/dev/brikk/trino/doris/TestDorisPushdownEvidenceDrift.kt)
+[TestDorisFunctionRegistryVerdicts](../test/src/dev/brikk/trino/doris/TestDorisFunctionRegistryVerdicts.kt)
 pins the artifact's file name and SHA-256, and for each of the 17 pushed functions the
 registry's source/target, verdict and provenance. Registry drift fails the build; it
 never changes what the connector pushes. Not every connector rule is a distinct registry entry.

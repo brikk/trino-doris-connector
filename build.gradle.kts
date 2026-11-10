@@ -113,7 +113,7 @@ dependencies {
     }
     testImplementation("io.trino:trino-testing")
     testImplementation("io.airlift:testing")
-    // Hazard registry the pushdown rules were proven against; checked by TestDorisPushdownEvidenceDrift.
+    // Hazard registry the pushdown rules were proven against; checked by TestDorisFunctionRegistryVerdicts.
     testImplementation(libs.brikk.sql.metadata)
     // junit/assertj/kotlin-test come from the buildlogic.kotlin.common convention
 }
@@ -151,7 +151,7 @@ tasks.test {
         }
     }
 
-    // Live P1a smoke tests target the already-running stock Doris compose cluster
+    // Live TestDorisConnectorSmoke tests target the already-running Doris compose cluster
     // (./compose, mysql host port 9130). They fail loud if it is down.
     // 2g is ample for one in-process DistributedQueryRunner + the live suites (3g was
     // trino-ducklake heritage); a smaller test JVM also keeps host free memory above the

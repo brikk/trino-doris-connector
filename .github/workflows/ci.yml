@@ -3,7 +3,7 @@
 # The suite is NOT hermetic: live tests connect to a real stock Doris 4.1.5 FE+BE
 # (FE MySQL on host 127.0.0.1:9130) AND docker-exec into the `trino-doris-fe`
 # container for oracle EXPLAIN / audit-log assertions (see test/.../DorisTestCluster.kt
-# and TestDorisP2bInvertedIndexEvidence.kt). That container-exec requirement is why we
+# and TestDorisArrayInvertedIndex.kt). That container-exec requirement is why we
 # run real `docker compose` on the runner via ./compose/up.sh rather than GH Actions
 # `services:` containers — service containers are reachable by name/port but you cannot
 # `docker exec` into them from the job the way these tests need.

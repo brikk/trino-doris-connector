@@ -64,3 +64,27 @@ qualification claim.
 - [Metadata API audit](REPORT-brikk-metadata-api-audit.md)
 - [Original Compose guide](compose-README.md)
 - [Original manual-sandbox transcript](compose-trino-README.md)
+
+## Current test class names
+
+Archived records retain their original names. All names below have the `TestDoris` prefix.
+
+| Archived suffix | Current suffix |
+|---|---|
+| P1aSmoke | ConnectorSmoke |
+| P2aArray | ArrayMapping |
+| P2bPushdown | ArrayPredicatePushdown |
+| P2bInvertedIndexEvidence | ArrayInvertedIndex |
+| P3Composition | BooleanComposition |
+| P3TopN | TopNPushdown |
+| P4Aggregates | AggregatePushdown |
+| P4AggregateProbes | EngineAggregateSemantics |
+| P4StringPushdown | StringPushdownModes |
+| P5Batch | JsonAndCardinalityPushdown |
+| P5JoinPushdown | JoinPushdown |
+| P5Statistics | Statistics |
+| P6DateProjection | DateProjectionPushdown |
+| B1ScalarPushdown | ScalarPushdown |
+| B2Aggregates | SelectionAndApproximateAggregates |
+| B3DistinctHaving | DistinctAndHaving |
+| PushdownEvidenceDrift | FunctionRegistryVerdicts |
