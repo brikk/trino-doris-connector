@@ -103,18 +103,19 @@ class TestDorisTimezoneAudit : AbstractTestQueryFramework() {
 
     @Test
     fun testJvmDefaultZoneDoesNotLeakIntoBinding() {
-        // A misconfigured driver-JVM default zone must not shift pushed literals (this is
-        // where java.sql.Date/Timestamp-based write functions would break; the connector
-        // uses LocalDate/LocalDateTime binding — proven here by mutation).
-        val sql = "SELECT id FROM doris.p5_tz.t WHERE dt = TIMESTAMP '2026-03-08 02:30:00' OR d = DATE '0000-01-01'"
-        val reference = rows(session, sql)
+        val predicates = listOf("dt = TIMESTAMP '2026-03-08 02:30:00'", "d = DATE '0000-01-01'")
         val original = TimeZone.getDefault()
         try {
-            // UTC+14 — the most extreme offset; any epoch-day/zone-shift bug moves a date
-            TimeZone.setDefault(TimeZone.getTimeZone("Pacific/Kiritimati"))
-            assertThat(rows(session, sql)).isEqualTo(reference)
-            TimeZone.setDefault(TimeZone.getTimeZone("America/New_York"))
-            assertThat(rows(session, sql)).isEqualTo(reference)
+            for (predicate in predicates) {
+                val sql = "SELECT id FROM doris.p5_tz.t WHERE $predicate"
+                val reference = rows(fullyLocalSession(session), sql)
+                assertThat(reference).isNotEmpty()
+                for (zone in listOf("Pacific/Kiritimati", "America/New_York")) {
+                    TimeZone.setDefault(TimeZone.getTimeZone(zone))
+                    assertThat(query(sql)).describedAs("$predicate @ $zone").isFullyPushedDown()
+                    assertThat(rows(session, sql)).describedAs("$predicate @ $zone").isEqualTo(reference)
+                }
+            }
         } finally {
             TimeZone.setDefault(original)
         }
