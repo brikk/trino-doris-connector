@@ -30,7 +30,7 @@ import java.util.concurrent.TimeUnit
  * deterministic on a fresh cluster regardless of auto-analyze timing.
  */
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
-class TestDorisP5Statistics : DorisPushdownTest("p5_stats", { provisionFixture() }) {
+class TestDorisStatistics : DorisPushdownTest("p5_stats", { provisionFixture() }) {
 
     /** SHOW STATS rows keyed by column name; the summary row keys as "" (null column_name). */
     private fun showStats(table: String, session: Session = getSession()): Map<String, MaterializedRow> =
