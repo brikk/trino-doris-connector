@@ -73,17 +73,10 @@ import java.util.UUID
 import java.util.function.BiFunction
 
 /**
- * Read-only Doris client on the Base JDBC / SingleStore shape (PLAN G1; SR K1).
- *
- * Doris databases surface as JDBC *catalogs* on the MySQL wire (PROBE §10), so — exactly
- * like SingleStore/MySQL — schema listing reads catalogs and `TABLE_CAT` is the remote
- * schema name. Doris `internal` catalog only; system schemas hidden (PLAN G9).
- *
- * Column metadata is read from `information_schema.columns.COLUMN_TYPE`, NEVER from
- * `DatabaseMetaData.getColumns`, which is proven lossy on Doris — it narrows
- * LARGEINT to INT, reports IPV4/IPV6/VARIANT as OTHER, BITMAP as BIT, and reports only the
- * element type for ARRAY (PROBE §1, Impl #1; ledger global rule 2). This also removes
- * stock's per-scan companion `SELECT *` RSMD probe (ledger §E refinement).
+ * Doris databases appear as JDBC catalogs, so `TABLE_CAT` is the remote schema name. Column types
+ * come from `information_schema.columns.COLUMN_TYPE` because `DatabaseMetaData.getColumns`
+ * narrows LARGEINT to INT, reports IPV4/IPV6/VARIANT as OTHER and BITMAP as BIT, and gives only
+ * the element type of an ARRAY.
  */
 class DorisClient @Inject constructor(
     config: BaseJdbcConfig,
@@ -100,15 +93,12 @@ class DorisClient @Inject constructor(
     queryBuilder,
     config.jdbcTypesMappedToVarchar,
     identifierMapping,
-    // execute()/insert paths apply BaseJdbcClient.queryModifier (both denied by the read-only
-    // guard); the scan path gets the query-id comment via DorisQueryBuilder. Wrapped here too
-    // so every conceivable remote statement carries the Trino query id (PLAN §8).
+    // Scans get the query-id comment from DorisQueryBuilder; this covers the other statement paths.
     DorisRemoteQueryModifier(queryModifier),
     false,
 ) {
     private val typeMapping = DorisTypeMapping(typeManager)
 
-    /** Cluster-scoped cancellation (multi-FE/LB correct) — see [DorisClusterScopedCancel]. */
     internal val clusterScopedCancel = DorisClusterScopedCancel(cancelConnectionFactory, dorisConfig.isClusterScopedCancel())
 
     private val rewriters = DorisPushdownRewriters(typeMapping, ::quoted)
@@ -126,8 +116,6 @@ class DorisClient @Inject constructor(
     }
 
     override fun listSchemas(connection: Connection): Collection<String> {
-        // Doris exposes databases as JDBC catalogs; information_schema.schemata lists them
-        // (PROBE §10). DatabaseMetaData.getSchemas() is not the right namespace here.
         try {
             connection.prepareStatement("SELECT SCHEMA_NAME FROM information_schema.schemata").use { statement ->
                 statement.executeQuery().use { resultSet -> return readSchemaNames(resultSet) }
@@ -149,12 +137,11 @@ class DorisClient @Inject constructor(
     }
 
     override fun filterRemoteSchema(schemaName: String): Boolean {
-        // G9: hide Doris system schemas (PROBE §10 catalog list).
         return schemaName.lowercase(Locale.ENGLISH) !in HIDDEN_SCHEMAS
     }
 
     override fun getTables(connection: Connection, schemaName: Optional<String>, tableName: Optional<String>): ResultSet {
-        // Doris maps databases to JDBC catalogs (same pattern as SingleStore/MySQL at 483).
+        // The schema is passed as the JDBC catalog.
         val metadata: DatabaseMetaData = connection.metaData
         return metadata.getTables(
             schemaName.orElse(null),
@@ -169,16 +156,8 @@ class DorisClient @Inject constructor(
     override fun getTableRemoteSchemaName(resultSet: ResultSet): String = resultSet.getString("TABLE_CAT")
 
     /**
-     * P5 cost-aware join pushdown (PLAN §6.5; OFF by default via `join-pushdown.enabled`).
-     * Joins arrive on the LEGACY path only (complex join pushdown is force-disabled in
-     * [DorisClientModule] — no variable-comparison rewrite rules exist). Shape gates:
-     * - INNER only. Outer joins stay local until effective output nullability can be
-     *   propagated; retaining base NOT NULL flags makes min_by/max_by unsafe (R-04).
-     * - AUTOMATIC strategy consults [JdbcJoinPushdownUtil.shouldPushDownJoinCostAware],
-     *   which feeds on the engine estimates derived from [getTableStatistics] — tables
-     *   without statistics yield unknown sizes and stay LOCAL under AUTOMATIC (fail-soft
-     *   stats feeding a conservative cost decision); EAGER pushes any eligible shape.
-     * Condition gates are in [isSupportedJoinCondition].
+     * Only inner joins are pushed. On the null-supplying side of an outer join a column's NOT NULL
+     * flag is no longer true, and rules such as min_by/max_by rely on it.
      */
     override fun legacyImplementJoin(
         session: ConnectorSession,
@@ -198,12 +177,7 @@ class DorisClient @Inject constructor(
         }
     }
 
-    /**
-     * Complex (expression-based) join path: deliberately NOT implemented. It is force-off by
-     * default ([DorisClientModule]); if a user re-enables `complex_join_pushdown_enabled`,
-     * conditions still cannot convert (no variable-comparison rules), so joins simply stay
-     * local — this override just makes the posture explicit and future-proof.
-     */
+    /** Complex join pushdown is off by default ([DorisClientModule]); this keeps joins local if a session enables it. */
     override fun implementJoin(
         session: ConnectorSession,
         joinType: JoinType,
@@ -216,20 +190,10 @@ class DorisClient @Inject constructor(
     ): Optional<PreparedQuery> = Optional.empty()
 
     /**
-     * Per-condition typed guard (legacy path). Operators: `=` and IDENTICAL (Trino
-     * `IS NOT DISTINCT FROM` -> Doris `<=>`, truth-table live-proven identical incl.
-     * NULL-key matching in joins) plus the four range comparisons and `<>` — all probed
-     * NULL-drop-identical on both engines. Key types: the exact NON-TEXT set only —
-     * integers, DECIMAL (incl. the LARGEINT mapping), DATE, DATETIME, BOOLEAN.
-     * Excluded with reasons (dev-docs/archive/NOTES-p5-joins.md):
-     * - CHAR/VARCHAR keys: collation posture is mode-gated for filters; join conditions
-     *   compare remote-stored bytes vs Trino-wire values — deferred even for BINARY/FULL
-     *   modes until proven (documented future extension; byte semantics themselves are
-     *   proven by the P4 probe).
-     * - FLOAT/DOUBLE keys: the wire text of extreme doubles reads "Infinity" (P0/P5-stats
-     *   evidence), so Trino-side and Doris-side comparisons can see DIFFERENT values —
-     *   a remote join could return different rows than the local join it replaces.
-     * - IPADDRESS/JSON/etc.: unproven or non-comparable.
+     * Join keys are limited to exact non-text types. Text keys stay local in every string mode:
+     * CHAR compares stored bytes in Doris but ignores trailing spaces in Trino, and VARCHAR join
+     * keys are unverified. REAL/DOUBLE keys stay local because extreme values read back as
+     * Infinity, so the engines would compare different values.
      */
     override fun isSupportedJoinCondition(session: ConnectorSession, joinCondition: JdbcJoinCondition): Boolean =
         isJoinKeyTypeSupported(joinCondition.leftColumn.columnType) &&
@@ -242,15 +206,7 @@ class DorisClient @Inject constructor(
         else -> false
     }
 
-    /**
-     * Remote statistics for the cost-based optimizer (PLAN P4 tail; probe verdicts in
-     * `dev-docs/archive/NOTES-p5-statistics.md`). Config-gated (`doris.statistics.enabled` /
-     * `statistics_enabled`). FAIL-SOFT by contract: statistics are advisory, so any failure
-     * degrades to [TableStatistics.empty] (all-unknown) with a DEBUG log — never a query
-     * failure. The connector never issues ANALYZE (that writes to Doris's stats store);
-     * auto-analyze and manual ANALYZE are the user's domain.
-     */
-    @Suppress("TooGenericExceptionCaught") // fail-soft BY CONTRACT: stats are advisory, any failure degrades to unknown
+    @Suppress("TooGenericExceptionCaught") // statistics are advisory: any failure degrades to unknown estimates
     override fun getTableStatistics(session: ConnectorSession, handle: JdbcTableHandle): TableStatistics {
         if (!DorisSessionProperties.isStatisticsEnabled(session) || !handle.isNamedRelation) {
             return TableStatistics.empty()
@@ -275,8 +231,7 @@ class DorisClient @Inject constructor(
         schemaTableName: SchemaTableName,
         remoteTableName: RemoteTableName,
     ): List<JdbcColumnHandle> {
-        // Metadata truth = information_schema.columns.COLUMN_TYPE (ledger global rule 2).
-        // TABLE_SCHEMA in Doris information_schema is the database, i.e. the JDBC catalog.
+        // TABLE_SCHEMA holds the Doris database, which is the JDBC catalog.
         val remoteSchema = remoteSchemaName(remoteTableName)
         try {
             connectionFactory.openConnection(session).use { connection ->
@@ -322,8 +277,6 @@ class DorisClient @Inject constructor(
                         .build(),
                 )
             }
-            // Unsupported types (ARRAY until P2, MAP/STRUCT, BITMAP/HLL/AGG_STATE, DECIMAL>38
-            // handled inside the mapper) follow the v1 unsupported-type policy: hidden.
         }
         if (allColumns == 0) {
             throw TableNotFoundException(schemaTableName)
@@ -348,9 +301,6 @@ class DorisClient @Inject constructor(
     }
 
     override fun toWriteMapping(session: ConnectorSession, type: Type): WriteMapping {
-        // Read-only connector (PLAN §7): no Trino->Doris type write path exists. The full
-        // defense-in-depth read-only enforcement (ForwardingJdbcClient wrapper, access
-        // control, system.execute denial) lands in P1b.
         throw TrinoException(NOT_SUPPORTED, "This connector does not support writes")
     }
 
@@ -361,17 +311,14 @@ class DorisClient @Inject constructor(
         table: JdbcTableHandle,
         columns: List<JdbcColumnHandle>,
     ): PreparedStatement {
-        // Per-query timeout applied SERVER-side at session scope on the scan connection.
-        // Live-probed on 4.1.3: the Doris timeout checker kills a still-running (including
-        // send-blocked/backpressured) query — "query is timeout, killed by timeout checker" —
-        // whereas Connector/J's client-side Statement.setQueryTimeout timer does NOT cover the
-        // streaming drain phase and never fires there (P1b probe; PROBE §8/§9 for the SET
-        // mechanism). Session scope only, never global (ledger §B).
+        // Server-side, because Connector/J's Statement.setQueryTimeout does not fire while a
+        // streaming result is drained; Doris's query_timeout also stops a query blocked on sending.
         DorisSessionProperties.getQueryTimeout(session)?.let { timeout ->
             val seconds = DorisTimeouts.querySeconds(timeout)
             connection.createStatement().use { it.execute("SET query_timeout = $seconds") }
         }
-        // Fresh per execution attempt: early close of this scan must never kill sibling scans.
+        // One marker per statement: Trino closes scans early, for LIMIT too, and cancelling one
+        // must not kill its sibling scans.
         val marker = "trino_statement_id=${UUID.randomUUID()}"
         val query = prepareQuery(session, connection, table, Optional.empty(), columns, emptyMap(), Optional.of(split))
             .transformQuery { sql -> "/*$marker*/ $sql" }
@@ -382,8 +329,7 @@ class DorisClient @Inject constructor(
     }
 
     override fun getPreparedStatement(connection: Connection, sql: String, columnCount: Optional<Int>): PreparedStatement {
-        // Streaming result mode == setFetchSize(Integer.MIN_VALUE): ~2.4x lower peak heap on a
-        // 1M-row scan, full scan under -Xmx256m (PROBE §7; ledger §B "streaming"; PLAN G8).
+        // Otherwise Connector/J buffers the whole result set in memory.
         val statement = connection.prepareStatement(sql)
         if (statement.isWrapperFor(JdbcStatement::class.java)) {
             statement.unwrap(JdbcStatement::class.java).enableStreamingResults()
@@ -393,47 +339,29 @@ class DorisClient @Inject constructor(
 
     override fun abortReadConnection(connection: Connection, resultSet: ResultSet) {
         if (!resultSet.isAfterLast) {
-            // Scan cancellation already ran through DorisPreparedStatement.cancel(); retain
-            // the socket-only fallback for other BaseJdbcClient read paths too.
+            // Scans are cancelled by DorisPreparedStatement; this covers the other read paths.
             connection.abort(directExecutor())
         }
     }
 
-    // LIMIT pushdown is inherited-and-preserved baseline behavior: stock Trino 483 pushed
-    // LIMIT to Doris 4.1.3 as a single remote statement (STOCK pushdown ledger; ledger §E).
     override fun limitFunction(): Optional<BiFunction<String, Long, String>> {
         return Optional.of(BiFunction { sql, limit -> "$sql LIMIT $limit" })
     }
 
     override fun isLimitGuaranteed(session: ConnectorSession): Boolean = true
 
-    /**
-     * Safe TopN (PLAN §6.5; P3): every key must have proven ordering semantics, including
-     * IPADDRESS and mode-gated native VARCHAR. CHAR, REAL/DOUBLE, and text-rendered complex
-     * types stay local because stored-value and exposed-value ordering can differ.
-     * Doris 4.1.3 supports the native `NULLS FIRST/LAST` syntax
-     * for all four Trino orderings (live-probed 2026-07-19 — SR K6's ISNULL-prefix trick is
-     * unnecessary; "keep the pattern, re-decide the rendering" resolved to native). A TopN is
-     * always rendered WITH its LIMIT (bare ORDER BY is never emitted; probed anyway:
-     * `default_order_by_limit=-1`, no 65535 truncation, LIMIT 70000 returns exactly 70000
-     * ordered rows).
-     */
     override fun supportsTopN(session: ConnectorSession, handle: JdbcTableHandle, sortOrder: List<JdbcSortItem>): Boolean =
         sortOrder.all { !isDecimal256(it.column()) && isPushableTopNKey(session, it.column()) }
 
     /**
-     * Native VARCHAR sort keys become TopN-eligible in BINARY/FULL string-pushdown mode: Doris
-     * `ORDER BY` over strings is pure byte order (probe: the full adversarial set sorts in
-     * ascending UTF-8 byte order), which equals Trino's VARCHAR codepoint ordering. CHAR keys
-     * stay OFF in every mode — Trino orders trimmed/padded CHAR values while Doris orders
-     * stored bytes, divergent for trailing-space data and undetectable from the query
-     * (dev-docs/archive/REPORT-string-comparison-probe-4.1.3.md "ORDER BY").
+     * Sort keys must order identically on both engines. Doris orders strings by UTF-8 bytes, which
+     * matches Trino's VARCHAR order; native VARCHAR keys push in BINARY/FULL mode. CHAR keys never
+     * push: Doris orders stored bytes, while Trino ignores trailing spaces.
      */
     private fun isPushableTopNKey(session: ConnectorSession, column: JdbcColumnHandle): Boolean = when {
         column.columnType is VarcharType -> DorisColumnType.isNativeString(column) &&
             DorisSessionProperties.getStringPushdownMode(session).allowsFullStringPushdown
-        // IPADDRESS: Doris IPV4/IPV6 order == Trino's unsigned big-endian 16-byte order
-        // (IpAddressType.comparisonOperator), live-proven byte-exact; NULLS FIRST/LAST native.
+        // Doris IPV4/IPV6 order matches Trino's unsigned 16-byte IPADDRESS order.
         typeMapping.isIpAddress(column.columnType) -> true
         else -> DorisAggregatePushdown.isExactPushableKeyType(column.columnType)
     }
@@ -449,8 +377,7 @@ class DorisClient @Inject constructor(
         )
     }
 
-    // Doris ORDER BY + LIMIT is exact (full sort, exact limit incl. >65535 — live-probed),
-    // so the engine may drop its local TopN entirely.
+    // Doris sorts fully and applies the exact LIMIT, including limits above 65535.
     override fun isTopNGuaranteed(session: ConnectorSession): Boolean = true
 
     override fun convertProjection(
@@ -483,19 +410,10 @@ class DorisClient @Inject constructor(
     }
 
     /**
-     * GROUP BY comes with aggregate pushdown, so every grouping key must be either an
-     * exact-pushable type ([DorisAggregatePushdown.isExactPushableKeyType]) or — since
-     * READ-ONLY-MAX batch 3 — native VARCHAR/STRING: grouping is EQUALITY-only, and string
-     * equality is byte-exact on both engines (P4 probe; the tiered-GUARDED evidence),
-     * with wire fidelity proven for the key values that come back. This also makes
-     * SELECT DISTINCT over text columns push (DISTINCT lowers to an aggregation with no
-     * aggregate functions). CHAR keys stay excluded (Doris groups stored bytes, Trino
-     * groups trimmed values — the standing trailing-space divergence); REAL/DOUBLE stay
-     * excluded (NaN/±0.0 grouping hazard). Ordering-dependent surfaces (min/max args,
-     * count DISTINCT args, TopN sort keys) deliberately do NOT inherit this widening —
-     * those remain governed by their own gates and the string-mode design.
-     * NULL grouping semantics are live-proven identical (NULL keys form one group).
-     * Complex types exposed as VARCHAR cannot inherit native string grouping semantics.
+     * Grouping keys must be equal in Doris exactly when they are equal in Trino: exact numeric,
+     * temporal and boolean types, plus native VARCHAR/STRING (byte-equal on both engines).
+     * CHAR (trailing spaces), REAL/DOUBLE (NaN, -0.0) and types exposed as text (Decimal256,
+     * complex types) stay local.
      */
     override fun supportsAggregationPushdown(
         session: ConnectorSession,
@@ -532,7 +450,6 @@ class DorisClient @Inject constructor(
 
         private val HIDDEN_SCHEMAS = setOf("information_schema", "mysql", "__internal_schema")
 
-        /** Native Doris NULLS placement for all four Trino orderings (live-proven identical). */
         private val ORDERINGS: Map<SortOrder, String> = mapOf(
             SortOrder.ASC_NULLS_FIRST to "ASC NULLS FIRST",
             SortOrder.ASC_NULLS_LAST to "ASC NULLS LAST",
