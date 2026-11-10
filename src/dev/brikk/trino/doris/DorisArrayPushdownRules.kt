@@ -42,14 +42,6 @@ import io.trino.spi.type.Type
 import io.trino.spi.type.TypeUtils.readNativeValue
 import java.util.Optional
 
-/**
- * Typed, evidence-gated ARRAY predicate rules (PLAN §6.1 layer 2 / §6.2). All rules fire in
- * PREDICATE context only (WHERE conjuncts via `DorisClient.convertPredicate`); anything outside
- * the strict shape/type guards stays in Trino. No boolean-composition rules ($not/$and/$or/$is_null)
- * exist by design — that is a CORRECTNESS invariant: `contains` is predicate-level (not value-level)
- * equivalent, so its rendering must never be embedded in a value context (see the NULL truth
- * tables in the TestDorisP2bPushdown pins).
- */
 internal class DorisArrayPushdownSupport(
     private val typeMapping: DorisTypeMapping,
     private val quote: (String) -> String,
@@ -58,19 +50,10 @@ internal class DorisArrayPushdownSupport(
         val quotedName: String,
         val elementType: Type,
         val elementTypeHandle: JdbcTypeHandle,
-        /** null when the element is not IPADDRESS; true=Doris IPV4, false=IPV6 (dialect rendering). */
+        /** Null for non-IP elements; otherwise true for a Doris IPV4 element, false for IPV6. */
         val ipV4: Boolean? = null,
     )
 
-    /**
-     * Resolves a [Variable] to a pushable native Doris array column, or null (with a DEBUG
-     * rejection log) when any guard fails. Pushable element types are the live-proven literal
-     * families: integers, LARGEINT/DECIMAL (DECIMAL(38,0)-representable by construction —
-     * PLAN §5 note), BOOLEAN, DATE, DATETIME and IPADDRESS. FLOAT/DOUBLE are excluded
-     * (approximate; spike §7.5 forbids their exact-equality predicates). IP literals use
-     * the proven IPV4/IPV6 dialect renderings; nested arrays remain excluded
-     * (no element-literal shape exists).
-     */
     fun pushableArrayColumn(context: RewriteContext<*>, variable: Variable): PushableArrayColumn? {
         val column = context.getAssignment(variable.name) as? JdbcColumnHandle
         if (column == null) {
@@ -108,7 +91,7 @@ internal class DorisArrayPushdownSupport(
         )
     }
 
-    /** A needle must be a NON-NULL constant of exactly the element type (NULL semantics diverge; see evidence). */
+    /** NULL needles stay local: the engines' NULL semantics differ for them. */
     fun literalNeedle(expression: ConnectorExpression, column: PushableArrayColumn): Any? {
         if (expression !is Constant) {
             logRejection("non-literal needle", expression.toString())
@@ -134,11 +117,7 @@ internal class DorisArrayPushdownSupport(
         return value
     }
 
-    /**
-     * A Doris IPV4 column can only be compared against IPv4-mapped literals (a real IPv6 value
-     * can never equal an IPV4 value); such needles are kept local. IPV6 and non-IP elements
-     * accept any value.
-     */
+    /** An IPv6 value can never equal an IPV4 element and has no IPV4 literal, so it stays local. */
     private fun ipNeedleRenderable(value: Any, ipV4: Boolean?): Boolean {
         if (ipV4 != true) {
             return true
@@ -148,13 +127,9 @@ internal class DorisArrayPushdownSupport(
     }
 
     /**
-     * A constant `ARRAY(T)` needle: returns its NON-NULL elements as bound query parameters
-     * (the constant's type must be exactly `array(elementType)`), or null when the expression
-     * is not such a constant array. NULL array elements are DROPPED: after the column side is
-     * NULL-stripped by [RewriteArraysOverlap]'s guard, a NULL on the literal side can never
-     * match a value (Doris only matches NULL-to-NULL), so dropping it is semantics-preserving
-     * and removes the over-return hazard by construction. A whole-array NULL constant is never
-     * pushable (Trino `arrays_overlap(x, NULL)` -> NULL -> row dropped; caller keeps it local).
+     * The non-NULL elements of a constant array, as parameters. Dropping NULL elements is safe
+     * because [RewriteArraysOverlap] strips NULLs from the column side, and Doris matches a NULL
+     * element only to another NULL.
      */
     fun literalArrayNonNullParameters(
         expression: ConnectorExpression,
@@ -184,7 +159,6 @@ internal class DorisArrayPushdownSupport(
                 return null
             }
             if (!ipNeedleRenderable(value, column.ipV4)) {
-                // non-v4-mapped element against a Doris IPV4 column: can never match -> keep local
                 logRejection("IPADDRESS array element not renderable for a Doris IPV4 column", expression.toString())
                 return null
             }
@@ -200,6 +174,7 @@ internal class DorisArrayPushdownSupport(
     companion object {
         private val log = Logger.get(DorisArrayPushdownSupport::class.java)
 
+        /** REAL/DOUBLE are excluded because these rules test exact equality; nested arrays have no literal form. */
         internal fun isPushableElement(element: DorisArrayElement): Boolean = when (element) {
             is DorisArrayElement.BooleanElement,
             is DorisArrayElement.TinyintElement,
@@ -218,9 +193,10 @@ internal class DorisArrayPushdownSupport(
 }
 
 /**
- * `contains(array(T), t)` -> `(array_contains(`col`, ?))`. Rendered BARE (no `= 1` wrapper): profile-proven to be the
- * only form Doris accelerates with an ARRAY inverted index, and predicate-equivalent because
- * this connector emits it exclusively as a top-level WHERE conjunct.
+ * When the needle is absent from an array holding NULL elements, Doris returns 0 where Trino
+ * returns NULL. Both drop the row in a top-level WHERE conjunct, but under NOT Doris would keep
+ * it, so this rule is never composed. It renders bare, without `= 1`, the only form Doris can
+ * serve from an ARRAY inverted index.
  */
 internal class RewriteContains(
     private val support: DorisArrayPushdownSupport,
@@ -248,17 +224,8 @@ internal class RewriteContains(
 }
 
 /**
- * `arrays_overlap(array(T), array(T))` in two shapes, both null-strip-GUARDED (the wrapper is
- * MANDATORY: without it Doris matches NULL elements to each other and over-returns):
- *
- * - column × column -> `(arrays_overlap(array_filter(x -> x IS NOT NULL, `l`), `r`))`
- * - column × constant `ARRAY(T)` literal (either orientation; `arrays_overlap` is symmetric)
- *   -> `(arrays_overlap(array_filter(x -> x IS NOT NULL, `col`), ARRAY(?, ?, ...)))` where the
- *   bound parameters are the literal's NON-NULL elements ([DorisArrayPushdownSupport.literalArrayNonNullParameters]).
- *
- * An empty (or all-NULL) constant array stays LOCAL: the predicate can never qualify a row and
- * pushing an empty `ARRAY()` literal would need element-type inference we do not rely on. Still
- * correct (the engine evaluates it locally).
+ * The column side is wrapped in `array_filter(x -> x IS NOT NULL, ...)` because Doris treats NULL
+ * elements as overlapping each other. Like `contains`, this is only a top-level WHERE conjunct.
  */
 internal class RewriteArraysOverlap(
     private val support: DorisArrayPushdownSupport,
@@ -271,7 +238,6 @@ internal class RewriteArraysOverlap(
         if (arg0 is Variable && arg1 is Variable) {
             return rewriteColumnColumn(arg0, arg1, context)
         }
-        // column × constant literal, either orientation (arrays_overlap is symmetric)
         val (variable, constant) = when {
             arg0 is Variable -> arg0 to arg1
             arg1 is Variable -> arg1 to arg0
@@ -288,8 +254,7 @@ internal class RewriteArraysOverlap(
         val left = support.pushableArrayColumn(context, leftArgument) ?: return Optional.empty()
         val right = support.pushableArrayColumn(context, rightArgument) ?: return Optional.empty()
         if (left.elementType != right.elementType || left.ipV4 != right.ipV4) {
-            // ipV4 guard: Trino IPADDRESS erases v4/v6, but array<ipv4> vs array<ipv6> are
-            // distinct Doris types — never overlap them remotely.
+            // Trino's IPADDRESS erases IPv4 vs IPv6, but Doris array<ipv4> and array<ipv6> differ.
             return Optional.empty()
         }
         return Optional.of(
@@ -309,14 +274,11 @@ internal class RewriteArraysOverlap(
         val parameters = support.literalArrayNonNullParameters(constant, column)
             ?: return Optional.empty()
         if (parameters.isEmpty()) {
-            // empty / all-NULL constant array: never qualifies a row — keep it local (correct),
-            // avoiding an untyped empty ARRAY() literal.
+            // An empty ARRAY() literal has no element type for Doris to infer.
             return Optional.empty()
         }
-        // IP literals bind as strings, and arrays_overlap (unlike array_contains) does NOT coerce
-        // a varchar array to IPV4/IPV6 — it compares text, which diverges from Doris's canonical
-        // form. An explicit per-element CAST forces the IP element type (live-proven). Numeric /
-        // date / datetime params already bind as their native JDBC type, so they need no cast.
+        // IP parameters bind as strings, and unlike array_contains, arrays_overlap compares a
+        // string array as text instead of converting it to IPV4/IPV6.
         val placeholder = when (column.ipV4) {
             true -> "CAST(? AS IPV4)"
             false -> "CAST(? AS IPV6)"
@@ -340,11 +302,8 @@ internal class RewriteArraysOverlap(
 }
 
 /**
- * `array_position(array(T), t) <cmp> n` (either orientation) -> `(array_position(`col`, ?)
- * <cmp> n)` — value-level equivalence proven for non-NULL needles (1-based, 0-if-absent,
- * NULL-array propagation identical), so all six
- * comparison operators are exactly safe. The integer bound is rendered inline (a validated
- * Long — no injection surface).
+ * For a non-NULL needle `array_position` returns the same value on both engines (1-based, 0 when
+ * absent, NULL for a NULL array), so these comparisons may be composed under NOT/AND/OR.
  */
 internal class RewriteArrayPositionComparison(
     private val support: DorisArrayPushdownSupport,
@@ -398,17 +357,8 @@ internal class RewriteArrayPositionComparison(
 }
 
 /**
- * `cardinality(array(T)) <cmp> n` (either orientation) and `cardinality(array(T)) BETWEEN
- * lo AND hi` -> `(array_size(`col`) ...)` — the registry verdict is DIVERGENT purely as a
- * RENAME (Doris has no `cardinality` for this shape; the portable name is `array_size`), so
- * per G3 this is a connector-original rewrite backed by its own live truth table:
- * NULL array -> NULL on both engines, empty -> 0,
- * NULL elements COUNTED on both, and NOT-composition cell-identical — VALUE-level identical,
- * so the rule lives in the VALUE-SAFE tier (composable under NOT/AND/OR) alongside
- * `array_position` comparisons. Bounds are validated Longs rendered inline (no injection
- * surface). Column guard reuses the pushable-array allowlist (including IP elements;
- * FLOAT/DOUBLE and nested element arrays remain excluded to keep one proof surface;
- * retained evidence: dev-docs/archive/NOTES-p5-batch.md).
+ * Doris spells `cardinality` as `array_size`, which returns the same value (NULL for a NULL
+ * array, NULL elements counted), so these comparisons may be composed under NOT/AND/OR.
  */
 internal class RewriteCardinalityComparison(
     private val support: DorisArrayPushdownSupport,
