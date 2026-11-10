@@ -21,7 +21,7 @@ import org.junit.jupiter.api.TestInstance
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 class TestDorisDistinctAndHaving : DorisPushdownTest("b3_dist", { provisionFixture() }) {
 
-    private val noAggPushdown: Session
+    private val local: Session
         get() = fullyLocalSession(session)
 
 
@@ -55,7 +55,7 @@ class TestDorisDistinctAndHaving : DorisPushdownTest("b3_dist", { provisionFixtu
         // CHAR keys still local: Doris groups stored bytes, Trino groups trimmed values
         val charKey = "SELECT c, count(*) FROM doris.b3_dist.charkeys GROUP BY c"
         assertThat(remoteSql(charKey)).doesNotContain("GROUP BY")
-        assertThat(rows(session, charKey)).isEqualTo(rows(noAggPushdown, charKey))
+        assertThat(rows(session, charKey)).isEqualTo(rows(local, charKey))
     }
 
 
@@ -85,7 +85,7 @@ class TestDorisDistinctAndHaving : DorisPushdownTest("b3_dist", { provisionFixtu
         val bigValues = (0..499).joinToString { (it * 2).toString() }
         val bigIn = "SELECT id FROM doris.b3_dist.t WHERE id IN ($bigValues)"
         assertThat(remoteSql(bigIn)).contains("`id` >= 0").contains("`id` <= 998").doesNotContain("IN (")
-        assertThat(rows(session, bigIn)).isEqualTo(rows(noAggPushdown, bigIn))
+        assertThat(rows(session, bigIn)).isEqualTo(rows(local, bigIn))
 
         // raising the SESSION knob makes the same IN push enumerated — the tuning story
         val wide = Session.builder(session)

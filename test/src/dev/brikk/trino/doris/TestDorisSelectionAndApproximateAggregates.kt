@@ -23,7 +23,7 @@ import org.junit.jupiter.api.TestInstance
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 class TestDorisSelectionAndApproximateAggregates : DorisPushdownTest("b2_agg", { provisionFixture() }) {
 
-    private val noAggPushdown: Session
+    private val local: Session
         get() = fullyLocalSession(session)
 
 
@@ -41,7 +41,7 @@ class TestDorisSelectionAndApproximateAggregates : DorisPushdownTest("b2_agg", {
             // must carry NO aggregate at all (plain column scan; aggregation entirely local)
             assertThat(remoteSql(sql)).describedAs(sql)
                 .doesNotContain("count(").doesNotContain("sum(")
-            assertThat(rows(session, sql)).describedAs(sql).isEqualTo(rows(noAggPushdown, sql))
+            assertThat(rows(session, sql)).describedAs(sql).isEqualTo(rows(local, sql))
         }
     }
 
@@ -51,7 +51,7 @@ class TestDorisSelectionAndApproximateAggregates : DorisPushdownTest("b2_agg", {
         // Trino offers AVG as one aggregate; manual sum/count leaves division in Trino.
         val avg = "SELECT avg(dec18) FROM doris.b2_agg.t"
         assertThat(query(avg)).isNotFullyPushedDown(AggregationNode::class.java)
-        assertThat(rows(session, avg)).isEqualTo(rows(noAggPushdown, avg))
+        assertThat(rows(session, avg)).isEqualTo(rows(local, avg))
 
         val decomposed = "SELECT sum(dec18) / count(dec18) FROM doris.b2_agg.t"
         assertThat(query(decomposed)).isNotFullyPushedDown(ProjectNode::class.java)
@@ -85,7 +85,7 @@ class TestDorisSelectionAndApproximateAggregates : DorisPushdownTest("b2_agg", {
         // -> NULLABLE value columns stay local (and correct)
         val sql = "SELECT g, min_by(a_n, b) FROM doris.b2_agg.t GROUP BY g"
         assertThat(query(sql)).isNotFullyPushedDown(AggregationNode::class.java)
-        assertThat(rows(session, sql)).isEqualTo(rows(noAggPushdown, sql))
+        assertThat(rows(session, sql)).isEqualTo(rows(local, sql))
     }
 
     @Test
@@ -96,7 +96,7 @@ class TestDorisSelectionAndApproximateAggregates : DorisPushdownTest("b2_agg", {
         for (row in computeActual(sql).materializedRows) {
             val g = row.getField(0)
             val value = row.getField(1)
-            val groupValues = computeActual(noAggPushdown, "SELECT a_nn FROM doris.b2_agg.t WHERE g = $g").onlyColumn
+            val groupValues = computeActual(local, "SELECT a_nn FROM doris.b2_agg.t WHERE g = $g").onlyColumn
             assertThat(groupValues).describedAs("group $g").contains(value)
         }
         assertThat(remoteSql("SELECT any_value(a_nn) FROM doris.b2_agg.t")).contains("any_value(`a_nn`)")

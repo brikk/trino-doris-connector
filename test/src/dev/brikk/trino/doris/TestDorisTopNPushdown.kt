@@ -22,7 +22,7 @@ import org.junit.jupiter.api.TestInstance
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 class TestDorisTopNPushdown : DorisPushdownTest("p3_topn", { provisionFixture() }) {
 
-    private fun noTopNSession(): Session = fullyLocalSession(session)
+    private fun localSession(): Session = fullyLocalSession(session)
 
     @Test
     fun testAllFourNullOrderingsPushAndMatch() {
@@ -31,7 +31,7 @@ class TestDorisTopNPushdown : DorisPushdownTest("p3_topn", { provisionFixture() 
             val sql = "SELECT c_int FROM doris.p3_topn.t ORDER BY c_int $ordering LIMIT 4"
             assertThat(query(sql)).ordered().isFullyPushedDown()
             val pushed = computeActual(sql).onlyColumn.toList()
-            val local = computeActual(noTopNSession(), sql).onlyColumn.toList()
+            val local = computeActual(localSession(), sql).onlyColumn.toList()
             assertThat(pushed).describedAs(ordering).isEqualTo(local)
         }
         // spot-check the NULL placement values themselves
@@ -52,7 +52,7 @@ class TestDorisTopNPushdown : DorisPushdownTest("p3_topn", { provisionFixture() 
             assertThat(query(sql)).ordered().isFullyPushedDown()
             assertThat(computeActual(sql).onlyColumn.toList())
                 .describedAs(column)
-                .isEqualTo(computeActual(noTopNSession(), sql).onlyColumn.toList())
+                .isEqualTo(computeActual(localSession(), sql).onlyColumn.toList())
         }
     }
 
@@ -61,7 +61,7 @@ class TestDorisTopNPushdown : DorisPushdownTest("p3_topn", { provisionFixture() 
         val sql = "SELECT id, c_int FROM doris.p3_topn.t ORDER BY c_int ASC NULLS LAST, id DESC LIMIT 4"
         assertThat(query(sql)).ordered().isFullyPushedDown()
         assertThat(computeActual(sql).materializedRows.map { it.getField(0) })
-            .isEqualTo(computeActual(noTopNSession(), sql).materializedRows.map { it.getField(0) })
+            .isEqualTo(computeActual(localSession(), sql).materializedRows.map { it.getField(0) })
     }
 
     @Test
@@ -72,7 +72,7 @@ class TestDorisTopNPushdown : DorisPushdownTest("p3_topn", { provisionFixture() 
             assertThat(query(sql)).ordered().isNotFullyPushedDown(TopNNode::class.java)
             assertThat(computeActual(sql).onlyColumn.toList())
                 .describedAs(column)
-                .isEqualTo(computeActual(noTopNSession(), sql).onlyColumn.toList())
+                .isEqualTo(computeActual(localSession(), sql).onlyColumn.toList())
         }
         // a mixed key list with one unsupported key keeps the whole TopN local
         assertThat(query("SELECT id FROM doris.p3_topn.t ORDER BY c_int, c_vc LIMIT 3"))

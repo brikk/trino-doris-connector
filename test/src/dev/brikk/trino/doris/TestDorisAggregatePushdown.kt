@@ -24,7 +24,7 @@ import java.math.BigDecimal
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 class TestDorisAggregatePushdown : DorisPushdownTest("p4_agg", { provisionFixture() }) {
 
-    private fun noAggSession(): Session = Session.builder(session)
+    private fun aggregationDisabledSession(): Session = Session.builder(session)
         .setCatalogSessionProperty(DorisQueryRunner.CATALOG, "aggregation_pushdown_enabled", "false")
         .build()
 
@@ -262,7 +262,7 @@ class TestDorisAggregatePushdown : DorisPushdownTest("p4_agg", { provisionFixtur
     @Test
     fun testSessionDisableKeepsAggregationLocal() {
         val sql = "SELECT g_int, count(*), sum(c_dec) FROM doris.p4_agg.t GROUP BY g_int"
-        assertThat(query(noAggSession(), sql)).isNotFullyPushedDown(AggregationNode::class.java)
+        assertThat(query(aggregationDisabledSession(), sql)).isNotFullyPushedDown(AggregationNode::class.java)
     }
 
     companion object {

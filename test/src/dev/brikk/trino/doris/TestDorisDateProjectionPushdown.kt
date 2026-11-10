@@ -21,7 +21,7 @@ import org.junit.jupiter.api.TestInstance
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 class TestDorisDateProjectionPushdown : DorisPushdownTest("p6_dates", { provisionFixture() }) {
 
-    private val local: io.trino.Session
+    private val local: Session
         get() = fullyLocalSession(session)
 
 
