@@ -53,23 +53,12 @@ import io.trino.spi.type.VarcharType
 import java.util.Optional
 
 /**
- * Batch-1 scalar expression pushdown (READ-ONLY-MAX; probe verdicts in
- * `dev-docs/archive/NOTES-readonly-max-batch1.md`).
- *
- * The SCALAR VALUE tier: typed rules over a closed set of value types —
- * [DorisScalarValues.isValueType]: the exact non-text set plus VARCHAR (byte-fidelity
- * proven end-to-end; comparisons byte-exact per the P4 probe). CHAR (trailing-space
- * divergence) and REAL/DOUBLE (approximate + wire-Infinity hazard) never participate.
- * Every rule composes its children through the same rewriter, so e.g.
- * `coalesce(lower(v), 'x')` is pushable exactly when all parts are.
- *
- * CASE / IF are ENGINE-DENIED at Trino 483: the ConnectorExpression grammar has no CASE
- * form (`StandardFunctions` carries none) — the translator decomposes CASE into fragments
- * or folds simple predicate CASEs into comparisons upstream (probed live; the connector
- * never receives the conditional itself). Pinned in the batch-1 suite.
+ * The scalar rules accept only these value types: exact numerics, DATE, DATETIME, BOOLEAN and
+ * VARCHAR, which Doris compares byte for byte like Trino. CHAR (trailing spaces) and REAL/DOUBLE
+ * (approximate, Infinity on the wire) are excluded. Each rule rewrites its children through the
+ * same rewriter, so an expression is pushed only if every part of it is.
  */
 internal object DorisScalarValues {
-    /** Closed value-type set for the scalar tier. */
     fun isValueType(type: Type): Boolean = when (type) {
         is TinyintType, is SmallintType, is IntegerType, is BigintType,
         is DecimalType, is DateType, is BooleanType, is VarcharType,
@@ -78,7 +67,7 @@ internal object DorisScalarValues {
         else -> false
     }
 
-    /** Doris column-type text for [type] — drives both parameter binding and synthetic-column handles. */
+    /** COLUMN_TYPE text for parameter type handles and synthetic columns. */
     fun dorisTypeFor(type: Type): String? = when (type) {
         is TinyintType -> "tinyint"
         is SmallintType -> "smallint"
@@ -93,7 +82,6 @@ internal object DorisScalarValues {
     }
 }
 
-/** A column reference of a scalar value type (the leaf of every composition). */
 internal class RewriteScalarVariable(
     private val typeMapping: DorisTypeMapping,
     private val quote: (String) -> String,
@@ -113,17 +101,15 @@ internal class RewriteScalarVariable(
         if (expression.type != column.columnType || expression.type != mappedType) {
             return Optional.empty()
         }
-        // Synthetic projections use the same mapper-compatible type handles as native columns.
         return Optional.of(ParameterizedExpression(quote(column.columnName), listOf()))
     }
 }
 
-/** A non-NULL constant of a scalar value type, bound as a prepared-statement parameter. */
 internal class RewriteScalarConstant : ConnectorExpressionRule<Constant, ParameterizedExpression> {
     override fun getPattern(): Pattern<Constant> = constant()
 
     override fun rewrite(expression: Constant, captures: Captures, context: RewriteContext<ParameterizedExpression>): Optional<ParameterizedExpression> {
-        val value = expression.value ?: return Optional.empty() // NULL literals stay upstream
+        val value = expression.value ?: return Optional.empty()
         if (!DorisScalarValues.isValueType(expression.type)) {
             return Optional.empty()
         }
@@ -131,7 +117,7 @@ internal class RewriteScalarConstant : ConnectorExpressionRule<Constant, Paramet
             return Optional.empty()
         }
         if (value is Slice && DorisPushdownControllers.containsNulByte(value)) {
-            return Optional.empty() // 0x00 hazard policy, same as the domain guard
+            return Optional.empty() // same 0x00 rule as the VARCHAR domain guard
         }
         val dorisType = DorisScalarValues.dorisTypeFor(expression.type) ?: return Optional.empty()
         return Optional.of(
@@ -143,12 +129,6 @@ internal class RewriteScalarConstant : ConnectorExpressionRule<Constant, Paramet
     }
 }
 
-/**
- * `$coalesce(a, b, ...)` -> `coalesce(a, b, ...)` and `$nullif(a, b)` -> `nullif(a, b)` —
- * registry-IDENTICAL;
- * live pins: NULL propagation, `nullif(a, a)` = NULL, and nullif's equality is byte-exact
- * case-SENSITIVE on text (`nullif('a','A')` = 'a' on both engines).
- */
 internal class RewriteScalarFunctionByName(
     private val trinoName: FunctionName,
     private val dorisName: String,
@@ -172,15 +152,6 @@ internal class RewriteScalarFunctionByName(
     }
 }
 
-/**
- * `year|month|day|hour|minute|second(timestamp(0..6))` -> the same-named Doris function —
- * registry-IDENTICAL for all six; live-probed on
- * the 0000-01-01/9999-12-31 edges and every precision (fractional seconds truncate
- * identically). Trino returns BIGINT; Doris' narrower integer widens losslessly on read.
- * Comparisons like `year(dt) = 2026` are unwrapped into datetime range domains UPSTREAM
- * (UnwrapYearInComparison — probed: the predicate never reaches the connector), so these
- * rules matter for PROJECTION/GROUP BY shapes.
- */
 internal class RewriteTemporalExtract(
     private val name: String,
 ) : ConnectorExpressionRule<Call, ParameterizedExpression> {
@@ -202,12 +173,7 @@ internal class RewriteTemporalExtract(
     }
 }
 
-/**
- * Trino `length(varchar)` (CHARACTERS) -> Doris `char_length` (characters) — NOT Doris
- * `length` (BYTES; the registry-DIVERGENT hazard). Live
- * pins: emoji = 1, CJK chars = 1 each, NFD combining sequences count per codepoint —
- * identical to Trino on every probed shape.
- */
+/** Trino `length` counts characters; Doris `length` counts bytes, so this renders `char_length`. */
 internal class RewriteCharLength : ConnectorExpressionRule<Call, ParameterizedExpression> {
     override fun getPattern(): Pattern<Call> = call()
         .with(functionName().equalTo(FunctionName("length")))
@@ -227,12 +193,8 @@ internal class RewriteCharLength : ConnectorExpressionRule<Call, ParameterizedEx
 }
 
 /**
- * Predicate bridge: `<scalar> <cmp> <scalar>` where at least one side is a FUNCTION shape
- * (plain comparisons can arrive, but are declined here in favor of domain handling). Both
- * operands must rewrite through the scalar tier and be of value types — comparisons over
- * those are value-identical (exact types: P0 domain evidence; text: byte-exact, P4 probe).
- * TOP-LEVEL WHERE conjuncts only (not in the NOT/AND/OR value-safe tier): NULL cells drop
- * identically on both engines under a top-level conjunct.
+ * Comparisons with a function call on at least one side; plain column comparisons are domains.
+ * Pushed only as a top-level WHERE conjunct, where a NULL result drops the row on both engines.
  */
 internal class RewriteScalarComparisonBridge(
     private val scalar: DorisRewriterHolder,
@@ -243,12 +205,11 @@ internal class RewriteScalarComparisonBridge(
         val left = expression.arguments[0]
         val right = expression.arguments[1]
         if (left !is Call && right !is Call) {
-            return Optional.empty() // plain shapes belong to domain pushdown
+            return Optional.empty()
         }
         if (!DorisScalarValues.isValueType(left.type) || !DorisScalarValues.isValueType(right.type)) {
             return Optional.empty()
         }
-        // mode contract: NULL_ONLY pushes no string VALUE comparisons at all
         if ((left.type is VarcharType || right.type is VarcharType) &&
             DorisSessionProperties.getStringPushdownMode(context.session) == DorisStringPushdownMode.NULL_ONLY
         ) {
@@ -276,7 +237,6 @@ internal class RewriteScalarComparisonBridge(
     }
 }
 
-/** Predicate bridge: `$is_null(<scalar function shape>)` -> `(<expr> IS NULL)` (value-identical child). */
 internal class RewriteScalarIsNullBridge(
     private val scalar: DorisRewriterHolder,
 ) : ConnectorExpressionRule<Call, ParameterizedExpression> {
@@ -303,15 +263,8 @@ internal class RewriteScalarIsNullBridge(
 }
 
 /**
- * `starts_with(col, 'prefix')` -> `(col LIKE '<escaped-prefix>%')` — the
- * CONDITIONALLY_EQUIVALENT condition: the native
- * function exists; escaped LIKE is the chosen prefix rendering (P4 probe: LIKE is memcmp
- * semantics) AND zone-map/index-eligible, unlike `left(col, n) = 'prefix'`. LIKE
- * metacharacters in the prefix are escaped (`%` -> `\%`, `_` -> `\_`, `\` -> `\\` —
- * live-proven: `'a%b_c' LIKE 'a\%b\_%'` matches, `'aXbYc'` does not). NULL input -> NULL
- * -> row dropped on both engines; empty prefix matches every non-NULL row on both.
- * Enabled in GUARDED and above (byte-exact per the tiered-GUARDED evidence); 0x00 prefixes
- * stay local per the standing hazard policy.
+ * Rendered as `LIKE '<prefix>%'` with LIKE metacharacters escaped: Doris LIKE compares bytes as
+ * Trino does, and unlike `left(col, n) = prefix` it can use zone maps and indexes.
  */
 internal class RewriteStartsWith(
     private val quote: (String) -> String,
@@ -328,7 +281,7 @@ internal class RewriteStartsWith(
         }
         val column = context.getAssignment(variable.name) as? JdbcColumnHandle ?: return Optional.empty()
         if (!DorisColumnType.isNativeString(column)) {
-            return Optional.empty() // char excluded (trailing-space divergence)
+            return Optional.empty() // CHAR excluded (trailing spaces)
         }
         val prefix = (expression.arguments[1] as? Constant)?.takeIf { it.type is VarcharType }?.value as? Slice
             ?: return Optional.empty()
@@ -346,7 +299,6 @@ internal class RewriteStartsWith(
     }
 
     companion object {
-        /** Escape Doris LIKE metacharacters so the prefix matches LITERALLY. */
         internal fun escapeForLikePrefix(prefix: String): String =
             prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
@@ -357,12 +309,7 @@ internal class RewriteStartsWith(
     }
 }
 
-/**
- * Generic PROJECTION rule: any Call the scalar tier can fully rewrite becomes a synthetic
- * derived column (typed via [DorisScalarValues.dorisTypeFor], so the read mapping matches
- * the Trino expression type exactly) — this is what lets `GROUP BY coalesce(...)`,
- * `GROUP BY year(...)` etc. compose with aggregate pushdown.
- */
+/** The column type comes from [DorisScalarValues.dorisTypeFor], so its read mapping yields the expression's Trino type. */
 internal class RewriteScalarProjection : ProjectFunctionRule<JdbcExpression, ParameterizedExpression> {
     override fun getPattern(): Pattern<out ConnectorExpression> = call()
 
