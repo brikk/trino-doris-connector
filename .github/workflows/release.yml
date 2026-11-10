@@ -33,7 +33,8 @@ jobs:
   release:
     name: gated build + plugin release
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # The same gate takes 25 to 31 minutes in ci.yml, before packaging.
+    timeout-minutes: 45
     env:
       # Explicit destructive-fixture authorization for this job's disposable cluster.
       DORIS_TEST_ALLOW_MUTATION: '1'
