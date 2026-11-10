@@ -28,13 +28,14 @@ import java.sql.PreparedStatement
 internal object DorisIpAddress {
     private const val BYTES = 16
 
-    fun parse(text: String): Slice {
-        val address = try {
-            InetAddresses.forString(text)
-        } catch (e: IllegalArgumentException) {
-            throw TrinoException(GENERIC_INTERNAL_ERROR, "Unreadable Doris IPV4/IPV6 wire value: '$text'", e)
+    fun parse(text: String): Slice =
+        parseOrNull(text) ?: throw TrinoException(GENERIC_INTERNAL_ERROR, "Unreadable Doris IPV4/IPV6 wire value: '$text'")
+
+    fun parseOrNull(text: String): Slice? {
+        if (!InetAddresses.isInetAddress(text)) {
+            return null
         }
-        return wrappedBuffer(*toTrinoBytes(address))
+        return wrappedBuffer(*toTrinoBytes(InetAddresses.forString(text)))
     }
 
     /** True when a 16-byte Trino IPADDRESS slice is IPv4-mapped (`::ffff:a.b.c.d`). */

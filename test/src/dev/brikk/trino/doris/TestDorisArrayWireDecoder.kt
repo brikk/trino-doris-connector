@@ -164,9 +164,10 @@ class TestDorisArrayWireDecoder {
         val ipv6 = IpAddressElement(ipAddressType, isV4 = false)
         assertThat(DorisArrayWireDecoder.decode("""["2001:db8::ff00:42:8329", "::", "fe80::1"]""", ipv6))
             .containsExactly(DorisIpAddress.parse("2001:db8::ff00:42:8329"), DorisIpAddress.parse("::"), DorisIpAddress.parse("fe80::1"))
-        assertThatThrownBy { DorisArrayWireDecoder.decode("""["not-an-ip"]""", element) }
+        assertThatThrownBy { DorisArrayWireDecoder.decode("""["127.0.0.1", "not-an-ip"]""", element) }
             .isInstanceOf(TrinoException::class.java)
-            .hasMessageContaining("Unreadable Doris IPV4/IPV6")
+            .hasMessageContaining("malformed IP address element 'not-an-ip'")
+            .hasMessageContaining("(at wire offset 14)")
     }
 
 

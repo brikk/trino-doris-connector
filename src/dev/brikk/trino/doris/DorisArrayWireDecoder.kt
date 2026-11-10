@@ -266,7 +266,8 @@ internal object DorisArrayWireDecoder {
             return when (element) {
                 is DorisArrayElement.DateElement -> parseDate(raw, at)
                 is DorisArrayElement.TimestampElement -> parseTimestamp(element, raw, at)
-                is DorisArrayElement.IpAddressElement -> DorisIpAddress.parse(raw)
+                is DorisArrayElement.IpAddressElement ->
+                    DorisIpAddress.parseOrNull(raw) ?: fail("malformed IP address element '$raw'", at)
                 else -> fail("element kind ${element.javaClass.simpleName} is not a quoted element", at)
             }
         }
