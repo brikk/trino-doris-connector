@@ -32,7 +32,7 @@ import java.math.BigDecimal
  * narrative in `dev-docs/archive/NOTES-p4-aggregates.md`.
  */
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
-class TestDorisP4Aggregates : DorisPushdownTest("p4_agg", { provisionFixture() }) {
+class TestDorisAggregatePushdown : DorisPushdownTest("p4_agg", { provisionFixture() }) {
 
     private fun noAggSession(): Session = Session.builder(session)
         .setCatalogSessionProperty(DorisQueryRunner.CATALOG, "aggregation_pushdown_enabled", "false")
