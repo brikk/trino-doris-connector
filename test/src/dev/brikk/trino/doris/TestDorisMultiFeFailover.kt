@@ -78,13 +78,10 @@ class TestDorisMultiFeFailover : AbstractTestQueryFramework() {
     @Test
     @org.junit.jupiter.api.Order(1)
     fun testConnectorConnectsAndQueriesThroughMultiHostUrl() {
+        provisionCancelFixture()
         createOverlayCatalog()
         try {
-            // Connect + query through the connector over the comma-list multi-host URL.
-            assertThat(query("SELECT 1")).matches("VALUES 1")
-            // Metadata read proves the connector talks to a real Doris FE via the URL, not a stub.
-            assertThat(computeActual("SHOW SCHEMAS FROM $OVERLAY_CATALOG").onlyColumnAsSet)
-                .contains("information_schema")
+            assertOverlayReads()
         } finally {
             dropOverlayCatalog()
         }
@@ -93,6 +90,7 @@ class TestDorisMultiFeFailover : AbstractTestQueryFramework() {
     @Test
     @org.junit.jupiter.api.Order(4)
     fun testNewConnectionFailoverAfterFollowerStops() {
+        provisionCancelFixture()
         // Sanity: raw multi-host connect works before we perturb anything.
         assertThat(multiHostSelectOne()).isEqualTo(1)
 
@@ -111,9 +109,7 @@ class TestDorisMultiFeFailover : AbstractTestQueryFramework() {
         // pooled connections against the same multi-host URL).
         createOverlayCatalog()
         try {
-            assertThat(query("SELECT 1")).matches("VALUES 1")
-            assertThat(computeActual("SHOW SCHEMAS FROM $OVERLAY_CATALOG").onlyColumnAsSet)
-                .contains("information_schema")
+            assertOverlayReads()
         } finally {
             dropOverlayCatalog()
         }
@@ -262,6 +258,11 @@ class TestDorisMultiFeFailover : AbstractTestQueryFramework() {
                 statement.execute("INSERT INTO mfe_cancel.big SELECT number, repeat('x', 300) FROM numbers('number' = '200000')")
             }
         }
+    }
+
+    private fun assertOverlayReads() {
+        assertThat(query("SELECT count(*) FROM $OVERLAY_CATALOG.mfe_cancel.big")).matches("VALUES BIGINT '200000'")
+        assertThat(computeActual("SHOW SCHEMAS FROM $OVERLAY_CATALOG").onlyColumnAsSet).contains("mfe_cancel")
     }
 
     private fun createOverlayCatalog() {

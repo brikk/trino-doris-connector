@@ -54,7 +54,7 @@ class TestDorisP5Statistics : AbstractTestQueryFramework() {
         val tableRows = DorisTestCluster.queryScalar(
             "SELECT TABLE_ROWS FROM information_schema.tables WHERE TABLE_SCHEMA = 'p5_stats' AND TABLE_NAME = 'bare'",
         )!!.toLong()
-        assertThat(tableRows).isBetween(0L, 1000L) // 0 while stale, 1000 once the report lands
+        assertThat(tableRows).describedAs("0 before the tablet report, 1000 after it").isIn(0L, 1000L)
         // ANALYZE WITH SYNC populates exact counts immediately (independent of the report)
         DorisTestCluster.executeAsRoot("ANALYZE TABLE p5_stats.bare WITH SYNC")
         openRoot().use { connection ->
@@ -131,7 +131,7 @@ class TestDorisP5Statistics : AbstractTestQueryFramework() {
         assertThat(b.getField(3) as Double).isEqualTo(2.0 / 6.0) // 2 NULLs of 6
         assertThat(b.getField(5)).isEqualTo("-9223372036854775808") // bigint extremes parse
         val v = stats["v"]!!
-        assertThat(v.getField(2) as Double).isLessThanOrEqualTo(4.0) // ndv capped at non-null rows (4)
+        assertThat(v.getField(2)).isEqualTo(3.0)
         assertThat(v.getField(1) as Double).isGreaterThan(0.0) // data size supplied
         assertThat(v.getField(5)).isNull() // no varchar range (quoted text never parsed)
         assertThat(stats["dt"]!!.getField(5)).isNull() // temporal ranges deliberately skipped
@@ -139,7 +139,8 @@ class TestDorisP5Statistics : AbstractTestQueryFramework() {
         val dc = stats["dc"]!!
         assertThat(dc.getField(5)).isEqualTo("-9999999.99") // decimal range parses
         val li = stats["li"]!!
-        assertThat(li.getField(5)).isNotNull() // LARGEINT (decimal(38,0)) range fed
+        assertThat((li.getField(5) as String).toBigDecimal().toDouble()).isEqualTo(-170141183460469231731687303715884105727.0)
+        assertThat((li.getField(6) as String).toBigDecimal().toDouble()).isEqualTo(170141183460469231731687303715884105727.0)
     }
 
     @Test
@@ -227,9 +228,7 @@ class TestDorisP5Statistics : AbstractTestQueryFramework() {
         // never-analyzed + report-lagged table: everything unknown, query still runs
         DorisTestCluster.executeAsRoot("DROP STATS p5_stats.bare")
         val bare = showStats("doris.p5_stats.bare")
-        // row_count may be known (1000) once the tablet report lands, or unknown while it
-        // lags — but it must NEVER be an exact 0 for this loaded table
-        assertThat(bare[""]!!.getField(4)).isNotEqualTo(0.0)
+        assertThat(bare[""]!!.getField(4)).describedAs("unknown before the tablet report, 1000 after it").isIn(null, 1000.0)
         assertThat(computeActual("SELECT count(*) FROM doris.p5_stats.bare").onlyValue).isEqualTo(1000L)
         // Doris view: no statistics surface at all — degrades silently
         val view = showStats("doris.p0_probe.scalars_view")

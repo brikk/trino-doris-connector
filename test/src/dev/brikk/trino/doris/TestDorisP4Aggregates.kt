@@ -169,16 +169,10 @@ class TestDorisP4Aggregates : AbstractTestQueryFramework() {
 
     @Test
     fun testAvgBigintAccumulationDivergenceStaysLocal() {
-        // Trino 483 avg(bigint) accumulates in DOUBLE (BigintAverageAggregations: order-
-        // dependent, precision-lossy — over {2^53, 1, -2^53, 1} a 1 added while 2^53 is in
-        // the accumulator is LOST -> 0.25); Doris avg(BIGINT) computes an exact wide integer
-        // sum -> always 0.5. Divergent semantics -> avg(bigint) must stay local so results
-        // remain TRINO-exact.
+        // Ordered input exposes Trino's lossy double accumulation; Doris uses an exact wide integer sum.
         val sql = "SELECT avg(v) FROM doris.p4_agg.t_avgb"
         assertThat(query(sql)).isNotFullyPushedDown(AggregationNode::class.java)
-        assertThat(computeActual(sql).onlyValue as Double)
-            .describedAs("Trino double-accumulated avg (order-dependent)")
-            .isIn(0.25, 0.5)
+        assertThat(computeActual("SELECT avg(v ORDER BY id) FROM doris.p4_agg.t_avgb").onlyValue).isEqualTo(0.25)
         assertThat(DorisTestCluster.queryScalar("SELECT avg(v) FROM p4_agg.t_avgb")).isEqualTo("0.5")
     }
 
