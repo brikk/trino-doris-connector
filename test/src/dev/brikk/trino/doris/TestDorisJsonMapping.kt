@@ -64,10 +64,8 @@ class TestDorisJsonMapping {
     fun testMalformedJsonFailsLoud() {
         for (columnType in listOf("json", "variant")) {
             val reader = mapping.toColumnMapping(session, columnType).orElseThrow().readFunction as SliceReadFunction
-            for (text in listOf(
-                "", "{", "{} []", "inf", "-inf", """{"n":inf}""",
-                "[".repeat(1025) + "0" + "]".repeat(1025),
-            )) {
+            // Unlike Trino 484, Trino 483's parser accepts nesting deeper than 1,000 levels.
+            for (text in listOf("", "{", "{} []", "inf", "-inf", """{"n":inf}""")) {
                 assertThatThrownBy { reader.readSlice(resultSet(text), 1) }
                     .describedAs("$columnType must reject invalid JSON")
                     .isInstanceOf(TrinoException::class.java)

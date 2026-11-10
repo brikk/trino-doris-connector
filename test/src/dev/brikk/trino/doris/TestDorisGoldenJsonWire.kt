@@ -72,13 +72,13 @@ class TestDorisGoldenJsonWire : AbstractTestQueryFramework() {
         assertThat(DorisTestCluster.queryScalar("SELECT doc FROM golden_415_json.nonfinite WHERE id = 3"))
             .isEqualTo("""{"n":inf}""")
         assertThatThrownBy { computeActual("SELECT json_format(doc) FROM doris.golden_415_json.nonfinite WHERE id = 3") }
-            .hasMessageContaining("invalid JSON")
+            .hasMessageContaining("Cannot convert value to JSON")
         val sql = "SELECT id FROM doris.golden_415_json.nonfinite WHERE id = 3 AND json_extract_scalar(doc, '$.n') = 'inf'"
         // QueryAssertions' plan helpers also execute an all-pushdown-OFF oracle;
         // inspect EXPLAIN directly for this intentionally unreadable relation.
         assertThat(computeActual("EXPLAIN $sql").onlyValue.toString())
             .contains("json_extract_scalar").doesNotContain("json_unquote")
-        assertThatThrownBy { computeActual(sql) }.hasMessageContaining("invalid JSON")
+        assertThatThrownBy { computeActual(sql) }.hasMessageContaining("Cannot convert value to JSON")
     }
 
     @Test
