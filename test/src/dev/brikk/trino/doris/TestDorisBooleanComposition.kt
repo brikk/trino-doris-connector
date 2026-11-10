@@ -30,7 +30,7 @@ import org.junit.jupiter.api.TestInstance
  * => identical composite values.
  */
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
-class TestDorisP3Composition : DorisPushdownTest("p3_composition", { provisionFixture() }) {
+class TestDorisBooleanComposition : DorisPushdownTest("p3_composition", { provisionFixture() }) {
 
     // --- 3VL pins (both engines) ---
 
