@@ -31,7 +31,7 @@ import org.junit.jupiter.api.TestInstance
  * ledger §A contract, verbatim.
  */
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
-class TestDorisP1aSmoke : AbstractTestQueryFramework() {
+class TestDorisConnectorSmoke : AbstractTestQueryFramework() {
     override fun createQueryRunner(): QueryRunner {
         provisionP1SmokeFixture()
         return DorisQueryRunner.builder().build()
