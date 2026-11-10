@@ -27,17 +27,13 @@ import java.util.Properties
 import java.util.concurrent.TimeUnit
 
 /**
- * Helper-only Connector/J 26.7.0 driver. Any configured FE can perform a cluster-wide kill.
- * Supported JDBC host lists (including load-balance, replication and resolved SRV roles)
- * are attempted without a mutable HA proxy or in-flight reconnect. X Protocol is rejected;
- * ordinary catalog URL admission has its own stricter contract in DorisJdbcConfig.
- *
- * Limits are imposed AFTER Connector/J merges URL, Properties, host, useConfigs and transform
- * settings. The cached URL and its hosts remain untouched, including normal-driver settings.
- * These are connect/read limits and an attempt budget, NOT an absolute wall-clock deadline:
- * DNS, custom socket/auth plugins and multiple handshake reads can exceed the budget.
- * Query timers are disabled to prevent Connector/J's numeric connection-ID timeout kills;
- * callers must not use Statement.cancel() (which is a separate unsafe kill path).
+ * Driver for cancellation helper connections. Any FE can kill a query cluster-wide, so each
+ * configured host is tried in turn, without an HA proxy or reconnects. The limits override
+ * whatever Connector/J merged from the URL and properties, and bound each connect and read
+ * rather than total time: DNS, auth plugins and handshakes can exceed the budget. Query timeouts
+ * are disabled because Connector/J enforces them with a KILL by numeric connection id, which a
+ * load balancer can route to the wrong FE; for the same reason callers must not use
+ * `Statement.cancel()`.
  */
 internal class DorisCancelDriver(
     private val openConnection: (HostInfo) -> Connection = ConnectionImpl::getInstance,
