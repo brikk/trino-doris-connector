@@ -36,7 +36,7 @@ import java.time.format.DateTimeFormatter
  * is never touched.
  */
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
-class TestDorisP2aArray : DorisPushdownTest("p2_array", { provisionFixture() }) {
+class TestDorisArrayMapping : DorisPushdownTest("p2_array", { provisionFixture() }) {
 
     // --- type surface ---
 
