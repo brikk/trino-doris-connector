@@ -25,7 +25,7 @@ import io.trino.spi.connector.ConnectorSession
 import io.trino.spi.connector.ConnectorTableHandle
 import io.trino.spi.statistics.TableStatistics
 
-/** Enforce session policy before BOTH upstream shared and per-transaction caches. */
+/** Checks `statistics_enabled` ahead of the shared and per-transaction caches, which would otherwise answer first. */
 class DorisJdbcMetadataFactory @Inject constructor(
     jdbcClient: JdbcClient,
     private val timestampDomain: TimestampTimeZoneDomain,
