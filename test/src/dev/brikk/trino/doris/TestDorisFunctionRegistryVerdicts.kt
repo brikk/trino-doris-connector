@@ -27,7 +27,7 @@ import java.security.MessageDigest
  * The brikk hazard registry entries the pushdown rules were proven against. A changed registry
  * does not change what the connector pushes; it fails this test so the rule can be re-verified.
  */
-class TestDorisPushdownEvidenceDrift {
+class TestDorisFunctionRegistryVerdicts {
     private data class Pin(val source: String, val target: String, val verdict: HazardVerdict, val provenance: String)
 
     @Test
