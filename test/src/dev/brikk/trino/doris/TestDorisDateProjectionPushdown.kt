@@ -27,7 +27,7 @@ import org.junit.jupiter.api.TestInstance
  * unpushed plan (`complex_expression_pushdown = false` disables convertProjection wiring).
  */
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
-class TestDorisP6DateProjection : DorisPushdownTest("p6_dates", { provisionFixture() }) {
+class TestDorisDateProjectionPushdown : DorisPushdownTest("p6_dates", { provisionFixture() }) {
 
     private val local: io.trino.Session
         get() = fullyLocalSession(session)
