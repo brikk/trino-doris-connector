@@ -32,26 +32,10 @@ import io.trino.spi.type.BooleanType.BOOLEAN
 import java.util.Optional
 
 /**
- * Boolean composition (`NOT` / `$and` / `$or`) over the VALUE-SAFE rule tier ONLY.
- *
- * The safety proof has two independently live-proven halves (2026-07-19, Doris 4.1.3; pinned
- * in `TestDorisP3Composition`):
- * 1. The value-safe operands — `array_position` comparisons — return IDENTICAL values on both
- *    engines for every reachable shape, including NULL propagation.
- * 2. Doris NOT/AND/OR follow exactly Trino's SQL three-valued logic (all cells probed:
- *    NOT NULL=NULL; TRUE AND NULL=NULL, FALSE AND NULL=FALSE; TRUE OR NULL=TRUE,
- *    FALSE OR NULL=NULL, NULL OR NULL=NULL).
- * A deterministic composition of identical operand values under identical connectives is
- * itself value-identical — so composed forms remain safe even under further composition.
- *
- * `contains`/`arrays_overlap` are structurally EXCLUDED from this tier: they are only
- * predicate-level equivalent (their not-found-with-NULL-elements cells differ: Trino NULL vs
- * Doris 0/1), so `NOT contains(...)` composed remotely would over-return (counterfactual
- * proven in `TestDorisP2bPushdown.testNotContainsSemanticsPreserved`). The composition rules
- * therefore rewrite children through [valueSafeRewriter] — a rewriter that simply does not
- * contain the predicate-level rules — never through the enclosing rewriter's defaultRewrite.
- *
- * `$not(value-safe)` -> `(NOT <child>)`.
+ * NOT/AND/OR over value-safe operands only. Doris follows Trino's three-valued logic, so
+ * composing operands that return identical values yields identical values. Children are
+ * rewritten through [valueSafeRewriter], not the enclosing rewriter, so predicate-level rules
+ * such as `contains`, whose NULL results differ, can never end up under NOT.
  */
 internal class RewriteValueSafeNot(
     private val valueSafeRewriter: DorisRewriterHolder,
@@ -71,7 +55,7 @@ internal class RewriteValueSafeNot(
     }
 }
 
-/** `$and(value-safe...)` / `$or(value-safe...)` (variadic) -> `(<child> AND/OR <child> ...)`. */
+/** See [RewriteValueSafeNot]. */
 internal class RewriteValueSafeLogical(
     private val valueSafeRewriter: DorisRewriterHolder,
 ) : ConnectorExpressionRule<Call, ParameterizedExpression> {
@@ -86,7 +70,6 @@ internal class RewriteValueSafeLogical(
         for (argument in expression.arguments) {
             val child = valueSafeRewriter.rewrite(context, argument)
             if (child.isEmpty) {
-                // any non-value-safe child keeps the WHOLE composition in Trino
                 return Optional.empty()
             }
             children.add(child.get())
