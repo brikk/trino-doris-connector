@@ -32,7 +32,7 @@ import java.util.concurrent.TimeUnit
  * (re)build (~2s insert-select).
  */
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
-class TestDorisP2bInvertedIndexEvidence : AbstractTestQueryFramework() {
+class TestDorisArrayInvertedIndex : AbstractTestQueryFramework() {
     override fun createQueryRunner(): QueryRunner {
         provisionIndexFixture()
         return DorisQueryRunner.builder().build()
