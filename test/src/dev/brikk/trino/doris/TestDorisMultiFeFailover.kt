@@ -26,7 +26,6 @@ import java.util.concurrent.TimeUnit
 
 // Requires the separately authorized three-FE overlay and restores any follower it stops.
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
-@org.junit.jupiter.api.TestMethodOrder(org.junit.jupiter.api.MethodOrderer.OrderAnnotation::class)
 @EnabledIf("dev.brikk.trino.doris.TestDorisMultiFeFailover#overlayIsUp")
 class TestDorisMultiFeFailover : AbstractTestQueryFramework() {
     /** Container stopped by a failover test, to be restarted in @AfterEach. Null when none. */
@@ -51,7 +50,6 @@ class TestDorisMultiFeFailover : AbstractTestQueryFramework() {
     }
 
     @Test
-    @org.junit.jupiter.api.Order(1)
     fun testConnectorConnectsAndQueriesThroughMultiHostUrl() {
         provisionCancelFixture()
         createOverlayCatalog()
@@ -63,7 +61,6 @@ class TestDorisMultiFeFailover : AbstractTestQueryFramework() {
     }
 
     @Test
-    @org.junit.jupiter.api.Order(4)
     fun testNewConnectionFailoverAfterFollowerStops() {
         provisionCancelFixture()
         // Sanity: raw multi-host connect works before we perturb anything.
@@ -98,7 +95,6 @@ class TestDorisMultiFeFailover : AbstractTestQueryFramework() {
      * replaces is a silent no-op / wrong-kill in exactly this topology.
      */
     @Test
-    @org.junit.jupiter.api.Order(2)
     fun testCrossFeKillByQueryIdReleasesForeignFeQuery() {
         provisionCancelFixture()
         val marker = "trino_query_id=mfe_xfe_${System.nanoTime()}"
@@ -160,7 +156,6 @@ class TestDorisMultiFeFailover : AbstractTestQueryFramework() {
      * Doris-side work is released cluster-wide.
      */
     @Test
-    @org.junit.jupiter.api.Order(3)
     fun testConnectorCancellationReleasesOverlayQuery() {
         provisionCancelFixture()
         createOverlayCatalog()

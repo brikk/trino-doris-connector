@@ -17,29 +17,14 @@ import io.airlift.units.Duration
 import io.trino.testing.AbstractTestQueryFramework
 import io.trino.testing.QueryRunner
 import org.assertj.core.api.Assertions.assertThat
-import org.junit.jupiter.api.MethodOrderer
-import org.junit.jupiter.api.Order
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.TestInstance
-import org.junit.jupiter.api.TestMethodOrder
 
-/**
- * Dynamic catalog management (https://trino.io/docs/current/sql/create-catalog.html):
- * `CREATE CATALOG ... USING doris WITH (...)` must behave identically to a statically
- * configured catalog. Test recipe follows upstream 483 `TestDynamicCatalogs`:
- * `TestingTrinoServer`/`DistributedQueryRunner` run with dynamic catalog management and an
- * in-memory catalog store BY DEFAULT — no extra coordinator properties needed in tests. (A
- * real deployment needs `catalog.management=dynamic` in the coordinator+worker config.)
- *
- * NO static `doris` catalog is created here — everything goes through SQL.
- */
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
-@TestMethodOrder(MethodOrderer.OrderAnnotation::class)
 class TestDorisDynamicCatalog : AbstractTestQueryFramework() {
     override fun createQueryRunner(): QueryRunner = DorisQueryRunner.dynamicCatalogBuilder().build()
 
     @Test
-    @Order(1)
     fun testCreateCatalogQueryAndDrop() {
         assertThat(computeActual("SHOW CATALOGS").onlyColumnAsSet).doesNotContain(DYNAMIC_CATALOG)
 
@@ -88,7 +73,6 @@ class TestDorisDynamicCatalog : AbstractTestQueryFramework() {
     }
 
     @Test
-    @Order(2)
     fun testCreateCatalogWithInvalidUrlFailsLoudlyAtCreation() {
         // DorisJdbcConfig's @AssertTrue validation runs when CREATE CATALOG instantiates the
         // connector — a bad URL fails the CREATE statement itself, loudly, as configuration
@@ -125,7 +109,6 @@ class TestDorisDynamicCatalog : AbstractTestQueryFramework() {
     }
 
     @Test
-    @Order(3)
     fun testUnreachableHostSucceedsAtCreateAndFailsLoudAtFirstUse() {
         // Base JDBC opens connections LAZILY: a syntactically valid URL to an unreachable
         // host passes CREATE CATALOG (only config validation runs) and fails loudly on first
@@ -143,7 +126,6 @@ class TestDorisDynamicCatalog : AbstractTestQueryFramework() {
     }
 
     @Test
-    @Order(4)
     fun testTimeoutRangesFailAtConfigurationAndNativeSessionRoundingAgrees() {
         for ((property, value) in listOf(
             "doris.connect-timeout" to "0ms", "doris.connect-timeout" to "0.1ms", "doris.connect-timeout" to "30d",

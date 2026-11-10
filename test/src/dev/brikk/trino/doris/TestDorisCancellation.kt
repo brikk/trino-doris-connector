@@ -18,12 +18,9 @@ import io.trino.testing.AbstractTestQueryFramework
 import io.trino.testing.QueryRunner
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.AfterAll
-import org.junit.jupiter.api.MethodOrderer
-import org.junit.jupiter.api.Order
 import org.junit.jupiter.api.Tag
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.TestInstance
-import org.junit.jupiter.api.TestMethodOrder
 import java.util.concurrent.Callable
 import java.util.concurrent.Executors
 import java.util.concurrent.Future
@@ -32,7 +29,6 @@ import java.util.concurrent.TimeUnit
 // A large streamed scan keeps Doris send-blocked; small scans finish before cancellation can reach them.
 @Tag("cancellation")
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
-@TestMethodOrder(MethodOrderer.OrderAnnotation::class)
 class TestDorisCancellation : AbstractTestQueryFramework() {
     private val executor = Executors.newSingleThreadExecutor()
 
@@ -47,7 +43,6 @@ class TestDorisCancellation : AbstractTestQueryFramework() {
     }
 
     @Test
-    @Order(1)
     fun testKillQueryReleasesDorisWork() {
         val queryFuture = submitSlowQuery(getSession(), KILL_MARKER)
         try {
@@ -73,7 +68,6 @@ class TestDorisCancellation : AbstractTestQueryFramework() {
     }
 
     @Test
-    @Order(2)
     fun testQueryTimeoutSessionPropertyAbortsTheDorisQuery() {
         // Ten seconds keeps the send-blocked statement observable before the timeout sweep.
         val session: Session = Session.builder(getSession())
