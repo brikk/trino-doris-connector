@@ -105,41 +105,25 @@ object DorisTestCluster {
         }
     }
 
-    /**
-     * PERSISTENT cancellation evidence in fe.log for a Doris query id: the timeout checker
-     * logs "query is timeout, killed by timeout checker" and every cancellation path logs
-     * "cancel" lines carrying the query id. This is the CI-proof release signal: on a slow
-     * client the killed query's PROCESSLIST row can linger for minutes (the FE result
-     * receiver stays stuck on the stalled socket, re-logging the cancel once per second —
-     * CI run 29694687854 evidence), while the fe.log line lands the moment the checker
-     * fires. Same docker-exec substrate as the audit-log helper.
-     */
-    fun feLogShowsCancellation(dorisQueryId: String): Boolean {
-        DorisTestSafety.requireSingle()
-        val process = ProcessBuilder(
-            "docker", "exec", FE_CONTAINER,
-            "sh", "-c",
-            "grep -a -F -- ${shellQuote(dorisQueryId)} /opt/apache-doris/fe/log/fe.log | grep -a -i -E 'killed by timeout checker|cancel' | head -1 || true",
-        ).redirectErrorStream(true).start()
-        val output = process.inputStream.bufferedReader().readText()
-        check(process.waitFor(30, TimeUnit.SECONDS)) { "docker exec grep timed out" }
-        return output.isNotBlank()
-    }
+    // A send-blocked client can retain its processlist row after server-side cancellation.
+    fun feLogShowsCancellation(dorisQueryId: String): Boolean =
+        logMatches("/opt/apache-doris/fe/log/fe.log", dorisQueryId).any {
+            it.contains("killed by timeout checker", ignoreCase = true) || it.contains("cancel", ignoreCase = true)
+        }
+
+    fun feLogShowsQueryTimeout(dorisQueryId: String): Boolean =
+        logMatches("/opt/apache-doris/fe/log/fe.log", dorisQueryId).any { it.contains("killed by timeout checker") }
 
     /**
      * Audit-log lines containing [marker] (e.g. the `trino_query_id=<id>` comment rendered by
      * [DorisRemoteQueryModifier]). The FE audit logger flushes asynchronously (~5s lag
      * observed), so callers poll via [awaitAuditLogStatements].
      */
-    fun auditLogStatements(marker: String): List<String> {
+    fun auditLogStatements(marker: String): List<String> = logMatches(AUDIT_LOG_PATH, marker)
+
+    private fun logMatches(path: String, marker: String): List<String> {
         DorisTestSafety.requireSingle()
-        val process = ProcessBuilder(
-            "docker", "exec", FE_CONTAINER,
-            "sh", "-c", "grep -F -- ${shellQuote(marker)} $AUDIT_LOG_PATH || true",
-        ).redirectErrorStream(true).start()
-        val output = process.inputStream.bufferedReader().readText()
-        check(process.waitFor(30, TimeUnit.SECONDS)) { "docker exec grep timed out" }
-        return output.lines().filter { it.isNotBlank() }
+        return runTestProcess(listOf("docker", "exec", FE_CONTAINER, "grep", "-a", "-F", "--", marker, path)).grepMatches()
     }
 
     fun awaitAuditLogStatements(marker: String, timeoutMillis: Long): List<String> {
@@ -187,8 +171,6 @@ object DorisTestCluster {
             }
         }
     }
-
-    private fun shellQuote(value: String): String = "'" + value.replace("'", "'\\''") + "'"
 
     private const val POLL_INTERVAL_MILLIS = 250L
 }
