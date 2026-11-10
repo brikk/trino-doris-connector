@@ -91,8 +91,8 @@ class TestDorisP5Statistics : AbstractTestQueryFramework() {
     }
 
     @Test
-    fun testProbePinTrinoRoCanReadEveryStatisticsSource() {
-        DorisTestCluster.openConnection("trino_ro").use { connection ->
+    fun testSelectOnlyAccountCanReadEveryStatisticsSource() {
+        DorisTestCluster.openConnection("p5_stats_ro").use { connection ->
             val statement = connection.createStatement()
             statement.executeQuery(
                 "SELECT TABLE_ROWS FROM information_schema.tables WHERE TABLE_SCHEMA = 'p5_stats' AND TABLE_NAME = 't'",
@@ -109,10 +109,10 @@ class TestDorisP5Statistics : AbstractTestQueryFramework() {
     @Test
     fun testRowCountReachesTheOptimizer() {
         // 1M-row table: exact row count (ANALYZE'd in setup — deterministic on fresh clusters)
-        val nums = showStats("doris.p0_probe.nums")
+        val nums = showStats("doris.p5_stats.nums")
         assertThat(nums[""]!!.getField(4)).isEqualTo(1_001_000.0)
         // and the engine consumes it: EXPLAIN carries the estimate
-        val plan = computeActual("EXPLAIN SELECT n FROM doris.p0_probe.nums").onlyValue as String
+        val plan = computeActual("EXPLAIN SELECT n FROM doris.p5_stats.nums").onlyValue as String
         assertThat(plan).contains("rows: 1001000")
         // small table
         assertThat(showStats("doris.p5_stats.t")[""]!!.getField(4)).isEqualTo(6.0)
@@ -241,16 +241,16 @@ class TestDorisP5Statistics : AbstractTestQueryFramework() {
         val disabled = Session.builder(session)
             .setCatalogSessionProperty(DorisQueryRunner.CATALOG, "statistics_enabled", "false")
             .build()
-        assertThat(showStats("doris.p0_probe.nums", disabled)[""]!!.getField(4)).isNull()
+        assertThat(showStats("doris.p5_stats.nums", disabled)[""]!!.getField(4)).isNull()
         // and back on (default true from doris.statistics.enabled)
-        assertThat(showStats("doris.p0_probe.nums")[""]!!.getField(4)).isEqualTo(1_001_000.0)
+        assertThat(showStats("doris.p5_stats.nums")[""]!!.getField(4)).isEqualTo(1_001_000.0)
     }
 
     private fun openRoot() = DorisTestCluster.openRootConnection()
 
     companion object {
         private fun provisionFixture() {
-            DorisFixtures.ensureBaseFixtures() // setup ANALYZEs p0_probe.nums below
+            DorisFixtures.ensureBaseFixtures()
             DorisTestCluster.executeAsRoot(
                 "DROP DATABASE IF EXISTS p5_stats",
                 "CREATE DATABASE p5_stats",
@@ -272,15 +272,16 @@ class TestDorisP5Statistics : AbstractTestQueryFramework() {
                 "CREATE TABLE p5_stats.bare (id INT NOT NULL, v VARCHAR(20)) " +
                     "DUPLICATE KEY(id) DISTRIBUTED BY HASH(id) BUCKETS 1 PROPERTIES (\"replication_num\" = \"1\")",
                 "INSERT INTO p5_stats.bare SELECT number, concat('v', number) FROM numbers('number' = '1000')",
+                "CREATE TABLE p5_stats.nums (n BIGINT NOT NULL) " +
+                    "DUPLICATE KEY(n) DISTRIBUTED BY HASH(n) BUCKETS 1 PROPERTIES (\"replication_num\" = \"1\")",
+                "INSERT INTO p5_stats.nums SELECT number FROM numbers('number' = '1001000')",
                 // deterministic stats for the assertion tables — via ROOT, never the connector
                 "ANALYZE TABLE p5_stats.t WITH SYNC",
-                "ANALYZE TABLE p0_probe.nums WITH SYNC",
+                "ANALYZE TABLE p5_stats.nums WITH SYNC",
                 "DROP STATS p5_stats.bare",
-                // trino_ro permission pin needs the account (idempotent recreate, same
-                // statements as TestDorisTrinoRoAccount)
-                "DROP USER IF EXISTS 'trino_ro'@'%'",
-                "CREATE USER 'trino_ro'@'%' IDENTIFIED BY ''",
-                "GRANT SELECT_PRIV ON internal.*.* TO 'trino_ro'@'%'",
+                "DROP USER IF EXISTS 'p5_stats_ro'@'%'",
+                "CREATE USER 'p5_stats_ro'@'%' IDENTIFIED BY ''",
+                "GRANT SELECT_PRIV ON internal.*.* TO 'p5_stats_ro'@'%'",
             )
         }
     }
