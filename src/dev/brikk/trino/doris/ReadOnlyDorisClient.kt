@@ -40,25 +40,9 @@ import java.util.OptionalLong
 import java.util.function.Consumer
 
 /**
- * Read-only guard layer (PLAN G7.2): rejects EVERY mutating [JdbcClient] method before any
- * remote SQL can be generated. This is one layer of the defense in depth — connector access
- * control ([DorisReadOnlyAccessControl]) denies at the engine boundary, and the SELECT-only
- * Doris account denies at the server (PLAN G7.1/G7.3; ledger §C).
- *
- * Two overrides here are the `system.execute` choke point (PLAN G7.5): Base JDBC's
- * auto-installed `ExecuteProcedure` does NOT call [JdbcClient.execute] — it opens
- * `jdbcClient.getConnection(session)` and runs `Statement.executeUpdate` directly (verified in
- * the 483 source). The 1-arg [getConnection] overload is called ONLY by `ExecuteProcedure` and
- * `JdbcMergeSink` (both write paths), so throwing from it (and from [execute]) makes the
- * procedure physically unable to reach Doris even if an access-control layer were bypassed.
- *
- * `TestReadOnlyDorisClient` classifies the pinned 484 [JdbcClient] surface by reflection and
- * fails loud if a future base-jdbc upgrade adds a method not covered here or explicitly
- * allow-listed.
- *
- * Mutator parameters are deliberately declared nullable: the read-only rejection must win over
- * any argument validation, so the guard throws its error even for null/garbage arguments
- * (parameters are never touched).
+ * Rejects every mutating [JdbcClient] method before any SQL is generated, a second layer behind
+ * [DorisReadOnlyAccessControl]. Parameters are nullable so that the read-only error wins over
+ * argument validation.
  */
 class ReadOnlyDorisClient internal constructor(
     private val delegate: JdbcClient,
@@ -72,8 +56,6 @@ class ReadOnlyDorisClient internal constructor(
         throw TrinoException(NOT_SUPPORTED, "$READ_ONLY_MESSAGE (rejected: $operation)")
     }
 
-    // --- write type mapping / capability probes ---
-
     override fun toWriteMapping(session: ConnectorSession?, type: Type?): WriteMapping =
         readOnlyViolation("toWriteMapping")
 
@@ -81,8 +63,6 @@ class ReadOnlyDorisClient internal constructor(
 
     override fun getMaxWriteParallelism(session: ConnectorSession?): OptionalInt =
         readOnlyViolation("getMaxWriteParallelism")
-
-    // --- schema DDL ---
 
     override fun createSchema(session: ConnectorSession?, schemaName: String?): Unit =
         readOnlyViolation("createSchema")
@@ -92,8 +72,6 @@ class ReadOnlyDorisClient internal constructor(
 
     override fun renameSchema(session: ConnectorSession?, schemaName: String?, newSchemaName: String?): Unit =
         readOnlyViolation("renameSchema")
-
-    // --- table DDL ---
 
     override fun createTable(session: ConnectorSession?, tableMetadata: ConnectorTableMetadata?): Unit =
         readOnlyViolation("createTable")
@@ -128,8 +106,6 @@ class ReadOnlyDorisClient internal constructor(
         properties: Map<String, Optional<Any>>?,
     ): Unit = readOnlyViolation("setTableProperties")
 
-    // --- column DDL ---
-
     override fun addColumn(session: ConnectorSession?, handle: JdbcTableHandle?, column: ColumnMetadata?, position: ColumnPosition?): Unit =
         readOnlyViolation("addColumn")
 
@@ -149,8 +125,6 @@ class ReadOnlyDorisClient internal constructor(
     override fun dropNotNullConstraint(session: ConnectorSession?, handle: JdbcTableHandle?, column: JdbcColumnHandle?): Unit =
         readOnlyViolation("dropNotNullConstraint")
 
-    // --- comments ---
-
     override fun setTableComment(session: ConnectorSession?, handle: JdbcTableHandle?, comment: Optional<String>?): Unit =
         readOnlyViolation("setTableComment")
 
@@ -160,8 +134,6 @@ class ReadOnlyDorisClient internal constructor(
         column: JdbcColumnHandle?,
         comment: Optional<String>?,
     ): Unit = readOnlyViolation("setColumnComment")
-
-    // --- DML ---
 
     override fun beginInsertTable(
         session: ConnectorSession?,
@@ -192,11 +164,12 @@ class ReadOnlyDorisClient internal constructor(
     override fun update(session: ConnectorSession?, handle: JdbcTableHandle?): OptionalLong =
         readOnlyViolation("update")
 
-    // --- raw statement escape hatches (system.execute choke point, PLAN G7.5) ---
-
     override fun execute(session: ConnectorSession?, query: String?): Unit =
         readOnlyViolation("execute")
 
+    // system.execute does not call execute(): it takes this connection and runs SQL on it. Its
+    // only other caller is the merge sink, so rejecting it blocks raw SQL even if access control
+    // is bypassed.
     override fun getConnection(session: ConnectorSession?): Connection =
         readOnlyViolation("getConnection(session) — only write paths (system.execute, merge sink) use this overload")
 
