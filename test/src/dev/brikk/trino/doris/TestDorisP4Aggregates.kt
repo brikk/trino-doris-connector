@@ -54,7 +54,7 @@ class TestDorisP4Aggregates : AbstractTestQueryFramework() {
     /** Differential: pushdown-enabled results must be row-identical to the local (disabled) plan. */
     private fun assertSameAsLocal(sql: String, description: String = sql) {
         val pushed = computeActual(sql).materializedRows.sortedBy { it.toString() }
-        val local = computeActual(noAggSession(), sql).materializedRows.sortedBy { it.toString() }
+        val local = computeActual(fullyLocalSession(session), sql).materializedRows.sortedBy { it.toString() }
         assertThat(pushed).describedAs(description).isEqualTo(local)
     }
 

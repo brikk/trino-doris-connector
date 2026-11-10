@@ -37,9 +37,7 @@ class TestDorisB1ScalarPushdown : AbstractTestQueryFramework() {
     }
 
     private val local: Session
-        get() = Session.builder(session)
-            .setCatalogSessionProperty(DorisQueryRunner.CATALOG, "complex_expression_pushdown", "false")
-            .build()
+        get() = fullyLocalSession(session)
 
     private fun modeSession(mode: String): Session = Session.builder(session)
         .setCatalogSessionProperty(DorisQueryRunner.CATALOG, "string_pushdown_mode", mode)
@@ -253,9 +251,7 @@ class TestDorisB1ScalarPushdown : AbstractTestQueryFramework() {
             val textSession = Session.builder(modeSession(mode.name))
                 .setCatalogSessionProperty(DorisQueryRunner.CATALOG, "unsupported_type_handling", "CONVERT_TO_VARCHAR")
                 .build()
-            val localTextSession = Session.builder(textSession)
-                .setCatalogSessionProperty(DorisQueryRunner.CATALOG, "complex_expression_pushdown", "false")
-                .build()
+            val localTextSession = fullyLocalSession(textSession)
             for ((table, column) in listOf(
                 "arrays" to "a_varchar50",
                 "mapstruct" to "m_si",

@@ -32,7 +32,7 @@ class TestDorisOuterJoinSafety : AbstractTestQueryFramework() {
 
     @Test
     fun testBothOuterSidesAndBothAggregatesRetainNullPayloads() {
-        val local = Session.builder(eager).setSystemProperty("allow_pushdown_into_connectors", "false").build()
+        val local = fullyLocalSession(eager)
         for (from in listOf(
             "doris.outer_join_safety.l l LEFT JOIN doris.outer_join_safety.r r ON l.id=r.id",
             "doris.outer_join_safety.r r RIGHT JOIN doris.outer_join_safety.l l ON l.id=r.id",

@@ -40,9 +40,8 @@ class TestDorisP5Batch : AbstractTestQueryFramework() {
     private fun arrIds(predicate: String): List<Any?> =
         computeActual("SELECT id FROM doris.p5_batch.arr WHERE $predicate ORDER BY id").onlyColumn.toList()
 
-    /** Local-truth oracle: OR with an unpushable disjunct keeps the WHOLE predicate in Trino. */
     private fun jsonIdsLocal(predicate: String): List<Any?> =
-        computeActual("SELECT id FROM doris.p5_batch.j WHERE ($predicate) OR random() < 0 ORDER BY id").onlyColumn.toList()
+        computeActual(fullyLocalSession(session), "SELECT id FROM doris.p5_batch.j WHERE $predicate ORDER BY id").onlyColumn.toList()
 
     private fun remoteSql(session: Session, sql: String): String {
         val execution = getDistributedQueryRunner().executeWithPlan(session, sql)
@@ -88,7 +87,7 @@ class TestDorisP5Batch : AbstractTestQueryFramework() {
     }
 
     private fun assertJsonSubscriptStaysLocal(path: String, expected: List<Int>) {
-        val local = Session.builder(session).setSystemProperty("allow_pushdown_into_connectors", "false").build()
+        val local = fullyLocalSession(session)
         val extract = "json_extract_scalar(doc, '$path')"
         for (predicate in listOf("$extract = 'x'", "'x' = $extract")) {
             val sql = "SELECT id FROM doris.p5_batch.json_paths WHERE $predicate"
@@ -285,7 +284,7 @@ class TestDorisP5Batch : AbstractTestQueryFramework() {
         assertThat(query(sql)).isNotFullyPushedDown(FilterNode::class.java) // LIKE retained locally
         assertThat(remoteSql(sql)).contains("(`v` >= 'foo' AND `v` < 'fop')")
         assertThat(computeActual("$sql ORDER BY id").onlyColumn.toList()).isEqualTo(listOf(1, 2, 3))
-        // differential vs NULL_ONLY (nothing pushed — pure local truth)
+        assertThat(computeActual(fullyLocalSession(session), "$sql ORDER BY id").onlyColumn.toList()).isEqualTo(listOf(1, 2, 3))
         val nullOnly = Session.builder(session)
             .setCatalogSessionProperty(DorisQueryRunner.CATALOG, "string_pushdown_mode", "NULL_ONLY")
             .build()

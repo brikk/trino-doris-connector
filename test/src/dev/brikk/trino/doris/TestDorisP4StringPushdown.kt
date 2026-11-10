@@ -79,9 +79,9 @@ class TestDorisP4StringPushdown : AbstractTestQueryFramework() {
     // --- GUARDED (the default): evidence-tiered — proven shapes push fully, hazards skip ---
 
     @Test
-    fun testGuardedIsResultIdenticalToNullOnlyOverTheHazardMatrix() {
+    fun testGuardedIsResultIdenticalToTrinoOverTheHazardMatrix() {
         val guarded = modeSession(DorisStringPushdownMode.GUARDED)
-        val nullOnly = modeSession(DorisStringPushdownMode.NULL_ONLY)
+        val local = fullyLocalSession(guarded)
         val predicates = listOf(
             "v = 'a'",
             "v = 'a '",
@@ -102,7 +102,7 @@ class TestDorisP4StringPushdown : AbstractTestQueryFramework() {
             "v IS NOT NULL",
         )
         for (predicate in predicates) {
-            assertThat(ids(guarded, predicate)).describedAs(predicate).isEqualTo(ids(nullOnly, predicate))
+            assertThat(ids(guarded, predicate)).describedAs(predicate).isEqualTo(ids(local, predicate))
         }
         // spot-check absolute truth for the tricky rows
         assertThat(ids(guarded, "v = U&'a\\0000b'")).isEqualTo(listOf(9))
@@ -164,7 +164,7 @@ class TestDorisP4StringPushdown : AbstractTestQueryFramework() {
             for (predicate in listOf("v = 'a'", "v = 'a '", "v < 'b'", "v = U&'\\+01F600'", "s = 'a'")) {
                 assertThat(ids(session, predicate))
                     .describedAs("$mode $predicate")
-                    .isEqualTo(ids(modeSession(DorisStringPushdownMode.NULL_ONLY), predicate))
+                    .isEqualTo(ids(fullyLocalSession(session), predicate))
             }
             assertThat(remoteSql(session, "SELECT id FROM doris.p4_strings.t WHERE v = 'a'")).contains("`v` = 'a'")
         }
@@ -206,7 +206,7 @@ class TestDorisP4StringPushdown : AbstractTestQueryFramework() {
             assertThat(query(modeSession(mode), topN)).ordered().isFullyPushedDown()
             assertThat(computeActual(modeSession(mode), topN).onlyColumn.toList())
                 .describedAs(mode.name)
-                .isEqualTo(computeActual(modeSession(DorisStringPushdownMode.NULL_ONLY), topN).onlyColumn.toList())
+                .isEqualTo(computeActual(fullyLocalSession(modeSession(mode)), topN).onlyColumn.toList())
         }
         // GUARDED/NULL_ONLY: TopN stays local.
         for (mode in listOf(DorisStringPushdownMode.GUARDED, DorisStringPushdownMode.NULL_ONLY)) {
@@ -222,7 +222,6 @@ class TestDorisP4StringPushdown : AbstractTestQueryFramework() {
     @Test
     fun testLikePushdownPerMode() {
         val full = modeSession(DorisStringPushdownMode.FULL)
-        val nullOnly = modeSession(DorisStringPushdownMode.NULL_ONLY)
         for (predicate in listOf(
             "v LIKE 'a%'",
             "v LIKE '_'",
@@ -231,7 +230,7 @@ class TestDorisP4StringPushdown : AbstractTestQueryFramework() {
         )) {
             val sql = "SELECT id FROM doris.p4_strings.t WHERE $predicate"
             assertThat(query(full, sql)).describedAs(predicate).isFullyPushedDown()
-            assertThat(ids(full, predicate)).describedAs(predicate).isEqualTo(ids(nullOnly, predicate))
+            assertThat(ids(full, predicate)).describedAs(predicate).isEqualTo(ids(fullyLocalSession(full), predicate))
         }
         // exact expected rows for the divergence-prone patterns
         assertThat(ids(full, """v LIKE 'a\%'""")).isEqualTo(listOf(17))
@@ -248,7 +247,7 @@ class TestDorisP4StringPushdown : AbstractTestQueryFramework() {
         val guarded = modeSession(DorisStringPushdownMode.GUARDED)
         val guardedLike = "SELECT id FROM doris.p4_strings.t WHERE v LIKE 'a%'"
         assertThat(query(guarded, guardedLike)).isNotFullyPushedDown(FilterNode::class.java)
-        assertThat(ids(guarded, "v LIKE 'a%'")).isEqualTo(ids(nullOnly, "v LIKE 'a%'"))
+        assertThat(ids(guarded, "v LIKE 'a%'")).isEqualTo(ids(fullyLocalSession(guarded), "v LIKE 'a%'"))
     }
 
     // --- helpers ---
@@ -262,7 +261,7 @@ class TestDorisP4StringPushdown : AbstractTestQueryFramework() {
             .hasMessageContaining("single ascii character")
         for (mode in DorisStringPushdownMode.entries) {
             val pushed = modeSession(mode)
-            val local = Session.builder(pushed).setSystemProperty("allow_pushdown_into_connectors", "false").build()
+            val local = fullyLocalSession(pushed)
             for (escape in listOf("é", "中")) {
                 val predicate = "v LIKE '%${escape}_%' ESCAPE '$escape'"
                 val sql = "SELECT id FROM doris.p4_strings.t WHERE $predicate"

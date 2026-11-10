@@ -85,7 +85,7 @@ class TestDorisGoldenJsonWire : AbstractTestQueryFramework() {
     @Test
     fun testReadableRowsAgreeWithLocalJsonEvaluation() {
         // The non-finite row is in a separate relation, outside both valid-input oracles.
-        val local = Session.builder(session).setSystemProperty("complex_expression_pushdown", "false").build()
+        val local = fullyLocalSession(session)
         for (literal in listOf("hello", "inf", "1.23", "1.2300", "true", "null")) {
             val sql = "SELECT id FROM doris.golden_415_json.wire " +
                 "WHERE id >= 4 AND json_extract_scalar(doc, '$.n') = '$literal' ORDER BY id"

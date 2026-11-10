@@ -33,9 +33,7 @@ class TestDorisP3TopN : AbstractTestQueryFramework() {
         return DorisQueryRunner.builder().build()
     }
 
-    private fun noTopNSession(): Session = Session.builder(session)
-        .setCatalogSessionProperty(DorisQueryRunner.CATALOG, "topn_pushdown_enabled", "false")
-        .build()
+    private fun noTopNSession(): Session = fullyLocalSession(session)
 
     @Test
     fun testAllFourNullOrderingsPushAndMatch() {

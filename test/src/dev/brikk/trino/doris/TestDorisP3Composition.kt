@@ -36,9 +36,7 @@ class TestDorisP3Composition : AbstractTestQueryFramework() {
         return DorisQueryRunner.builder().build()
     }
 
-    private fun noPushdownSession(): Session = Session.builder(session)
-        .setSystemProperty("complex_expression_pushdown", "false")
-        .build()
+    private fun noPushdownSession(): Session = fullyLocalSession(session)
 
     // --- 3VL pins (both engines) ---
 

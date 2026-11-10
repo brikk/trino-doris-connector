@@ -239,7 +239,7 @@ class TestDorisP2aArray : AbstractTestQueryFramework() {
     fun testTextMappedArrayTopNUsesExposedText() {
         for (mode in DorisStringPushdownMode.entries) {
             val text = textSession(mode)
-            val local = Session.builder(text).setSystemProperty("allow_pushdown_into_connectors", "false").build()
+            val local = fullyLocalSession(text)
             val sql = "SELECT a_vc FROM doris.p2_array.text_ordering WHERE id <= 2 ORDER BY a_vc LIMIT 1"
             assertThat(computeActual(text, sql).onlyValue).isEqualTo("""["x"]""")
             for (ordering in listOf("ASC NULLS FIRST", "ASC NULLS LAST", "DESC NULLS FIRST", "DESC NULLS LAST")) {
@@ -255,7 +255,7 @@ class TestDorisP2aArray : AbstractTestQueryFramework() {
     fun testTextMappedMapAndStructKeysStayLocal() {
         for (mode in DorisStringPushdownMode.entries) {
             val text = textSession(mode)
-            val local = Session.builder(text).setSystemProperty("allow_pushdown_into_connectors", "false").build()
+            val local = fullyLocalSession(text)
             for (column in listOf("m_si", "s_ab")) {
                 val groupBy = "SELECT $column, count(*) FROM doris.p0_probe.mapstruct GROUP BY $column"
                 assertThat(query(text, groupBy)).isNotFullyPushedDown(AggregationNode::class.java)

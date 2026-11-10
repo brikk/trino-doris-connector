@@ -34,9 +34,7 @@ class TestDorisP6DateProjection : AbstractTestQueryFramework() {
     }
 
     private val local: io.trino.Session
-        get() = io.trino.Session.builder(session)
-            .setCatalogSessionProperty(DorisQueryRunner.CATALOG, "complex_expression_pushdown", "false")
-            .build()
+        get() = fullyLocalSession(session)
 
     private fun rows(session: io.trino.Session, sql: String): List<String> =
         computeActual(session, sql).materializedRows.map { it.toString() }.sorted()
@@ -92,9 +90,7 @@ class TestDorisP6DateProjection : AbstractTestQueryFramework() {
             .setCatalogSessionProperty(DorisQueryRunner.CATALOG, "join_pushdown_enabled", "true")
             .setCatalogSessionProperty(DorisQueryRunner.CATALOG, "join_pushdown_strategy", "EAGER")
             .build()
-        val unpushed = Session.builder(eager)
-            .setSystemProperty("allow_pushdown_into_connectors", "false")
-            .build()
+        val unpushed = fullyLocalSession(eager)
         val sql = "SELECT date(l.dt_6), date_trunc('day', r.dt_6) " +
             "FROM doris.p6_dates.renamed l JOIN doris.p6_dates.renamed r ON l.id = r.id"
         assertThat(query(eager, sql)).isFullyPushedDown()

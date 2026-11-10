@@ -34,9 +34,7 @@ class TestDorisP2bPushdown : AbstractTestQueryFramework() {
         return DorisQueryRunner.builder().build()
     }
 
-    private fun noPushdownSession(): Session = Session.builder(session)
-        .setSystemProperty("complex_expression_pushdown", "false")
-        .build()
+    private fun noPushdownSession(): Session = fullyLocalSession(session)
 
     // --- truth-table pins: the safety arguments live and die by these exact cells ---
 

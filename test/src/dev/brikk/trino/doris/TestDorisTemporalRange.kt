@@ -59,7 +59,7 @@ class TestDorisTemporalRange : AbstractTestQueryFramework() {
     }
 
     private val local: Session
-        get() = Session.builder(session).setSystemProperty("allow_pushdown_into_connectors", "false").build()
+        get() = fullyLocalSession(session)
 
     @Test
     fun testOutOfRangeDomainsStayLocal() {

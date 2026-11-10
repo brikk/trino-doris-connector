@@ -26,8 +26,7 @@ class TestDorisCaseFoldLocal : AbstractTestQueryFramework() {
         return DorisQueryRunner.builder().build()
     }
 
-    private val local: Session get() = Session.builder(session)
-        .setSystemProperty("allow_pushdown_into_connectors", "false").build()
+    private val local: Session get() = fullyLocalSession(session)
 
     @Test
     fun testProjectionPredicateAndCompositionRemainLocalInEveryMode() {

@@ -35,9 +35,7 @@ class TestDorisB2Aggregates : AbstractTestQueryFramework() {
     }
 
     private val noAggPushdown: Session
-        get() = Session.builder(session)
-            .setCatalogSessionProperty(DorisQueryRunner.CATALOG, "aggregation_pushdown_enabled", "false")
-            .build()
+        get() = fullyLocalSession(session)
 
     private fun rows(session: Session, sql: String): List<String> =
         computeActual(session, sql).materializedRows.map { it.toString() }.sorted()

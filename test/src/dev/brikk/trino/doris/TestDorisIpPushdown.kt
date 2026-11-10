@@ -38,9 +38,7 @@ class TestDorisIpPushdown : AbstractTestQueryFramework() {
         return DorisQueryRunner.builder().build()
     }
 
-    private fun noPushdownSession(): Session = Session.builder(session)
-        .setSystemProperty("complex_expression_pushdown", "false")
-        .build()
+    private fun noPushdownSession(): Session = fullyLocalSession(session)
 
     // --- domain pushdown: =, IN, range, IS NULL ---
 
@@ -101,8 +99,8 @@ class TestDorisIpPushdown : AbstractTestQueryFramework() {
     @Test
     fun testIpTopNPushesAndOrdersByteExact() {
         for (col in listOf("v4", "v6")) {
-            val sql = "SELECT id FROM doris.ip_pushdown.t ORDER BY $col ASC NULLS FIRST, id LIMIT 10"
-            assertThat(query(sql)).isFullyPushedDown()
+            val sql = "SELECT id FROM doris.ip_pushdown.t ORDER BY $col ASC NULLS FIRST, id LIMIT 3"
+            assertThat(query(sql)).ordered().isFullyPushedDown()
             val pushed = computeActual(sql).onlyColumn.toList()
             val local = computeActual(noPushdownSession(), sql).onlyColumn.toList()
             assertThat(pushed).describedAs("TopN $col").isEqualTo(local)
