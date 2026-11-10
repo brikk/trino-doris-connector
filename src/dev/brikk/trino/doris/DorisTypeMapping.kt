@@ -77,21 +77,16 @@ import java.time.format.DateTimeParseException
 import java.util.Optional
 
 /**
- * Native scalar/array mappings; retained type evidence: `dev-docs/archive/LEDGER-p0-type-and-capability.md` §A.
- * Every mapping keys off the Doris `information_schema.columns.COLUMN_TYPE` string carried
- * in [JdbcTypeHandle.jdbcTypeName]; JDBC metadata type codes are never trusted (PROBE §1).
- *
- * Supported arrays use the closed leaf allowlist below. MAP/STRUCT and denied arrays
- * are hidden or explicitly textualized; opaque engine states stay hidden under all policies.
+ * Maps Doris COLUMN_TYPE strings, carried in [JdbcTypeHandle.jdbcTypeName], to Trino types. JDBC
+ * type codes are not used.
  */
 internal class DorisTypeMapping(typeManager: TypeManager) {
     private val jsonType: Type = typeManager.getType(TypeDescriptor(StandardTypes.JSON))
     private val ipAddressType: Type = typeManager.getType(TypeDescriptor(StandardTypes.IPADDRESS))
 
     private val mappers: Map<String, (DorisColumnType) -> Optional<ColumnMapping>> = buildMap {
-        // Doris BOOLEAN reports COLUMN_TYPE `tinyint(1)`; a real TINYINT reports `tinyint(4)`.
-        // Discrimination MUST come from COLUMN_TYPE — protocol-level metadata cannot tell them
-        // apart under tinyInt1isBit=false (PROBE §2/§4, Impl #7; ledger §A row `boolean`).
+        // Doris reports BOOLEAN as `tinyint(1)` and TINYINT as `tinyint(4)`; JDBC metadata cannot
+        // tell them apart.
         put("boolean") { _ -> Optional.of(booleanColumnMapping()) }
         put("tinyint") { parsed ->
             Optional.of(if (parsed.arguments == listOf(1)) booleanColumnMapping() else tinyintColumnMapping())
@@ -117,13 +112,7 @@ internal class DorisTypeMapping(typeManager: TypeManager) {
         put("array") { parsed -> arrayColumnMapping(parsed) }
     }
 
-    /**
-     * The ARRAY element allowlist (ledger §A "ARRAY element allowlist verdict"; spike §1/§4):
-     * a resolver returning null means the element type is DENIED — string-family leaves are
-     * provably ambiguous on the wire (zero escaping, spike F4), JSON is not creatable (F5),
-     * MAP/STRUCT/VARIANT are separate wire work, and DECIMAL(>38) exceeds Trino's ceiling.
-     * A nested array whose (possibly deep) leaf is denied inherits the denial (spike §7.3).
-     */
+    /** Element types not listed here are denied; see [DorisArrayElement]. */
     private val arrayElementResolvers: Map<String, (DorisColumnType) -> DorisArrayElement?> = buildMap {
         put("boolean") { _ -> DorisArrayElement.BooleanElement }
         put("tinyint") { parsed ->
@@ -147,16 +136,10 @@ internal class DorisTypeMapping(typeManager: TypeManager) {
     }
 
     /**
-     * Returns the Trino column mapping for a Doris COLUMN_TYPE string, or empty when the type
-     * is not exposed (unsupported-type policy: column hidden).
-     *
-     * `unsupported-type-handling=CONVERT_TO_VARCHAR` is honored exactly where the ledger
-     * permits a VARCHAR-of-wire-text policy: denied-leaf ARRAY (ledger §A "unsupported column,
-     * or VARCHAR-of-whole-array-text") and MAP/STRUCT ("unsupported or VARCHAR-of-text"). The
-     * wire text of all three is a proven server-rendered grammar (PROBE §"wire-format").
-     * Allowlisted ARRAY element types map NATIVELY regardless of the policy. Opaque engine
-     * states (BITMAP/HLL/QUANTILE_STATE/AGG_STATE) stay hidden under EVERY policy — their
-     * "text" is NULL or raw state bytes, never meaningful (PROBE Impl #9).
+     * Empty means the column is hidden. With `unsupported-type-handling=CONVERT_TO_VARCHAR`, MAP,
+     * STRUCT and arrays of denied element types are exposed as their Doris text. BITMAP, HLL,
+     * QUANTILE_STATE and AGG_STATE stay hidden under every policy: their text is NULL or raw
+     * state bytes.
      */
     fun toColumnMapping(session: ConnectorSession, columnType: String): Optional<ColumnMapping> {
         val parsed = DorisColumnType.parse(columnType)
@@ -170,12 +153,7 @@ internal class DorisTypeMapping(typeManager: TypeManager) {
         return Optional.empty()
     }
 
-    /**
-     * Native `ARRAY<T>` for the allowlist: `getString()` wire text -> strict
-     * [DorisArrayWireDecoder] -> Trino elements Block (PostgreSqlClient Block-construction
-     * pattern only — Connector/J implements no `java.sql.Array` for Doris, spike §6).
-     * Typed ARRAY predicates are admitted separately by DorisArrayPushdownSupport.
-     */
+    /** Connector/J has no `java.sql.Array` for Doris, so arrays are decoded from their `getString()` text. */
     private fun arrayColumnMapping(parsed: DorisColumnType): Optional<ColumnMapping> {
         val element = resolveArrayElement(arrayElementColumnType(parsed.raw)) ?: return Optional.empty()
         return Optional.of(
@@ -192,7 +170,6 @@ internal class DorisTypeMapping(typeManager: TypeManager) {
         )
     }
 
-    /** True for the Trino IPADDRESS type (both Doris IPV4 and IPV6 map to it). */
     fun isIpAddress(type: Type): Boolean = type == ipAddressType
 
     internal fun resolveArrayElement(columnType: String): DorisArrayElement? {
@@ -203,28 +180,18 @@ internal class DorisTypeMapping(typeManager: TypeManager) {
     private fun decimalArrayElement(parsed: DorisColumnType): DorisArrayElement? {
         val (precision, scale) = decimalPrecisionAndScale(parsed)
         if (precision > MAX_PRECISION) {
-            // Decimal256 array elements exceed Trino's DECIMAL ceiling -> denied leaf.
             return null
         }
         return DorisArrayElement.DecimalElement(createDecimalType(precision, scale))
     }
 
-    /**
-     * Read-only VARCHAR view of wire text: Decimal256 always, complex types when opted in via
-     * `unsupported-type-handling=CONVERT_TO_VARCHAR`. No pushdown: the text is a rendering,
-     * not a comparable value.
-     */
+    /** Doris text of a value Trino cannot represent natively; never pushed, as the text does not compare like the value. */
     private fun unboundedVarcharTextMapping(): ColumnMapping {
         val varcharType = createUnboundedVarcharType()
         return ColumnMapping.sliceMapping(varcharType, varcharReadFunction(varcharType), varcharWriteFunction(), DISABLE_PUSHDOWN)
     }
 
-    /**
-     * DECIMAL(p<=38, s) maps exactly; 38 < p (Decimal256) maps to VARCHAR carrying the exact
-     * wire text — the read path IS wire-exact, the limit is Trino's public DECIMAL ceiling of
-     * 38, and the rejected alternative (MAP_TO_NUMBER) silently loses scale (ledger §A
-     * "Decimal256 stance"; PROBE Impl #3).
-     */
+    /** DECIMAL beyond Trino's precision of 38 is exposed as its exact text. */
     private fun decimalMapping(parsed: DorisColumnType): ColumnMapping {
         val (precision, scale) = decimalPrecisionAndScale(parsed)
         if (precision > MAX_PRECISION) {
@@ -259,27 +226,14 @@ internal class DorisTypeMapping(typeManager: TypeManager) {
         return ColumnMapping.sliceMapping(varcharType, varcharReadFunction(varcharType), varcharWriteFunction(), VARCHAR_PUSHDOWN)
     }
 
-    /** JSON and VARIANT: strict text-to-native-Json parsing, no blind pushdown (ledger §A; SR K14). */
     private fun jsonMapping(): ColumnMapping {
         return jsonColumnMapping(jsonType, varcharWriteFunction())
     }
 
     /**
-     * IPV4/IPV6 arrive as canonical text (`192.168.1.1`, `2001:db8::ff00:42:8329`, `::`,
-     * `fe80::1` — PROBE §3, Impl #4) and map to Trino IPADDRESS; unparseable text fails loud.
-     *
-     * Pushdown is TYPE-AWARE (live-probed 2026-07-19, `dev-docs/archive/REPORT-ip-pushdown-probe-4.1.3.md`):
-     * Trino IPADDRESS is a single 16-byte (IPv4-mapped) type, but Doris has DISTINCT IPV4 and
-     * IPV6 types that reject each other's textual forms — IPV4 wants dotted-quad `a.b.c.d`,
-     * IPV6 wants a colon-hex form and REJECTS dotted-quad. Byte ordering is identical on both
-     * engines (unsigned big-endian 16 bytes — [IpAddressType.comparisonOperator] vs Doris
-     * IPV4/IPV6 order), so equality/range/IN domains and TopN are exact once rendered in the
-     * TARGET dialect. Bound parameters render via [DorisIpAddress.writeFunction]:
-     * - IPV4 columns: [IPV4_PUSHDOWN] pushes ONLY when every domain value is an IPv4-mapped
-     *   address (a real IPv6 literal can never equal an IPV4 column value; kept local — still
-     *   correct) so the write function can always emit dotted-quad.
-     * - IPV6 columns: FULL_PUSHDOWN — every 16-byte value renders as a fully-expanded 8-group
-     *   colon-hex literal Doris accepts (incl. `0:0:0:0:0:ffff:c0a8:101` for mapped v4).
+     * Doris IPV4/IPV6 arrive as canonical text. Their order matches Trino's IPADDRESS order, so
+     * domains push once each value is rendered for the column's type; IPV4 columns push only
+     * IPv4-mapped values ([IPV4_PUSHDOWN]).
      */
     private fun ipAddressMapping(isV4: Boolean): ColumnMapping {
         return ColumnMapping.sliceMapping(
@@ -291,20 +245,16 @@ internal class DorisTypeMapping(typeManager: TypeManager) {
     }
 
     companion object {
-        /** Complex types whose wire text is a proven server-rendered grammar (PROBE §"wire-format"). */
         private val TEXT_SAFE_COMPLEX_TYPES = setOf("array", "map", "struct")
 
         internal const val MAX_DATETIME_PRECISION = 6
 
-        /** Max unscaled value representable in DECIMAL(38,0): 10^38 - 1. */
         private val DECIMAL_38_MAX: BigInteger = BigInteger.TEN.pow(MAX_PRECISION).subtract(BigInteger.ONE)
 
         /**
-         * LARGEINT (signed 128-bit) -> DECIMAL(38,0): wire value is TEXT (RSMD CHAR), so read
-         * `getString` and parse BigInteger — `getBigDecimal` throws on the negative extreme
-         * (PROBE §2/§3, Impl #2). Out-of-DECIMAL(38,0) range fails LOUD, never clamps
-         * (ledger §A "LARGEINT string-read + fail-loud rule"). Domain pushdown is safe because
-         * every value in a DECIMAL(38,0) domain is representable by construction.
+         * LARGEINT arrives as text and `getBigDecimal` throws on its negative extreme, so it is
+         * parsed from `getString`. Values outside DECIMAL(38,0) fail rather than clamp. Domains
+         * push safely because every DECIMAL(38,0) value fits in a LARGEINT.
          */
         internal fun largeintColumnMapping(): ColumnMapping {
             val decimalType = createDecimalType(MAX_PRECISION, 0)
@@ -357,13 +307,7 @@ internal class DorisTypeMapping(typeManager: TypeManager) {
             )
         }
 
-        /**
-         * DOUBLE reads via `getString` + parse: `getDouble`/`getObject` THROW
-         * `SQLDataException` on `Infinity`/`-Infinity` wire values, which would turn one
-         * poisoned row into a whole-scan failure (PROBE §3, Impl #6; ledger §A row `double`).
-         * `Double.parseDouble` accepts `Infinity`/`-Infinity`/`NaN`, so those values surface
-         * faithfully; anything else unparseable fails loud. Pushdown disabled: approximate type.
-         */
+        /** Read as text: Connector/J `getDouble`/`getObject` throw on `Infinity`, failing the whole scan. */
         private fun dorisDoubleColumnMapping(): ColumnMapping {
             return ColumnMapping.doubleMapping(
                 DOUBLE,
@@ -387,11 +331,7 @@ internal class DorisTypeMapping(typeManager: TypeManager) {
             )
         }
 
-        /**
-         * DATE reads via `getString` -> strict ISO LocalDate: `getDate`/`getObject` throw
-         * `SQLException: YEAR` on Doris's `0000-01-01` minimum (PROBE §3, Impl #6;
-         * ledger §A row `date`). Domain pushdown allowed (exact).
-         */
+        /** Read as text: Connector/J `getDate`/`getObject` throw on Doris's minimum date `0000-01-01`. */
         private fun dorisDateColumnMapping(): ColumnMapping {
             return ColumnMapping.longMapping(
                 DATE,
@@ -415,12 +355,6 @@ internal class DorisTypeMapping(typeManager: TypeManager) {
             )
         }
 
-        /**
-         * DATETIME(p), p<=6 -> TIMESTAMP(p), read via `getObject(LocalDateTime)` (zoneless,
-         * tolerates `0000-*`); NEVER `getTimestamp`, which shifts the instant by the session
-         * zone and throws `YEAR` on `0000-*` (PROBE §3/§6, Impl #5; ledger §A "DATETIME
-         * read-via-LocalDateTime rule"). Max proven precision is 6 (microseconds).
-         */
         internal fun timestampType(parsed: DorisColumnType): TimestampType {
             val precision = parsed.arguments.firstOrNull() ?: 0
             if (precision !in 0..MAX_DATETIME_PRECISION) {
@@ -429,6 +363,10 @@ internal class DorisTypeMapping(typeManager: TypeManager) {
             return createTimestampType(precision)
         }
 
+        /**
+         * Read as LocalDateTime: `getTimestamp` shifts values by the session time zone and throws
+         * on year 0000.
+         */
         private fun dorisTimestampColumnMapping(parsed: DorisColumnType): ColumnMapping {
             val timestampType = timestampType(parsed)
             return ColumnMapping.longMapping(
@@ -448,10 +386,7 @@ internal class DorisTypeMapping(typeManager: TypeManager) {
             )
         }
 
-        /**
-         * Extracts the element COLUMN_TYPE from an `array<...>` COLUMN_TYPE string, nesting-
-         * aware (`array<array<int(11)>>` -> `array<int(11)>`); malformed text fails loud.
-         */
+        /** `array<array<int(11)>>` -> `array<int(11)>`. */
         internal fun arrayElementColumnType(raw: String): String {
             val trimmed = raw.trim()
             val open = trimmed.indexOf('<')
@@ -461,17 +396,12 @@ internal class DorisTypeMapping(typeManager: TypeManager) {
             return trimmed.substring(open + 1, trimmed.length - 1)
         }
 
-        /** Read-only connector: array values are never written or bound as parameters (pushdown disabled). */
         private fun readOnlyArrayWriteFunction(): ObjectWriteFunction =
             ObjectWriteFunction.of(Block::class.java) { _, _, _ ->
                 throw TrinoException(NOT_SUPPORTED, "The Doris connector is read-only and does not allow any mutating operation")
             }
 
-        /**
-         * Builds the [JdbcTypeHandle] for a COLUMN_TYPE string. The COLUMN_TYPE string itself
-         * rides in `jdbcTypeName` and is the ONLY value type decisions key off; the synthesized
-         * `java.sql.Types` code and sizes exist for diagnostics.
-         */
+        /** For diagnostics only: type decisions use the COLUMN_TYPE in `jdbcTypeName`. */
         private val DIAGNOSTIC_JDBC_TYPES: Map<String, Int> = mapOf(
             "boolean" to Types.BOOLEAN,
             "tinyint" to Types.TINYINT,
