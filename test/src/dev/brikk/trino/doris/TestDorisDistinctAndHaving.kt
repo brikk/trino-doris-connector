@@ -26,7 +26,7 @@ import org.junit.jupiter.api.TestInstance
  * `dev-docs/archive/NOTES-readonly-max-batch3.md`.
  */
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
-class TestDorisB3DistinctHaving : DorisPushdownTest("b3_dist", { provisionFixture() }) {
+class TestDorisDistinctAndHaving : DorisPushdownTest("b3_dist", { provisionFixture() }) {
 
     private val noAggPushdown: Session
         get() = fullyLocalSession(session)
