@@ -45,6 +45,10 @@ class TestDorisJsonMapping {
                 // The 483 BigDecimal parser retains precision/scale and sorts object keys.
                 "123456789012345678901234567890123456789.012300" to "123456789012345678901234567890123456789.012300",
                 """{"z":1.00,"a":2,"z":3}""" to """{"a":2,"z":3}""",
+                """{"a":"first","a":"second"}""" to """{"a":"second"}""",
+                """{"n":1.23}""" to """{"n":1.23}""",
+                """{"n":1e+30}""" to """{"n":1E+30}""",
+                """{"n":-0}""" to """{"n":0}""",
             )) {
                 val resultSet = resultSet(text)
                 assertThat(reader.isNull(resultSet, 1)).isFalse()

@@ -62,7 +62,6 @@ class TestDorisFunctionRegistryVerdicts {
             Pin("arrays_overlap", "arrays_overlap", CONDITIONALLY_EQUIVALENT, BATCH7_ARRAY),
             Pin("array_position", "array_position", IDENTICAL, BATCH7_ARRAY),
             Pin("cardinality", "array_size", DIVERGENT, BATCH7_ARRAY),
-            Pin("json_extract_scalar", "json_unquote", CONDITIONALLY_EQUIVALENT, "trino-484-doris-4.1.5-json.md#path-semantics"),
             Pin("date", "date", IDENTICAL, BATCH6_DATETIME),
             Pin("date_trunc", "date_trunc", CONDITIONALLY_EQUIVALENT, BATCH6_DATETIME),
             Pin("year", "year", IDENTICAL, BATCH6_DATETIME),

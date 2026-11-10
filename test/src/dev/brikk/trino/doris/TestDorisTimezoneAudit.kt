@@ -154,7 +154,6 @@ class TestDorisTimezoneAudit : DorisPushdownTest("p5_tz", { provisionFixture() }
             "contains" to "SELECT id FROM CATALOG.p5_tz.t WHERE contains(ai, 2)",
             "array_position" to "SELECT id FROM CATALOG.p5_tz.t WHERE array_position(ai, 2) = 2",
             "cardinality" to "SELECT id FROM CATALOG.p5_tz.t WHERE cardinality(ai) = 3",
-            "json" to "SELECT id FROM CATALOG.p5_tz.t WHERE json_extract_scalar(doc, '$.a') = 'x'",
             "like-prefix (GUARDED)" to "SELECT id FROM CATALOG.p5_tz.t WHERE v LIKE 'foo%'",
             "aggregates" to "SELECT count(*), min(dt6), max(d) FROM CATALOG.p5_tz.t",
             "join (EAGER)" to "SELECT a.v, b.v FROM CATALOG.p5_tz.t a JOIN CATALOG.p5_tz.t b ON a.n = b.n",

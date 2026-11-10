@@ -69,7 +69,7 @@ internal class DorisPushdownRewriters(typeMapping: DorisTypeMapping, quote: (Str
             .add(RewriteContains(support))
             .add(RewriteArraysOverlap(support))
             .add(RewriteStringLike(quote))
-            .add(RewriteJsonExtractScalarEquality(quote))
+            // JSON scalar equality stays local: Trino 483's parser keeps the last duplicate key; Doris extracts the first.
             .add(RewriteScalarComparisonBridge(scalar))
             .add(RewriteScalarIsNullBridge(scalar))
             .add(RewriteStartsWith(quote))

@@ -96,14 +96,17 @@ class TestDorisGoldenJsonWire : AbstractTestQueryFramework() {
     }
 
     @Test
-    fun testDorisNumericNormalizationAndFirstDuplicateSurviveTheWire() {
-        // The connector preserves what Doris sends; it cannot recover source scale lost in Doris.
+    fun testDorisNumericNormalizationAndTrino483DuplicateCollapse() {
+        // Trino 483 cannot recover source scale already lost in Doris.
         assertThat(query("SELECT json_extract_scalar(doc, '$.n') FROM doris.golden_415_json.wire WHERE id = 4"))
             .matches("VALUES VARCHAR '1.23'")
         val sql = "SELECT id FROM doris.golden_415_json.wire WHERE id >= 4 AND json_extract_scalar(doc, '$.a') = 'first'"
-        assertThat(query(sql)).isFullyPushedDown()
-        assertThat(query(sql)).matches("VALUES 7")
+        assertThat(query(sql)).isNotFullyPushedDown(FilterNode::class.java)
+        assertThat(computeActual(sql).materializedRows).isEmpty()
+        val secondSql = "SELECT id FROM doris.golden_415_json.wire WHERE id >= 4 AND json_extract_scalar(doc, '$.a') = 'second'"
+        assertThat(query(secondSql)).isNotFullyPushedDown(FilterNode::class.java)
+        assertThat(query(secondSql)).matches("VALUES 7")
         assertThat(query("SELECT json_format(doc) FROM doris.golden_415_json.wire WHERE id = 7"))
-            .matches("""VALUES VARCHAR '{"a":"first","a":"second"}'""")
+            .matches("""VALUES VARCHAR '{"a":"second"}'""")
     }
 }

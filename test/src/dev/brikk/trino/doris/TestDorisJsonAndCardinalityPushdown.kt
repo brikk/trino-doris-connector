@@ -33,17 +33,13 @@ class TestDorisJsonAndCardinalityPushdown : DorisPushdownTest("p5_batch", { prov
 
 
     @Test
-    fun testJsonEqualityIsPushedWithExactRemoteShape() {
+    fun testJsonEqualityStaysLocalWithoutRemoteExtraction() {
         val sql = "SELECT id FROM doris.p5_batch.j WHERE json_extract_scalar(doc, '$.a') = 'x'"
-        assertThat(query(sql)).isFullyPushedDown()
+        assertLocalAndIdentical(sql, FilterNode::class.java)
         assertThat(jsonIds("json_extract_scalar(doc, '$.a') = 'x'")).isEqualTo(listOf(1))
-        assertThat(remoteSql(sql)).contains("(json_unquote(json_extract(`doc`, '$.a')) = 'x')")
-        // '=' is symmetric: reversed orientation pushes too
-        assertThat(query("SELECT id FROM doris.p5_batch.j WHERE 'x' = json_extract_scalar(doc, '$.a')"))
-            .isFullyPushedDown()
-        // Nested dotted paths push; array subscripts stay local even for correctly shaped arrays.
-        assertThat(query("SELECT id FROM doris.p5_batch.j WHERE json_extract_scalar(doc, '$.n.k') = 'deep'"))
-            .isFullyPushedDown()
+        assertThat(remoteSql(sql)).doesNotContain("json_unquote", "json_extract")
+        assertLocalAndIdentical("SELECT id FROM doris.p5_batch.j WHERE 'x' = json_extract_scalar(doc, '$.a')", FilterNode::class.java)
+        assertLocalAndIdentical("SELECT id FROM doris.p5_batch.j WHERE json_extract_scalar(doc, '$.n.k') = 'deep'", FilterNode::class.java)
         assertThat(jsonIds("json_extract_scalar(doc, '$.n.k') = 'deep'")).isEqualTo(listOf(40))
         assertThat(query("SELECT id FROM doris.p5_batch.j WHERE json_extract_scalar(doc, '$.arr2[1]') = 'second'"))
             .isNotFullyPushedDown(FilterNode::class.java)
@@ -77,12 +73,12 @@ class TestDorisJsonAndCardinalityPushdown : DorisPushdownTest("p5_batch", { prov
     }
 
     @Test
-    fun testJsonDottedPathsRemainPushedAcrossRuntimeShapes() {
+    fun testJsonDottedPathsStayLocalAcrossRuntimeShapes() {
         for ((path, expected) in mapOf("$.a" to listOf(1), "$.a.b" to listOf(12))) {
             val extract = "json_extract_scalar(doc, '$path')"
             for (predicate in listOf("$extract = 'x'", "'x' = $extract")) {
                 val sql = "SELECT id FROM doris.p5_batch.json_paths WHERE $predicate"
-                assertThat(query(sql)).isFullyPushedDown()
+                assertLocalAndIdentical(sql, FilterNode::class.java)
                 assertThat(computeActual("$sql ORDER BY id").onlyColumn.toList()).isEqualTo(expected)
             }
         }
@@ -99,8 +95,6 @@ class TestDorisJsonAndCardinalityPushdown : DorisPushdownTest("p5_batch", { prov
 
     @Test
     fun testJsonEqualityDifferentialOverEveryAdversarialCell() {
-        // pushed result == local-truth result for every literal, INCLUDING guarded-out ones
-        // (those simply run local — correct either way)
         for (literal in listOf(
             "'x'", "'true'", "'false'", "'null'", "''", "'café'", "U&'caf\\00E9'", "'emoji😀'",
             "'q\"uote'", "'[1, 2]'", "'{\"b\":1}'", "'1'", "'1.1'", "'100'", "'1E+30'", "'-0'", "'0'",
@@ -116,15 +110,11 @@ class TestDorisJsonAndCardinalityPushdown : DorisPushdownTest("p5_batch", { prov
         assertThat(jsonIds("json_extract_scalar(doc, '$.a') = 'café'")).isEqualTo(listOf(11))
         assertThat(jsonIds("json_extract_scalar(doc, '$.a') = 'emoji😀'")).isEqualTo(listOf(23))
         assertThat(jsonIds("json_extract_scalar(doc, '$.a') = 'q\"uote'")).isEqualTo(listOf(13))
-        // boolean scalars render 'true'/'false' on both engines — proven pushable
-        assertThat(query("SELECT id FROM doris.p5_batch.j WHERE json_extract_scalar(doc, '$.a') = 'true'"))
-            .isFullyPushedDown()
+        assertLocalAndIdentical("SELECT id FROM doris.p5_batch.j WHERE json_extract_scalar(doc, '$.a') = 'true'", FilterNode::class.java)
         assertThat(jsonIds("json_extract_scalar(doc, '$.a') = 'true'")).isEqualTo(listOf(9))
         // the STRING 'null' matches only the string cell — JSON null and missing key are SQL
-        // NULL on BOTH engines (Doris json_unquote(json_extract) of JSON null is SQL NULL,
-        // unlike MySQL's 'null' text — the live probe cell that makes '=' safe)
-        assertThat(query("SELECT id FROM doris.p5_batch.j WHERE json_extract_scalar(doc, '$.a') = 'null'"))
-            .isFullyPushedDown()
+        // NULL on both engines, unlike MySQL's 'null' text for JSON null.
+        assertLocalAndIdentical("SELECT id FROM doris.p5_batch.j WHERE json_extract_scalar(doc, '$.a') = 'null'", FilterNode::class.java)
         assertThat(jsonIds("json_extract_scalar(doc, '$.a') = 'null'")).isEqualTo(listOf(14))
         // empty-string scalar is not NULL on either engine
         assertThat(jsonIds("json_extract_scalar(doc, '$.a') = ''")).isEqualTo(listOf(17))
@@ -132,8 +122,7 @@ class TestDorisJsonAndCardinalityPushdown : DorisPushdownTest("p5_batch", { prov
 
     @Test
     fun testJsonNumberCanonicalizationDivergenceEvidence() {
-        // WHY numeric-looking literals never push: the engines canonicalize number text
-        // independently. Trino (through the connector, local evaluation):
+        // Trino 483's parser normalizes number text differently from Doris.
         assertThat(computeActual("SELECT json_extract_scalar(doc, '$.a') FROM doris.p5_batch.j WHERE id = 32").onlyValue)
             .isEqualTo("1E+30") // 483 normalizes JSON numbers through BigDecimal.
         assertThat(computeActual("SELECT json_extract_scalar(doc, '$.a') FROM doris.p5_batch.j WHERE id = 34").onlyValue)
@@ -152,7 +141,7 @@ class TestDorisJsonAndCardinalityPushdown : DorisPushdownTest("p5_batch", { prov
     }
 
     @Test
-    fun testJsonGuardsKeepHazardShapesLocal() {
+    fun testJsonHazardShapesStayLocal() {
         for (predicate in listOf(
             "json_extract_scalar(doc, '$.a') <> 'x'", // non-scalar cells over-return remotely
             "json_extract_scalar(doc, '$.a') IS NULL", // ditto (Doris non-NULL for non-scalars)
