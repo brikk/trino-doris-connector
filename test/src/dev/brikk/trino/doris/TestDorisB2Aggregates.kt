@@ -160,9 +160,8 @@ class TestDorisB2Aggregates : DorisPushdownTest("b2_agg", { provisionFixture() }
 
     companion object {
         private fun provisionFixture() {
-            DorisTestCluster.executeAsRoot(
-                "DROP DATABASE IF EXISTS b2_agg",
-                "CREATE DATABASE b2_agg",
+            provisionFixture(
+                "b2_agg",
                 """
                 CREATE TABLE b2_agg.t (
                     g INT NOT NULL, a_nn INT NOT NULL, a_n INT, b INT,

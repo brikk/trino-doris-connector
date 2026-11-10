@@ -181,9 +181,8 @@ class TestDorisP6DateProjection : DorisPushdownTest("p6_dates", { provisionFixtu
 
     companion object {
         private fun provisionFixture() {
-            DorisTestCluster.executeAsRoot(
-                "DROP DATABASE IF EXISTS p6_dates",
-                "CREATE DATABASE p6_dates",
+            provisionFixture(
+                "p6_dates",
                 """
                 CREATE TABLE p6_dates.t (
                     id INT NOT NULL, v BIGINT, u VARCHAR(20),

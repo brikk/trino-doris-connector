@@ -271,9 +271,8 @@ class TestDorisP2bPushdown : DorisPushdownTest("p2b_pushdown", { provisionFixtur
 
     companion object {
         private fun provisionFixture() {
-            DorisTestCluster.executeAsRoot(
-                "DROP DATABASE IF EXISTS p2b_pushdown",
-                "CREATE DATABASE p2b_pushdown",
+            provisionFixture(
+                "p2b_pushdown",
                 """
                 CREATE TABLE p2b_pushdown.t (
                     id INT NOT NULL,

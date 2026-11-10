@@ -180,9 +180,8 @@ class TestDorisTimezoneAudit : DorisPushdownTest("p5_tz", { provisionFixture() }
 
     companion object {
         private fun provisionFixture() {
-            DorisTestCluster.executeAsRoot(
-                "DROP DATABASE IF EXISTS p5_tz",
-                "CREATE DATABASE p5_tz",
+            provisionFixture(
+                "p5_tz",
                 """
                 CREATE TABLE p5_tz.t (
                     id INT NOT NULL, n INT, d DATE, dt DATETIME, dt6 DATETIME(6),

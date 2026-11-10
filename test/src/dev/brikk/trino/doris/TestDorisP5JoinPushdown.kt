@@ -183,9 +183,8 @@ class TestDorisP5JoinPushdown : DorisPushdownTest("p5_join", { provisionFixture(
 
     companion object {
         private fun provisionFixture() {
-            DorisTestCluster.executeAsRoot(
-                "DROP DATABASE IF EXISTS p5_join",
-                "CREATE DATABASE p5_join",
+            provisionFixture(
+                "p5_join",
                 *listOf("l" to "lv", "r" to "rv").map { (table, label) ->
                     """
                     CREATE TABLE p5_join.$table (

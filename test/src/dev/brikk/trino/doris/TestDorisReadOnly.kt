@@ -200,9 +200,8 @@ class TestDorisReadOnly : DorisPushdownTest("p1_readonly", { provisionFixture() 
 
     companion object {
         private fun provisionFixture() {
-            DorisTestCluster.executeAsRoot(
-                "DROP DATABASE IF EXISTS p1_readonly",
-                "CREATE DATABASE p1_readonly",
+            provisionFixture(
+                "p1_readonly",
                 """
                 CREATE TABLE p1_readonly.t (id INT NOT NULL, v VARCHAR(20))
                 DUPLICATE KEY(id) DISTRIBUTED BY HASH(id) BUCKETS 1

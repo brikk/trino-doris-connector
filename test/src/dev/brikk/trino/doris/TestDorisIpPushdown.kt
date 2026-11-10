@@ -135,9 +135,8 @@ class TestDorisIpPushdown : DorisPushdownTest("ip_pushdown", { provisionFixture(
 
     companion object {
         private fun provisionFixture() {
-            DorisTestCluster.executeAsRoot(
-                "DROP DATABASE IF EXISTS ip_pushdown",
-                "CREATE DATABASE ip_pushdown",
+            provisionFixture(
+                "ip_pushdown",
                 """
                 CREATE TABLE ip_pushdown.t (
                     id INT NOT NULL,

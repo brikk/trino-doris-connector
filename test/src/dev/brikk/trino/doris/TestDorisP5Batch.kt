@@ -308,9 +308,8 @@ class TestDorisP5Batch : DorisPushdownTest("p5_batch", { provisionFixture() }) {
 
     companion object {
         private fun provisionFixture() {
-            DorisTestCluster.executeAsRoot(
-                "DROP DATABASE IF EXISTS p5_batch",
-                "CREATE DATABASE p5_batch",
+            provisionFixture(
+                "p5_batch",
                 """
                 CREATE TABLE p5_batch.j (id INT NOT NULL, doc JSON)
                 DUPLICATE KEY(id) DISTRIBUTED BY HASH(id) BUCKETS 1 PROPERTIES ("replication_num" = "1")

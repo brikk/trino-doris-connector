@@ -36,7 +36,7 @@ import java.time.format.DateTimeFormatter
  * is never touched.
  */
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
-class TestDorisP2aArray : DorisPushdownTest("p2a_array", { provisionFixture() }) {
+class TestDorisP2aArray : DorisPushdownTest("p2_array", { provisionFixture() }) {
 
     // --- type surface ---
 
@@ -357,9 +357,8 @@ class TestDorisP2aArray : DorisPushdownTest("p2a_array", { provisionFixture() })
     companion object {
         @Suppress("LongMethod")
         private fun provisionFixture() {
-            DorisTestCluster.executeAsRoot(
-                "DROP DATABASE IF EXISTS p2_array",
-                "CREATE DATABASE p2_array",
+            provisionFixture(
+                "p2_array",
                 """
                 CREATE TABLE p2_array.num (
                     id INT NOT NULL,

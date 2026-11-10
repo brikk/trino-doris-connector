@@ -263,9 +263,8 @@ class TestDorisB1ScalarPushdown : DorisPushdownTest("b1_scalar", { provisionFixt
 
     companion object {
         private fun provisionFixture() {
-            DorisTestCluster.executeAsRoot(
-                "DROP DATABASE IF EXISTS b1_scalar",
-                "CREATE DATABASE b1_scalar",
+            provisionFixture(
+                "b1_scalar",
                 """
                 CREATE TABLE b1_scalar.t (
                     id INT NOT NULL, n INT, m INT, v VARCHAR(50), c CHAR(10), d DOUBLE,

@@ -122,9 +122,8 @@ class TestDorisB3DistinctHaving : DorisPushdownTest("b3_dist", { provisionFixtur
 
     companion object {
         private fun provisionFixture() {
-            DorisTestCluster.executeAsRoot(
-                "DROP DATABASE IF EXISTS b3_dist",
-                "CREATE DATABASE b3_dist",
+            provisionFixture(
+                "b3_dist",
                 "CREATE TABLE b3_dist.t (id INT NOT NULL, n INT, v VARCHAR(30), k INT) " +
                     "DUPLICATE KEY(id) DISTRIBUTED BY HASH(id) BUCKETS 1 PROPERTIES (\"replication_num\" = \"1\")",
                 "INSERT INTO b3_dist.t SELECT number, number % 7, concat('v', number % 5), number % 11 FROM numbers('number' = '1000')",

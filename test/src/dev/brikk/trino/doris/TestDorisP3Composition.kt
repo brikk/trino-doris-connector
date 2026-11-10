@@ -121,9 +121,8 @@ class TestDorisP3Composition : DorisPushdownTest("p3_composition", { provisionFi
 
     companion object {
         private fun provisionFixture() {
-            DorisTestCluster.executeAsRoot(
-                "DROP DATABASE IF EXISTS p3_composition",
-                "CREATE DATABASE p3_composition",
+            provisionFixture(
+                "p3_composition",
                 """
                 CREATE TABLE p3_composition.t (id INT NOT NULL, a_int ARRAY<INT>, b_int ARRAY<INT>)
                 DUPLICATE KEY(id) DISTRIBUTED BY HASH(id) BUCKETS 1 PROPERTIES ("replication_num" = "1")

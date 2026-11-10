@@ -247,9 +247,8 @@ class TestDorisP5Statistics : DorisPushdownTest("p5_stats", { provisionFixture()
     companion object {
         private fun provisionFixture() {
             DorisFixtures.ensureBaseFixtures()
-            DorisTestCluster.executeAsRoot(
-                "DROP DATABASE IF EXISTS p5_stats",
-                "CREATE DATABASE p5_stats",
+            provisionFixture(
+                "p5_stats",
                 """
                 CREATE TABLE p5_stats.t (
                     id INT NOT NULL, b BIGINT, v VARCHAR(50), d DATE, dt DATETIME(6),

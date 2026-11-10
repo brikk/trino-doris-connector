@@ -278,9 +278,8 @@ class TestDorisP4StringPushdown : DorisPushdownTest("p4_strings", { provisionFix
 
     companion object {
         private fun provisionFixture() {
-            DorisTestCluster.executeAsRoot(
-                "DROP DATABASE IF EXISTS p4_strings",
-                "CREATE DATABASE p4_strings",
+            provisionFixture(
+                "p4_strings",
                 """
                 CREATE TABLE p4_strings.t (id INT NOT NULL, v VARCHAR(200), c CHAR(10), s STRING)
                 DUPLICATE KEY(id) DISTRIBUTED BY HASH(id) BUCKETS 1 PROPERTIES ("replication_num" = "1")

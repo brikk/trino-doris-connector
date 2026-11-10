@@ -110,9 +110,8 @@ class TestDorisP3TopN : DorisPushdownTest("p3_topn", { provisionFixture() }) {
         private fun provisionFixture() {
             DorisFixtures.ensureBaseFixtures() // the >65535 TopN proof reads p0_probe.nums
 
-            DorisTestCluster.executeAsRoot(
-                "DROP DATABASE IF EXISTS p3_topn",
-                "CREATE DATABASE p3_topn",
+            provisionFixture(
+                "p3_topn",
                 """
                 CREATE TABLE p3_topn.t (
                     id INT NOT NULL,
