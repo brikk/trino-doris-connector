@@ -6,14 +6,13 @@ a test-scope dependency; the plugin does not bundle it. Its version is in
 Do not replace the immutable release with a mutable snapshot or automatically bump it.
 
 [TestDorisFunctionRegistryVerdicts](../test/src/dev/brikk/trino/doris/TestDorisFunctionRegistryVerdicts.kt)
-pins the artifact's file name and SHA-256, and for each of the 17 pushed functions the
+pins the artifact's file name and SHA-256, and for each of the 16 pushed functions the
 registry's source/target, verdict and provenance. Registry drift fails the build; it
 never changes what the connector pushes. Not every connector rule is a distinct registry entry.
 
 Changing a registry verdict does not itself authorize a rule. Admission still
 depends on the connector's type/wire/nullability/path/value guard and live tests.
-In particular, JSON scalar equality has conditional, restricted admission; strict
-JSON reads remain distinct from text equality predicates.
+On Trino 483, JSON scalar equality is not pushed at all (see [TRINO-483.md](TRINO-483.md)).
 
 ## Unicode case folding
 

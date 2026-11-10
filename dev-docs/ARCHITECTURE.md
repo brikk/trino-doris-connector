@@ -46,9 +46,8 @@ Key admission boundaries:
 
 - Textualized complex/Decimal256 values cannot gain native value predicates,
   scalar transforms, grouping, DISTINCT or TopN merely by being exposed as VARCHAR.
-- JSON equality uses restricted dotted-object paths and closed literal/type
-  admission. Array-index paths and values colliding with non-scalar renderings
-  stay local; the registry's conditional classification is not blanket permission.
+- JSON equality stays local on Trino 483: its parser keeps the last duplicate key
+  while Doris extracts the first, so a pushed comparison could disagree with Trino.
 - LOWER/UPPER remain local in every mode, including compositions. Character
   length renders as `char_length`, not Doris's byte `length`.
 - The escaped-LIKE `starts_with` prefix rule has a restricted admission contract
