@@ -28,7 +28,7 @@ import org.junit.jupiter.api.TestInstance
  * `aggregation_pushdown_enabled=false` vs the direct Doris oracle.
  */
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
-class TestDorisB2Aggregates : DorisPushdownTest("b2_agg", { provisionFixture() }) {
+class TestDorisSelectionAndApproximateAggregates : DorisPushdownTest("b2_agg", { provisionFixture() }) {
 
     private val noAggPushdown: Session
         get() = fullyLocalSession(session)
