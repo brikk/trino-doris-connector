@@ -252,19 +252,12 @@ class TestDorisP1aSmoke : AbstractTestQueryFramework() {
 
     @Test
     fun testNullRow() {
-        assertThat(
-            query(
-                """
-                SELECT count(*) FROM doris.p1_smoke.scalars
-                WHERE id = 3
-                  AND c_boolean IS NULL AND c_tinyint IS NULL AND c_smallint IS NULL AND c_int IS NULL
-                  AND c_bigint IS NULL AND c_largeint IS NULL AND c_float IS NULL AND c_double IS NULL
-                  AND c_dec9_2 IS NULL AND c_dec38_10 IS NULL AND c_date IS NULL AND c_dt0 IS NULL
-                  AND c_dt6 IS NULL AND c_char10 IS NULL AND c_varchar100 IS NULL AND c_string IS NULL
-                  AND c_json IS NULL
-                """.trimIndent(),
-            ),
-        ).matches("VALUES BIGINT '1'")
+        val columns = listOf(
+            "c_boolean", "c_tinyint", "c_smallint", "c_int", "c_bigint", "c_largeint", "c_float", "c_double",
+            "c_dec9_2", "c_dec38_10", "c_date", "c_dt0", "c_dt6", "c_char10", "c_varchar100", "c_string", "c_json",
+        )
+        val row = computeActual("SELECT ${columns.joinToString()} FROM doris.p1_smoke.scalars WHERE id = 3").materializedRows.single()
+        columns.forEachIndexed { index, column -> assertThat(row.getField(index)).describedAs(column).isNull() }
     }
 
     @Test
