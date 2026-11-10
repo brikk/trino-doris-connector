@@ -82,14 +82,21 @@ class TestDorisReadOnly : DorisPushdownTest("p1_readonly", { provisionFixture() 
             "Access Denied: Cannot alter a column for table p1_readonly.t",
         )
         assertQueryFails(
-            "ALTER TABLE doris.p1_readonly.t SET PROPERTIES comment = 'denied'",
-            "Access Denied: Cannot set table properties to p1_readonly.t",
-        )
-        assertQueryFails(
             "ALTER TABLE doris.p1_readonly.t RENAME TO doris.p1_readonly.t2",
             "Access Denied: Cannot rename table from p1_readonly.t to p1_readonly.t2",
         )
         assertThat(DorisTestCluster.querySingleColumn("SHOW TABLES FROM p1_readonly")).containsExactly("t")
+        assertNoSideEffects()
+    }
+
+    @Test
+    fun testSetPropertiesRejectedWithoutRegisteredTableProperties() {
+        assertThat(computeActual("SELECT count(*) FROM system.metadata.table_properties WHERE catalog_name = 'doris'").onlyValue).isEqualTo(0L)
+        // Trino validates properties before checking access control.
+        assertQueryFails(
+            "ALTER TABLE doris.p1_readonly.t SET PROPERTIES comment = 'denied'",
+            "line 1:48: Catalog 'doris' table property 'comment' does not exist",
+        )
         assertNoSideEffects()
     }
 
