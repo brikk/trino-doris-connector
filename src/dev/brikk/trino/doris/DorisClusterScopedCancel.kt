@@ -32,43 +32,21 @@ import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 
 /**
- * CLUSTER-SCOPED query cancellation (multi-FE / load-balancer correct).
+ * Kills a scan's query on whichever FE runs it. Connector/J's `Statement.cancel()` sends
+ * `KILL QUERY <connection-id>` over a new connection; behind a load balancer that can reach
+ * another FE, where connection ids mean something else, and do nothing or kill an unrelated
+ * session. A socket abort alone frees the query only if the owning FE notices promptly.
  *
- * The defect this fixes (user-reported from a REAL multi-FE deployment): Connector/J's
- * `Statement.cancel()` opens a SECOND connection to the same JDBC URL and issues
- * `KILL QUERY <connection-id>`. Behind a load balancer over multiple FEs that lands on an
- * ARBITRARY FE where connection ids are per-FE counters — a silent no-op, or a kill of an
- * unrelated same-user session. Likewise, a plain socket abort only releases the Doris work
- * when the OWNING FE observes the teardown promptly.
+ * Each scan statement starts with a unique `/*trino_statement_id=<uuid>*/` marker. A helper
+ * connection to any FE finds the marker in `SHOW FULL PROCESSLIST` and issues
+ * `KILL QUERY "<QueryId>"`, which Doris forwards to the owning FE. Killing by trace id is not
+ * used because some Doris versions accept it and do nothing.
  *
- * The working sequence (adapted, with credit, from the Apache-2.0 reference implementation
- * in dev.sort.doris.cancel — production-hardened against a real LB'd cluster; re-proven
- * live on Doris 4.1.3 single-FE and the 3-FE overlay, `dev-docs/archive/NOTES-cancel-cluster-scoped.md`):
+ * The helper runs asynchronously and never touches the scan connection, where even
+ * `getClientInfo` can block. Every failure falls back to the socket abort in
+ * [DorisPreparedStatement], so cancellation never hangs on the helper.
  *
- *  1. Each built scan starts with a fresh `/*trino_statement_id=<uuid>*/` comment. The
- *     Trino query-id comment remains for tracing, but is NOT a cancellation key: Trino
- *     closes scans early for LIMIT as well as on failure, without cancelling sibling scans.
- *     The probe proved SHOW FULL PROCESSLIST Info is untruncated and cluster-wide on 4.1.3.
- *  2. At cancel: a short-lived HELPER connection (same URL — ANY FE is fine), widen with
- *     `SET fetch_all_fe_for_system_table = true` (defensive; 4.1.3 defaults cluster-wide),
- *     `SHOW FULL PROCESSLIST`, match the marker in `Info` (skipping idle rows and the
- *     helper's own statements), take the row's REAL `QueryId`, `KILL QUERY "<QueryId>"` —
- *     Doris forwards the kill FE-to-FE (probed: query on fe2, helper on fe3, released in
- *     22ms). NOT kill-by-trace-id: a documented silent no-op on 4.1.2 (the reference's
- *     production scar) — it happens to work on 4.1.3, but the QueryId path works on BOTH.
- *  3. The helper runs ASYNCHRONOUSLY and never consults the busy scan connection
- *     (even `getClientInfo` can stall mid-query). Marker/state are captured by
- *     [DorisPreparedStatement], whose independent physical socket abort remains.
- *     Each probe closes its helper before scheduling a retry; no worker or idle
- *     connection is parked between probes. At most 72 requests are admitted per
- *     plugin classloader, including running, queued and delayed requests.
- *     The blocked ResultSet read unblocks when the server errors the statement
- *     ("cancel query by user") — that is the completion signal.
- *
- * Every failure here degrades to the socket belt ([DorisPreparedStatement] aborts the
- * captured connection): a cancellation must never hang or fail because the helper
- * could not do its work. "Unknown query id" from the kill means the query already finished
- * — success, DEBUG.
+ * Adapted from the Apache-2.0 implementation in dev.sort.doris.cancel.
  */
 internal class DorisClusterScopedCancel(
     private val connectionFactory: DorisCancelConnectionFactory,
@@ -95,14 +73,14 @@ internal class DorisClusterScopedCancel(
     }
 
     /**
-     * Called once by the scan wrapper before socket abort. No busy JDBC calls on this thread.
-     * executionFinished must reflect delegate execution exit, not just cancellation/close.
+     * [executionFinished] must report that the statement's execute call has returned, not merely
+     * that the scan was cancelled or closed: only then does an empty processlist prove release.
      */
     fun cancel(session: ConnectorSession, marker: String, executionFinished: () -> Boolean) {
         if (!enabled) {
             return
         }
-        // Includes running, queued AND delayed requests, across catalogs in this classloader.
+        // Counts running, queued and delayed requests across all catalogs in this classloader.
         if (!requestSlots.tryAcquire()) {
             stats.killsRejected.incrementAndGet()
             log.debug("cluster-scoped cancel pending-request limit reached for %s", marker)
@@ -114,7 +92,6 @@ internal class DorisClusterScopedCancel(
         }
     }
 
-    /** One logical request retains its observation state/deadline, never an idle JDBC connection. */
     private inner class Request(
         private val session: ConnectorSession,
         private val marker: String,
@@ -153,7 +130,7 @@ internal class DorisClusterScopedCancel(
             var retry = false
             try {
                 retry = probeQuietly(session, marker, deadline) { statement ->
-                    // Read BEFORE scanning: completion during SHOW cannot prove absence.
+                    // Read before scanning: a query that finishes during SHOW does not prove absence.
                     val finishedBeforeScan = executionFinished()
                     val queries = scanRunningQueries(statement, marker)
                     if (isGone(!queries.found, finishedBeforeScan)) {
@@ -171,10 +148,9 @@ internal class DorisClusterScopedCancel(
                 }
             } finally {
                 if (!retry) {
-                    finish() // also release admission on unexpected unchecked failures
+                    finish() // also releases the request slot after an unchecked failure
                 }
             }
-            // probeQuietly has closed all JDBC resources (watchdog still armed through close).
             if (retry) {
                 scheduleRetry()
             }
@@ -224,18 +200,11 @@ internal class DorisClusterScopedCancel(
     }
 
     /**
-     * One short probe in the scan -> kill -> close -> scheduled retry chain.
-     *
-     * The retry is NOT paranoia — it is a live-reproduced Doris 4.1.3 race: a
-     * `KILL QUERY "<QueryId>"` issued in the FIRST INSTANTS of a query's life (the
-     * processlist row appears before the coordinator registers as cancellable) returns OK
-     * but is a SILENT NO-OP and the query runs to completion (probe: 1/25 tight-loop rounds;
-     * the victim COMPLETED normally despite the accepted kill). Re-scanning until the row is
-     * gone closes the window. A row that outlives the whole window is logged at DEBUG and
-     * left to the socket-abort belt (it can also be the killed-but-lingering send-blocked
-     * row from the CI finding — repeat kills of those are silently accepted and harmless).
+     * One probe on a fresh helper connection. Requests probe again until the row is gone, because
+     * a kill issued in the first instants of a query, before it can be cancelled, is accepted by
+     * Doris and does nothing. Killing a query that is already dying is harmless.
      */
-    @Suppress("TooGenericExceptionCaught") // best-effort BY CONTRACT: the stock abort belt already ran
+    @Suppress("TooGenericExceptionCaught") // best-effort: the socket abort runs regardless
     private fun probeQuietly(session: ConnectorSession, marker: String, deadline: Long, probe: (Statement) -> Boolean): Boolean {
         var watchdog: ScheduledFuture<*>? = null
         try {
@@ -259,7 +228,6 @@ internal class DorisClusterScopedCancel(
             Thread.currentThread().interrupt()
             log.debug(e, "cluster-scoped cancel helper interrupted for %s", marker)
         } catch (e: Exception) {
-            // the stock socket-abort belt already ran; the helper is best-effort by contract
             log.debug(e, "cluster-scoped cancel helper failed for %s", marker)
         } finally {
             watchdog?.cancel(false)
@@ -334,7 +302,7 @@ internal class DorisClusterScopedCancel(
 
         private const val SHOW_FULL_PROCESSLIST = "SHOW FULL PROCESSLIST"
 
-        /** Original dispatch-to-expiry window, shared by every probe in a request. */
+        /** Dispatch-to-expiry window shared by every probe of a request. */
         private const val KILL_WINDOW_MILLIS = 15_000L
         private const val KILL_RECHECK_MILLIS = 500L
         // Three empty probes span two retry intervals, allowing delayed FE visibility without a full-window search.
@@ -370,21 +338,16 @@ internal class DorisClusterScopedCancel(
             allowCoreThreadTimeOut(true)
         }
 
-        /**
-         * `QueryId` shape from SHOW FULL PROCESSLIST (e.g. `ce96d055444242d1-a5a580d0c15a4c40`),
-         * validated before embedding in kill SQL (the value comes from a server result set).
-         */
+        /** Checked before the server-supplied QueryId (e.g. `ce96d055444242d1-a5a580d0c15a4c40`) is embedded in KILL. */
         internal fun isValidQueryId(value: String?): Boolean =
             value != null && QUERY_ID.matches(value)
 
         private val QUERY_ID = Regex("[0-9a-f]{1,16}-[0-9a-f]{1,16}")
 
         /**
-         * A row we may kill: RUNNING (not an idle `Sleep` connection), carrying OUR marker,
-         * and not the helper's own SHOW/KILL statement. The connector places its unique
-         * token at the SQL boundary, BEFORE all generated SQL and tracing comments.
-         * Never search arbitrary text: even an exact comment can occur inside an audit
-         * search's string literal, quoted identifier, line comment or outer block comment.
+         * The marker must start the statement: the same text can appear later inside a string
+         * literal, identifier or comment, for example in a query searching the audit log. Idle
+         * `Sleep` rows and the helper's own SHOW/KILL are skipped.
          */
         internal fun isRunningCancelCandidate(command: String?, info: String?, marker: String): Boolean {
             if (command == null || command.trim().equals("Sleep", ignoreCase = true) || !STATEMENT_MARKER.matches(marker)) {
@@ -403,7 +366,7 @@ internal class DorisClusterScopedCancel(
 
         private val STATEMENT_MARKER = Regex("trino_statement_id=[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 
-        /** "Unknown query id" (any hop of the cause chain) == the query already finished. */
+        /** Doris reports "Unknown query id" when the query has already finished. */
         internal fun isUnknownQueryId(throwable: Throwable?): Boolean {
             var current: Throwable? = throwable
             var hops = 0
