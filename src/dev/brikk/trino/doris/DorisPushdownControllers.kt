@@ -33,14 +33,13 @@ internal object DorisPushdownControllers {
     private val MIN_DORIS_TIMESTAMP = DAYS.toMicros(MIN_DORIS_DATE)
     private val DORIS_TIMESTAMP_UPPER_BOUND = DAYS.toMicros(MAX_DORIS_DATE + 1)
 
-    /** Checks Trino epoch days/microseconds without JDBC conversion; other types are unaffected. */
+    /** Doris turns out-of-range DATE/DATETIME parameters into NULL, which changes comparison results. */
     fun isWithinTemporalRange(type: Type, value: Any?): Boolean = when {
         type == DATE -> value is Long && value in MIN_DORIS_DATE..MAX_DORIS_DATE
         type is TimestampType -> value is Long && value >= MIN_DORIS_TIMESTAMP && value < DORIS_TIMESTAMP_UPPER_BOUND
         else -> true
     }
 
-    // Doris casts out-of-range temporal parameters to NULL, changing comparison semantics.
     val TEMPORAL_PUSHDOWN = PredicatePushdownController { session, domain ->
         val inRange = domain.values.valuesProcessor.transform(
             { ranges ->
@@ -56,23 +55,9 @@ internal object DorisPushdownControllers {
     }
 
     /**
-     * G5 string-domain policy, mode-resolved per query (probe evidence:
-     * `dev-docs/archive/REPORT-string-comparison-probe-4.1.3.md` — Doris 4.1.3 string comparison is pure
-     * byte semantics, `utf8mb4_0900_bin`):
-     * - NULL_ONLY: null-ness only (exact; no collation hazard).
-     * - GUARDED (default), EVIDENCE-TIERED: domain shapes (`=`, `<>`, `IN`, ranges) over
-     *   non-hazardous literals push FULLY — each shape is byte-exactness-proven by the
-     *   probe report (equality/case/padding/NFC-vs-NFD rows; `<`/`BETWEEN`/`IN` rows;
-     *   byte order == codepoint order), so a retained local re-check is pure overhead
-     *   and blocks LIMIT/TopN collapse. Genuine SUPERSET pre-filters keep their local
-     *   check STRUCTURALLY: the LIKE-prefix range works because the engine derives the
-     *   range domain and retains the un-convertible LIKE expression ITSELF — the
-     *   superset relationship lives between the domain and the LIKE, not inside the
-     *   domain, so full domain pushdown preserves it. Hazards stay fully local:
-     *   0x00-bearing values (defense-in-depth: one transient wrong-empty observation,
-     *   probe report) and CHAR columns (see [CHAR_PUSHDOWN]).
-     * - BINARY/FULL: full pushdown incl. TopN keys and the LIKE rule (byte-exactness
-     *   probe-verified; the known documented divergence is CHAR trailing-space data).
+     * Doris compares strings as UTF-8 bytes (`utf8mb4_0900_bin`), matching Trino's VARCHAR
+     * comparison, so GUARDED mode pushes domains fully with no local re-check. A LIKE-prefix
+     * range stays exact because the engine keeps the LIKE itself as a filter.
      */
     val VARCHAR_PUSHDOWN = PredicatePushdownController { session, domain ->
         when (DorisSessionProperties.getStringPushdownMode(session)) {
@@ -83,10 +68,8 @@ internal object DorisPushdownControllers {
     }
 
     /**
-     * CHAR columns: Doris compares STORED bytes (no padding) while Trino compares
-     * trimmed CHAR values — stored trailing-space data UNDER-returns and is undetectable
-     * from the query (probe report, CHAR row). GUARDED therefore keeps CHAR at null-ness
-     * only; BINARY/FULL push with the divergence documented and tested.
+     * Doris compares CHAR as stored bytes while Trino ignores trailing spaces, so rows whose
+     * stored value has trailing spaces silently go missing. Only BINARY/FULL mode accepts that.
      */
     val CHAR_PUSHDOWN = PredicatePushdownController { session, domain ->
         if (DorisSessionProperties.getStringPushdownMode(session).allowsFullStringPushdown) {
@@ -96,11 +79,7 @@ internal object DorisPushdownControllers {
         }
     }
 
-    /**
-     * Push an IPV4 domain ONLY when every value is an IPv4-mapped address ([DorisIpAddress.isV4Mapped]);
-     * a real IPv6 literal can never equal an IPV4 column value, so keeping such a domain local
-     * is both correct and lets [DorisIpAddress.writeFunction] always emit a dotted-quad literal.
-     */
+    /** An IPv6 value can never equal an IPV4 column and has no IPV4 literal, so such domains stay local. */
     val IPV4_PUSHDOWN = PredicatePushdownController { session, domain ->
         if (collectDomainSlices(domain).all(DorisIpAddress::isV4Mapped)) {
             FULL_PUSHDOWN.apply(session, domain)
@@ -114,7 +93,6 @@ internal object DorisPushdownControllers {
 
     private fun nullOnlyResult(session: ConnectorSession, domain: Domain): DomainPushdownResult {
         return if (domain.isOnlyNull || domain.values.isAll) {
-            // Null-ness has no collation hazard; pushing it is exact.
             DomainPushdownResult(domain, Domain.all(domain.type))
         } else {
             DISABLE_PUSHDOWN.apply(session, domain)
@@ -123,17 +101,13 @@ internal object DorisPushdownControllers {
 
     private fun guardedResult(session: ConnectorSession, domain: Domain): DomainPushdownResult {
         if (collectDomainSlices(domain).any(::containsNulByte)) {
-            // hazard skip: a NUL-literal miss was observed once (transient, probe
-            // report) — keeping these fully local is always correct
+            // Doris can wrongly return no rows for a comparison with a 0x00 literal.
             return DISABLE_PUSHDOWN.apply(session, domain)
         }
-        // evidence-tiered: every remaining domain shape is byte-exactness-proven, so it
-        // pushes FULLY (FULL_PUSHDOWN also handles compaction correctly: an over-wide
-        // simplified domain keeps the original as the remaining filter)
+        // If the domain is simplified, FULL_PUSHDOWN keeps the original as the remaining filter.
         return FULL_PUSHDOWN.apply(session, domain)
     }
 
-    /** Gathers every Slice in a domain (discrete values and range bounds). */
     private fun collectDomainSlices(domain: Domain): List<Slice> {
         val slices = ArrayList<Slice>()
         domain.values.valuesProcessor.consume(
