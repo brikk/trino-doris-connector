@@ -19,11 +19,6 @@ import io.airlift.units.DataSize
 import io.airlift.units.Duration
 import java.util.concurrent.TimeUnit
 
-/**
- * Doris-specific connector settings. The three Doris session variables are applied at
- * SESSION scope only — never globally — via the Connector/J `sessionVariables` URL
- * property at connection open (PROBE §9; ledger §B "session vars").
- */
 class DorisConfig {
     private var queryTimeout: Duration? = null
     private var execMemLimit: DataSize? = null

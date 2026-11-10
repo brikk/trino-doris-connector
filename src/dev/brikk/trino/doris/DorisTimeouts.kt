@@ -17,7 +17,6 @@ import io.airlift.units.Duration
 import java.util.concurrent.TimeUnit
 import kotlin.math.ceil
 
-/** One range/normalization contract for catalog, session, connection and scan paths. */
 internal object DorisTimeouts {
     fun connectMillis(timeout: Duration): Int = normalized(timeout, TimeUnit.MILLISECONDS, "doris.connect-timeout", "ms")
 
@@ -28,7 +27,7 @@ internal object DorisTimeouts {
         require(value.isFinite() && value >= 1.0 && value <= Int.MAX_VALUE.toDouble()) {
             "$property must be between 1$suffix and ${Int.MAX_VALUE}$suffix (inclusive); got $timeout"
         }
-        // Never shorten a valid requested budget or round it to the driver's unbounded zero.
+        // Round up so a valid budget is never shortened.
         return ceil(value).toInt()
     }
 }

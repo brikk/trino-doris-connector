@@ -22,16 +22,6 @@ import io.trino.spi.TrinoException
 import io.trino.spi.connector.ConnectorSession
 import io.trino.spi.session.PropertyMetadata
 
-/**
- * Safe per-query session controls (PLAN §4.3). `query_timeout` is re-homed here as a
- * first-class read-path property — StarRocks sourced it from a *write* session-properties
- * class, explicitly rejected (SR K11/R2; ledger §D). Applied SERVER-side (`SET query_timeout`)
- * on each scan connection in [DorisClient.buildSql]: live-probed as the only mechanism that
- * bounds a streaming scan end-to-end, including the send-blocked phase (the client-side
- * `Statement.setQueryTimeout` timer does not cover result draining). The catalog-level default
- * is [DorisConfig.getQueryTimeout], which is also applied via `sessionVariables` at connection
- * open.
- */
 class DorisSessionProperties @Inject constructor(dorisConfig: DorisConfig) : SessionPropertiesProvider {
     private val properties: List<PropertyMetadata<*>> = listOf(
         durationProperty(

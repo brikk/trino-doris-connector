@@ -20,11 +20,6 @@ import com.mysql.cj.exceptions.CJException
 import io.trino.plugin.jdbc.BaseJdbcConfig
 import jakarta.validation.constraints.AssertTrue
 
-/**
- * Validates the Doris FE connection URL: a supported MySQL Connector/J JDBC URL
- * WITHOUT a database path — Doris databases map to Trino schemas, so the connection
- * must not pin a default database (ledger §B; SR K3; PLAN G9/§4.4).
- */
 class DorisJdbcConfig : BaseJdbcConfig() {
     @AssertTrue(
         message = "Invalid JDBC URL for the Doris connector: " +
@@ -44,7 +39,7 @@ class DorisJdbcConfig : BaseJdbcConfig() {
         }
     }
 
-    /** Lexical parser only: never instantiate ConnectionUrl, resolve DNS or load transforms/profiles. */
+    /** Parses lexically: building a ConnectionUrl would resolve DNS and load transforms or config profiles. */
     private fun isSupportedUrl(check: (ConnectionUrlParser, List<Map<String, String>>) -> Boolean): Boolean {
         val url = connectionUrl ?: return false
         try {
