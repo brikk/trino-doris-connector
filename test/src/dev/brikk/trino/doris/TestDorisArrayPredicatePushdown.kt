@@ -28,7 +28,7 @@ import org.junit.jupiter.api.TestInstance
  * plan-shape assertions, and audit-log proof of the generated remote SQL.
  */
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
-class TestDorisP2bPushdown : DorisPushdownTest("p2b_pushdown", { provisionFixture() }) {
+class TestDorisArrayPredicatePushdown : DorisPushdownTest("p2b_pushdown", { provisionFixture() }) {
 
     // --- truth-table pins: the safety arguments live and die by these exact cells ---
 
