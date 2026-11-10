@@ -79,7 +79,7 @@ class TestDorisReadOnly : DorisPushdownTest("p1_readonly", { provisionFixture() 
         assertQueryFails("ALTER TABLE doris.p1_readonly.t RENAME COLUMN v TO w", "Access Denied: Cannot rename a column in table p1_readonly.t")
         assertQueryFails(
             "ALTER TABLE doris.p1_readonly.t ALTER COLUMN v SET DATA TYPE varchar(100)",
-            "Access Denied: Cannot alter a column in table p1_readonly.t",
+            "Access Denied: Cannot alter a column for table p1_readonly.t",
         )
         assertQueryFails(
             "ALTER TABLE doris.p1_readonly.t SET PROPERTIES comment = 'denied'",
