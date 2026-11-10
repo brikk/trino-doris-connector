@@ -73,10 +73,11 @@ internal class DorisClusterScopedCancel(
     }
 
     /**
-     * [answered] says Doris had already answered the statement, with a result or an error, when
-     * the cancel began. The frontend has then seen it, so one empty processlist proves it is gone.
-     * A statement cancelled in flight may not have reached the frontend yet: it is gone only once
-     * it has been seen and has disappeared after its execute call returned ([executionFinished]).
+     * A statement is gone once consecutive processlist scans no longer show it, provided the
+     * frontend is known to have had it: either Doris had [answered] it, with a result or an
+     * error, when the cancel began, or a scan has shown it and its execute call has since
+     * returned ([executionFinished]). A statement cancelled in flight and never shown may still
+     * be on its way to the frontend, so it is probed until the deadline.
      */
     fun cancel(session: ConnectorSession, marker: String, answered: Boolean = false, executionFinished: () -> Boolean) {
         if (!enabled) {
@@ -103,6 +104,7 @@ internal class DorisClusterScopedCancel(
     ) : Runnable {
         private val completed = AtomicBoolean()
         private var observed = false
+        private var emptyScans = 0
 
         fun dispatch(): Boolean {
             if (completed.get()) {
@@ -158,8 +160,14 @@ internal class DorisClusterScopedCancel(
             }
         }
 
-        private fun isGone(found: Boolean, finishedBeforeScan: Boolean): Boolean =
-            !found && (answered || (finishedBeforeScan && observed))
+        private fun isGone(found: Boolean, finishedBeforeScan: Boolean): Boolean {
+            if (found) {
+                emptyScans = 0
+                return false
+            }
+            emptyScans++
+            return emptyScans >= EMPTY_SCANS_TO_CONFIRM && (answered || (finishedBeforeScan && observed))
+        }
 
         private fun scheduleRetry() {
             val remaining = deadline - System.nanoTime()
@@ -301,6 +309,9 @@ internal class DorisClusterScopedCancel(
         /** Dispatch-to-expiry window shared by every probe of a request. */
         private const val KILL_WINDOW_MILLIS = 15_000L
         private const val KILL_RECHECK_MILLIS = 500L
+        // One empty scan can be partial: Doris returns the processlist successfully even when it
+        // cannot reach another frontend.
+        private const val EMPTY_SCANS_TO_CONFIRM = 2
         private const val WORKER_COUNT = 8
         private const val QUEUE_CAPACITY = 64
 

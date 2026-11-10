@@ -119,7 +119,7 @@ class TestDorisCancelScheduling {
     }
 
     @Test
-    fun testAnsweredStatementAbsentFromProcesslistCostsOneProbe() {
+    fun testAnsweredStatementAbsentFromProcesslistCostsTwoProbes() {
         val executor = DorisClusterScopedCancel.newExecutor()
         val scheduler = DorisClusterScopedCancel.newRetryScheduler()
         val slots = Semaphore(1)
@@ -128,7 +128,7 @@ class TestDorisCancelScheduling {
             val cancel = resources.newCancel(model.factory, true, executor, 5000, scheduler, slots)
             cancel.cancel(session, marker(), answered = true) { true }
             assertThat(slots.tryAcquire(1, 3, SECONDS)).isTrue()
-            assertThat(model.deadlines).hasSize(1)
+            assertThat(model.deadlines).hasSize(2)
             assertThat(cancel.stats.killsExpired.get()).isZero()
             assertThat(model.active.get()).isZero()
             assertThat(model.failures).isEmpty()
@@ -152,7 +152,7 @@ class TestDorisCancelScheduling {
                 .cancel(session, requireNotNull(model.liveMarker), answered = true) { true }
             assertThat(slots.tryAcquire(1, 3, SECONDS)).isTrue()
             assertThat(model.killed.count).isZero()
-            assertThat(model.deadlines).hasSize(2)
+            assertThat(model.deadlines).hasSize(3)
             assertThat(model.failures).isEmpty()
         } finally {
             scheduler.shutdownNow()
@@ -185,7 +185,7 @@ class TestDorisCancelScheduling {
     }
 
     @Test
-    fun testObservedStatementStopsOnItsFirstEmptyProbe() {
+    fun testObservedStatementIsGoneAfterTwoEmptyProbes() {
         val executor = DorisClusterScopedCancel.newExecutor()
         val scheduler = DorisClusterScopedCancel.newRetryScheduler()
         val slots = Semaphore(1)
@@ -194,7 +194,7 @@ class TestDorisCancelScheduling {
             resources.newCancel(model.factory, true, executor, 5000, scheduler, slots)
                 .cancel(session, requireNotNull(model.liveMarker)) { true }
             assertThat(slots.tryAcquire(1, 3, SECONDS)).isTrue()
-            assertThat(model.deadlines).hasSize(2)
+            assertThat(model.deadlines).hasSize(3)
             assertThat(model.killed.count).isZero()
             assertThat(model.failures).isEmpty()
             assertThat(scheduler.queue).isEmpty()

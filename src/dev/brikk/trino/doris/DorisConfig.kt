@@ -65,9 +65,9 @@ class DorisConfig {
 
     @Config("doris.string-pushdown.mode")
     @ConfigDescription(
-        "String pushdown mode: NULL_ONLY (only IS NULL checks), GUARDED (default: VARCHAR comparisons, " +
-            "except values containing a NUL byte; CHAR stays in Trino), BINARY or FULL (also CHAR comparisons, " +
-            "VARCHAR TopN and LIKE). Per-query override: string_pushdown_mode",
+        "String pushdown mode: NULL_ONLY (only IS NULL and IS NOT NULL checks), GUARDED (default: also VARCHAR " +
+            "comparisons, except values containing a NUL byte; CHAR comparisons stay in Trino), BINARY or FULL " +
+            "(also CHAR comparisons, VARCHAR TopN and LIKE). Per-query override: string_pushdown_mode",
     )
     fun setStringPushdownMode(stringPushdownMode: DorisStringPushdownMode): DorisConfig {
         this.stringPushdownMode = stringPushdownMode
@@ -93,7 +93,7 @@ class DorisConfig {
     @ConfigDescription(
         "Push approximate aggregates (approx_distinct -> approx_count_distinct) to Doris. " +
             "Off by default: both engines return HyperLogLog estimates from different sketches, " +
-            "so pushed and local answers differ for the same data.",
+            "so pushed and local answers may differ for the same data.",
     )
     fun setApproximatePushdown(approximatePushdown: Boolean): DorisConfig {
         this.approximatePushdown = approximatePushdown

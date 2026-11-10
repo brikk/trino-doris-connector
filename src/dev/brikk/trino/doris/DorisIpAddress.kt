@@ -32,10 +32,12 @@ internal object DorisIpAddress {
         parseOrNull(text) ?: throw TrinoException(GENERIC_INTERNAL_ERROR, "Unreadable Doris IPV4/IPV6 wire value: '$text'")
 
     fun parseOrNull(text: String): Slice? {
-        if (!InetAddresses.isInetAddress(text)) {
+        val address = try {
+            InetAddresses.forString(text)
+        } catch (ignored: IllegalArgumentException) {
             return null
         }
-        return wrappedBuffer(*toTrinoBytes(InetAddresses.forString(text)))
+        return wrappedBuffer(*toTrinoBytes(address))
     }
 
     /** True when a 16-byte Trino IPADDRESS slice is IPv4-mapped (`::ffff:a.b.c.d`). */

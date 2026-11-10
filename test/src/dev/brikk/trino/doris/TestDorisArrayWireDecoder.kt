@@ -168,6 +168,10 @@ class TestDorisArrayWireDecoder {
             .isInstanceOf(TrinoException::class.java)
             .hasMessageContaining("malformed IP address element 'not-an-ip'")
             .hasMessageContaining("(at wire offset 14)")
+        // Guava accepts the syntax of a scoped address and then fails to resolve the interface.
+        assertThatThrownBy { DorisArrayWireDecoder.decode("""["fe80::1%no_such_interface"]""", ipv6) }
+            .isInstanceOf(TrinoException::class.java)
+            .hasMessageContaining("(at wire offset 1)")
     }
 
 
