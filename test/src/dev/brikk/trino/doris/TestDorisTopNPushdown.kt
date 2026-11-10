@@ -27,7 +27,7 @@ import org.junit.jupiter.api.TestInstance
  * always WITH the LIMIT. Differentials run against `topn_pushdown_enabled=false`.
  */
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
-class TestDorisP3TopN : DorisPushdownTest("p3_topn", { provisionFixture() }) {
+class TestDorisTopNPushdown : DorisPushdownTest("p3_topn", { provisionFixture() }) {
 
     private fun noTopNSession(): Session = fullyLocalSession(session)
 
