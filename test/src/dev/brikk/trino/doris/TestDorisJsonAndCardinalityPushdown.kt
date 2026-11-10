@@ -28,7 +28,7 @@ import org.junit.jupiter.api.TestInstance
  * both engines are PINNED here; probe verdicts in `dev-docs/archive/NOTES-p5-batch.md`.
  */
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
-class TestDorisP5Batch : DorisPushdownTest("p5_batch", { provisionFixture() }) {
+class TestDorisJsonAndCardinalityPushdown : DorisPushdownTest("p5_batch", { provisionFixture() }) {
 
     private fun jsonIds(predicate: String): List<Any?> =
         computeActual("SELECT id FROM doris.p5_batch.j WHERE $predicate ORDER BY id").onlyColumn.toList()
