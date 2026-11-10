@@ -157,6 +157,8 @@ Important limits:
 - SQL NULL and JSON null remain distinct. JSON/VARIANT use Trino 483's parsed
   UTF-8 Slice representation: object keys are sorted and duplicate keys collapse
   to the last value. Malformed input is rejected by Trino's 483 JSON parser.
+  On Trino 483, `json_extract_scalar` equality is evaluated by Trino because its
+  parser keeps the last duplicate key while Doris extracts the first.
 - DATE/DATETIME predicates outside Doris's year 0000–9999 range stay local.
   DATETIME is a wall clock, not an instant; TIMESTAMP WITH TIME ZONE is not exposed.
 
@@ -169,7 +171,7 @@ results stream back instead of buffering the full result in Trino.
 |---|---|
 | Comparisons, ranges, IN and null checks | Type-aware; string behavior follows the selected mode |
 | ARRAY contains/overlap/position/size predicates | Supported typed elements and NULL-preserving guards |
-| JSON scalar equality | Restricted constant dotted-object paths and safe text literals; array-subscript paths stay local |
+| JSON scalar equality | Evaluated by Trino on 483; its parser keeps the last duplicate key while Doris extracts the first |
 | Scalar expressions | Eligible coalesce/nullif, character length, prefix matching, temporal extracts and date projections |
 | Aggregates | Eligible count/distinct, min/max, DECIMAL(p≤18) sum, any_value, guarded min_by/max_by; approximate aggregates are opt-in |
 | GROUP BY, DISTINCT, HAVING, LIMIT and TopN | Eligible native/derived keys and type-specific ordering rules |

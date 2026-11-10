@@ -15,6 +15,8 @@ physical-connection fixes.
   484's native `Json` mapping. Object keys sort, duplicate keys collapse to the
   last value, and number text follows the 483 BigDecimal parser. Parser edge cases
   follow Trino 483, not the newer native-Json validator.
+- Keep `json_extract_scalar` equality local: Trino 483's parser keeps the last
+  duplicate key while Doris extracts the first, so the 484 rewrite is not equivalent.
 - Adapt JSON unit-source/block assertions and the target-sensitive integration
   expectations; retain all shared regression sources without running them.
 - Point the optional manual sandbox at Trino 483 and update branch usage guidance.
@@ -23,7 +25,7 @@ Doris **4.1.5** and its image digests, Connector/J **26.7.0**, metadata **0.21.0
 Kotlin **2.4.10** and JDK **25** remain unchanged. Other engine-managed dependencies
 follow the 483 BOM. The statistics metadata constructors match 483 and need no
 adaptation. Registry provenance still identifies its original 484/Doris evidence;
-the conservative JSON equality exclusions are unchanged, not broadened.
+JSON scalar equality is not among the active registry pins on 483.
 
 ## Release checks, not requalification
 
