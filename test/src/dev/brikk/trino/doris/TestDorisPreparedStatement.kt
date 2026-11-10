@@ -120,6 +120,26 @@ class TestDorisPreparedStatement {
     }
 
     @Test
+    fun testStatementThatFailedBeforeCancelReportsDorisAnswered() {
+        val answeredBeforeCancel = AtomicReference<Boolean>()
+        val delegate = jdbcProxy(PreparedStatement::class.java) { method, _ ->
+            when (method) {
+                "executeQuery" -> throw SQLException("Doris rejected the query")
+                "close" -> null
+                else -> throw AssertionError("unexpected statement call: $method")
+            }
+        }
+        val connection = jdbcProxy(Connection::class.java) { method, _ ->
+            check(method == "abort") { "unexpected connection call: $method" }
+            null
+        }
+        val statement = DorisPreparedStatement(delegate, connection) { answered, _ -> answeredBeforeCancel.set(answered) }
+        assertThatThrownBy { statement.executeQuery() }.isInstanceOf(SQLException::class.java)
+        statement.close()
+        assertThat(answeredBeforeCancel.get()).isTrue()
+    }
+
+    @Test
     fun testDisabledHelperStillAbortsWithoutRawCancelAndCloseIsIdempotent() {
         val aborts = AtomicInteger()
         val rawCancels = AtomicInteger()

@@ -17,6 +17,8 @@ import io.trino.Session
 import io.trino.sql.planner.plan.AggregationNode
 import io.trino.sql.planner.plan.ProjectNode
 import io.trino.sql.planner.plan.TopNNode
+import io.trino.testing.AbstractTestQueryFramework
+import io.trino.testing.QueryRunner
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.TestInstance
@@ -26,8 +28,11 @@ import java.time.format.DateTimeFormatter
 
 // Read elements individually in Doris so the oracle does not reuse the array decoder under test.
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
-class TestDorisArrayMapping : DorisPushdownTest("p2_array", { provisionFixture() }) {
-
+class TestDorisArrayMapping : AbstractTestQueryFramework() {
+    override fun createQueryRunner(): QueryRunner {
+        provisionFixture()
+        return DorisQueryRunner.builder().build()
+    }
 
     @Test
     fun testDescribeShowsNativeArrayTypes() {

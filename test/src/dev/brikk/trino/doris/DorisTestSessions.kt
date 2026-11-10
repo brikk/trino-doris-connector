@@ -15,6 +15,8 @@ package dev.brikk.trino.doris
 
 import io.trino.Session
 
+// Dynamic filters are also rendered as Doris predicates, so a reference that keeps them is not local.
 fun fullyLocalSession(session: Session): Session = Session.builder(session)
     .setSystemProperty("allow_pushdown_into_connectors", "false")
+    .setSystemProperty("enable_dynamic_filtering", "false")
     .build()

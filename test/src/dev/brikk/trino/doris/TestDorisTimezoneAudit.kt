@@ -39,6 +39,12 @@ class TestDorisTimezoneAudit : DorisPushdownTest("p5_tz", { provisionFixture() }
         return runner
     }
 
+    /** Keeps the order of an ORDER BY query; other queries are sorted so they compare as sets. */
+    private fun rowsInQueryOrder(session: Session, sql: String): List<String> {
+        val rows = computeActual(session, sql).materializedRows.map { it.toString() }
+        return if (sql.contains("ORDER BY")) rows else rows.sorted()
+    }
+
     private fun sessionInZone(zoneId: String): Session = Session.builder(session)
         .setTimeZoneKey(TimeZoneKey.getTimeZoneKey(zoneId))
         .build()
@@ -80,11 +86,12 @@ class TestDorisTimezoneAudit : DorisPushdownTest("p5_tz", { provisionFixture() }
     @Test
     fun testJvmDefaultZoneDoesNotLeakIntoBinding() {
         val predicates = listOf("dt = TIMESTAMP '2026-03-08 02:30:00'", "d = DATE '0000-01-01'")
+        val references = predicates.associateWith { rows(fullyLocalSession(session), "SELECT id FROM doris.p5_tz.t WHERE $it") }
         val original = TimeZone.getDefault()
         try {
             for (predicate in predicates) {
                 val sql = "SELECT id FROM doris.p5_tz.t WHERE $predicate"
-                val reference = rows(fullyLocalSession(session), sql)
+                val reference = references.getValue(predicate)
                 assertThat(reference).isNotEmpty()
                 for (zone in listOf("Pacific/Kiritimati", "America/New_York")) {
                     TimeZone.setDefault(TimeZone.getTimeZone(zone))
@@ -123,13 +130,13 @@ class TestDorisTimezoneAudit : DorisPushdownTest("p5_tz", { provisionFixture() }
             "SELECT CAST(min(d) AS varchar), CAST(max(d) AS varchar) FROM doris.p5_tz.t",
         )
         for (sql in paths) {
-            val reference = computeActual(sessionInZone("UTC"), sql).materializedRows.map { it.toString() }.sorted()
+            val reference = rowsInQueryOrder(sessionInZone("UTC"), sql)
             for (zone in listOf("America/New_York", "Asia/Tokyo")) {
-                assertThat(rows(sessionInZone(zone), sql)).describedAs("$sql @ $zone").isEqualTo(reference)
+                assertThat(rowsInQueryOrder(sessionInZone(zone), sql)).describedAs("$sql @ $zone").isEqualTo(reference)
             }
             // non-UTC doris.time-zone leg (Tokyo catalog, same physical data)
             val viaTokyo = sql.replace("doris.p5_tz", "tz_tokyo.p5_tz")
-            assertThat(rows(session, viaTokyo)).describedAs(viaTokyo).isEqualTo(reference)
+            assertThat(rowsInQueryOrder(session, viaTokyo)).describedAs(viaTokyo).isEqualTo(reference)
         }
     }
 

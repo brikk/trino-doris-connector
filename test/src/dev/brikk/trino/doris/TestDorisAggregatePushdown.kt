@@ -152,10 +152,11 @@ class TestDorisAggregatePushdown : DorisPushdownTest("p4_agg", { provisionFixtur
 
     @Test
     fun testAvgBigintAccumulationDivergenceStaysLocal() {
-        // Ordered input exposes Trino's lossy double accumulation; Doris uses an exact wide integer sum.
+        // Trino accumulates in DOUBLE and loses precision on these values; Doris sums exactly.
+        // Trino's result depends on input order, which is the scan order of this one-bucket table.
         val sql = "SELECT avg(v) FROM doris.p4_agg.t_avgb"
         assertThat(query(sql)).isNotFullyPushedDown(AggregationNode::class.java)
-        assertThat(computeActual("SELECT avg(v ORDER BY id) FROM doris.p4_agg.t_avgb").onlyValue).isEqualTo(0.25)
+        assertThat(computeActual(sql).onlyValue).isEqualTo(0.25)
         assertThat(DorisTestCluster.queryScalar("SELECT avg(v) FROM p4_agg.t_avgb")).isEqualTo("0.5")
     }
 

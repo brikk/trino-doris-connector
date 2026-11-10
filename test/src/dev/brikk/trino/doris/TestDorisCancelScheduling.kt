@@ -142,7 +142,7 @@ class TestDorisCancelScheduling {
     }
 
     @Test
-    fun testAnsweredStatementStillRunningIsKilledThenConfirmedGone() {
+    fun testAnsweredStatementFoundRunningIsStillKilled() {
         val executor = DorisClusterScopedCancel.newExecutor()
         val scheduler = DorisClusterScopedCancel.newRetryScheduler()
         val slots = Semaphore(1)

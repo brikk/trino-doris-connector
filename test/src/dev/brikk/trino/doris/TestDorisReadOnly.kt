@@ -13,12 +13,18 @@
  */
 package dev.brikk.trino.doris
 
+import io.trino.testing.AbstractTestQueryFramework
+import io.trino.testing.QueryRunner
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.TestInstance
 
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
-class TestDorisReadOnly : DorisPushdownTest("p1_readonly", { provisionFixture() }) {
+class TestDorisReadOnly : AbstractTestQueryFramework() {
+    override fun createQueryRunner(): QueryRunner {
+        provisionFixture()
+        return DorisQueryRunner.builder().build()
+    }
 
     private fun rowCount(): Long = DorisTestCluster.queryScalar("SELECT COUNT(*) FROM p1_readonly.t")!!.toLong()
 

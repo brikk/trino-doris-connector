@@ -235,6 +235,8 @@ class TestDorisConnectorSmoke : AbstractTestQueryFramework() {
         )
         val row = computeActual("SELECT ${columns.joinToString()} FROM doris.p1_smoke.scalars WHERE id = 3").materializedRows.single()
         columns.forEachIndexed { index, column -> assertThat(row.getField(index)).describedAs(column).isNull() }
+        val allNull = columns.joinToString(" AND ") { "$it IS NULL" }
+        assertThat(query("SELECT count(*) FROM doris.p1_smoke.scalars WHERE id = 3 AND $allNull")).matches("VALUES BIGINT '1'")
     }
 
     @Test

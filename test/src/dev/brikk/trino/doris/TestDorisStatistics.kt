@@ -14,14 +14,20 @@
 package dev.brikk.trino.doris
 
 import io.trino.Session
+import io.trino.testing.AbstractTestQueryFramework
 import io.trino.testing.MaterializedRow
+import io.trino.testing.QueryRunner
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.TestInstance
 import java.util.concurrent.TimeUnit
 
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
-class TestDorisStatistics : DorisPushdownTest("p5_stats", { provisionFixture() }) {
+class TestDorisStatistics : AbstractTestQueryFramework() {
+    override fun createQueryRunner(): QueryRunner {
+        provisionFixture()
+        return DorisQueryRunner.builder().build()
+    }
 
     /** SHOW STATS rows keyed by column name; the summary row keys as "" (null column_name). */
     private fun showStats(table: String, session: Session = getSession()): Map<String, MaterializedRow> =
