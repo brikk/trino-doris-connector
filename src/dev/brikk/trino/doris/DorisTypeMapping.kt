@@ -398,7 +398,7 @@ internal class DorisTypeMapping(typeManager: TypeManager) {
 
         private fun readOnlyArrayWriteFunction(): ObjectWriteFunction =
             ObjectWriteFunction.of(Block::class.java) { _, _, _ ->
-                throw TrinoException(NOT_SUPPORTED, "The Doris connector is read-only and does not allow any mutating operation")
+                throw TrinoException(NOT_SUPPORTED, ReadOnlyDorisClient.READ_ONLY_MESSAGE)
             }
 
         /** For diagnostics only: type decisions use the COLUMN_TYPE in `jdbcTypeName`. */
@@ -434,13 +434,6 @@ internal class DorisTypeMapping(typeManager: TypeManager) {
                 Optional.empty(),
                 Optional.empty(),
             )
-        }
-
-        /** True when a Doris DECIMAL is exposed as VARCHAR because it exceeds Trino's precision ceiling. */
-        internal fun isDecimal256(columnType: String): Boolean {
-            val parsed = DorisColumnType.parse(columnType)
-            return (parsed.baseName == "decimal" || parsed.baseName == "decimalv3") &&
-                parsed.arguments.firstOrNull()?.let { it > MAX_PRECISION } == true
         }
     }
 }

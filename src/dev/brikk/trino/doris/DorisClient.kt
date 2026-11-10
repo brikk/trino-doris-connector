@@ -52,14 +52,6 @@ import io.trino.spi.connector.TableNotFoundException
 import io.trino.spi.statistics.TableStatistics
 import io.trino.spi.expression.ConnectorExpression
 import io.trino.spi.type.Type
-import io.trino.spi.type.BigintType
-import io.trino.spi.type.BooleanType
-import io.trino.spi.type.DateType
-import io.trino.spi.type.DecimalType
-import io.trino.spi.type.IntegerType
-import io.trino.spi.type.SmallintType
-import io.trino.spi.type.TimestampType
-import io.trino.spi.type.TinyintType
 import io.trino.spi.type.TypeManager
 import io.trino.spi.type.VarcharType
 import java.sql.Connection
@@ -196,15 +188,8 @@ class DorisClient @Inject constructor(
      * Infinity, so the engines would compare different values.
      */
     override fun isSupportedJoinCondition(session: ConnectorSession, joinCondition: JdbcJoinCondition): Boolean =
-        isJoinKeyTypeSupported(joinCondition.leftColumn.columnType) &&
-            isJoinKeyTypeSupported(joinCondition.rightColumn.columnType)
-
-    private fun isJoinKeyTypeSupported(type: Type): Boolean = when (type) {
-        is TinyintType, is SmallintType, is IntegerType, is BigintType,
-        is DecimalType, is DateType, is TimestampType, is BooleanType,
-        -> true
-        else -> false
-    }
+        DorisAggregatePushdown.isExactPushableKeyType(joinCondition.leftColumn.columnType) &&
+            DorisAggregatePushdown.isExactPushableKeyType(joinCondition.rightColumn.columnType)
 
     @Suppress("TooGenericExceptionCaught") // statistics are advisory: any failure degrades to unknown estimates
     override fun getTableStatistics(session: ConnectorSession, handle: JdbcTableHandle): TableStatistics {
@@ -351,7 +336,7 @@ class DorisClient @Inject constructor(
     override fun isLimitGuaranteed(session: ConnectorSession): Boolean = true
 
     override fun supportsTopN(session: ConnectorSession, handle: JdbcTableHandle, sortOrder: List<JdbcSortItem>): Boolean =
-        sortOrder.all { !isDecimal256(it.column()) && isPushableTopNKey(session, it.column()) }
+        sortOrder.all { isPushableTopNKey(session, it.column()) }
 
     /**
      * Sort keys must order identically on both engines. Doris orders strings by UTF-8 bytes, which
@@ -425,9 +410,7 @@ class DorisClient @Inject constructor(
         val unsupportedKey = groupingSets.flatten()
             .map { it as JdbcColumnHandle }
             .firstOrNull {
-                isDecimal256(it) ||
-                    (!DorisAggregatePushdown.isExactPushableKeyType(it.columnType) &&
-                        !DorisColumnType.isNativeString(it))
+                !DorisAggregatePushdown.isExactPushableKeyType(it.columnType) && !DorisColumnType.isNativeString(it)
             }
         if (unsupportedKey != null) {
             log.debug(
@@ -439,11 +422,6 @@ class DorisClient @Inject constructor(
         }
         return true
     }
-
-    private fun isDecimal256(column: JdbcColumnHandle): Boolean =
-        column.jdbcTypeHandle.jdbcTypeName()
-            .map(DorisTypeMapping::isDecimal256)
-            .orElse(false)
 
     companion object {
         private val log = Logger.get(DorisClient::class.java)
