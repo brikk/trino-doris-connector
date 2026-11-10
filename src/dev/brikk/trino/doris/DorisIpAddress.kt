@@ -28,7 +28,6 @@ import java.sql.PreparedStatement
 internal object DorisIpAddress {
     private const val BYTES = 16
 
-    /** Canonical Doris IPV4/IPV6 text -> Trino IPADDRESS slice; unparseable text fails loud. */
     fun parse(text: String): Slice {
         val address = try {
             InetAddresses.forString(text)
@@ -52,11 +51,9 @@ internal object DorisIpAddress {
     }
 
     /**
-     * Renders a Trino IPADDRESS (16-byte big-endian slice) into the TARGET Doris dialect:
-     * IPV4 -> dotted-quad of the last 4 bytes (caller guarantees v4-mapped via
-     * [DorisPushdownControllers.IPV4_PUSHDOWN] / the array-rule guard); IPV6 -> fully-expanded
-     * 8-group lowercase colon-hex (built from bytes, never via Guava, which collapses mapped
-     * addresses to a dotted form IPV6 rejects).
+     * Doris IPV4 and IPV6 reject each other's text forms, so the literal follows the column type.
+     * IPV6 is built from the bytes because Guava prints IPv4-mapped addresses in dotted form,
+     * which Doris IPV6 rejects.
      */
     fun renderLiteral(slice: Slice, isV4: Boolean): String {
         val bytes = slice.getBytes()
@@ -73,7 +70,7 @@ internal object DorisIpAddress {
         }
     }
 
-    /** Binds an IPADDRESS parameter as its target-dialect text ([renderLiteral]); Doris coerces. */
+    /** Binds the address as text, which Doris converts to the column's IP type. */
     fun writeFunction(isV4: Boolean): SliceWriteFunction =
         SliceWriteFunction { statement: PreparedStatement, index: Int, value: Slice ->
             statement.setString(index, renderLiteral(value, isV4))
