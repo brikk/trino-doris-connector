@@ -57,7 +57,7 @@ class TestDorisSelectionAndApproximateAggregates : DorisPushdownTest("b2_agg", {
         assertThat(query(decomposed)).isNotFullyPushedDown(ProjectNode::class.java)
         assertThat(remoteSql(decomposed)).contains("sum(`dec18`)").contains("count(`dec18`)")
         assertThat(rows(session, decomposed)).isEqualTo(rows(fullyLocalSession(session), decomposed))
-        assertThat(computeActual(decomposed).onlyValue).isEqualTo(computeActual(fullyLocalSession(session), avg).onlyValue)
+        assertThat(computeActual(local, "SELECT sum(dec18) / count(dec18) = avg(dec18) FROM doris.b2_agg.t").onlyValue).isEqualTo(true)
     }
 
 
