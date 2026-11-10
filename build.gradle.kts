@@ -10,7 +10,7 @@ plugins {
 
 // The release workflow passes -Pversion=<trino>-<semver>, derived from the release branch name.
 // A plain assignment here would overwrite that property, so only fall back to the dev default.
-version = (findProperty("version") as? String)?.takeIf { it != "unspecified" } ?: "484-0.5.0-SNAPSHOT"
+version = (findProperty("version") as? String)?.takeIf { it != "unspecified" } ?: "484-0.6.0-SNAPSHOT"
 
 // Version labels are also directory/archive names. Reject unsafe spellings before
 // configuring any task output, not just in the GitHub publication step.
