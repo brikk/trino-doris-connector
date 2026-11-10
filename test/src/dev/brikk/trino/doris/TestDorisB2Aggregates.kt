@@ -15,12 +15,12 @@ package dev.brikk.trino.doris
 
 import io.trino.Session
 import io.trino.sql.planner.plan.AggregationNode
+import io.trino.sql.planner.plan.ProjectNode
 import io.trino.testing.AbstractTestQueryFramework
 import io.trino.testing.QueryRunner
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.TestInstance
-import java.math.BigDecimal
 
 /**
  * READ-ONLY-MAX batch 2: aggregate pushdown expansion. Engine-path findings and Doris truth
@@ -93,15 +93,11 @@ class TestDorisB2Aggregates : AbstractTestQueryFramework() {
         assertThat(query(avg)).isNotFullyPushedDown(AggregationNode::class.java)
         assertThat(rows(session, avg)).isEqualTo(rows(noAggPushdown, avg))
 
-        // ...but the MANUAL decomposition pushes fully and is EXACT: sum(DECIMAL(18,2)) and
-        // count both push; Trino performs the division. The case that made raw avg diverge
-        // (scale-truncating decimal division) is exact on this path.
-        val decomposed = "SELECT sum(dec18), count(dec18) FROM doris.b2_agg.t"
-        assertPushedAndIdentical(decomposed)
+        val decomposed = "SELECT sum(dec18) / count(dec18) FROM doris.b2_agg.t"
+        assertThat(query(decomposed)).isNotFullyPushedDown(ProjectNode::class.java)
         assertThat(remoteSql(decomposed)).contains("sum(`dec18`)").contains("count(`dec18`)")
-        val row = computeActual(decomposed).materializedRows.single()
-        val exact = (row.getField(0) as BigDecimal).divide(BigDecimal(row.getField(1) as Long), 2, java.math.RoundingMode.HALF_UP)
-        assertThat(exact).isEqualTo(computeActual(avg).onlyValue) // division in Trino == Trino's avg
+        assertThat(rows(session, decomposed)).isEqualTo(rows(fullyLocalSession(session), decomposed))
+        assertThat(computeActual(decomposed).onlyValue).isEqualTo(computeActual(fullyLocalSession(session), avg).onlyValue)
     }
 
     // --- item 3: min_by / max_by / any_value ---
