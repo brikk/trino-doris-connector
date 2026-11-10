@@ -24,32 +24,7 @@ import java.sql.Connection
 import java.util.Properties
 import java.util.concurrent.TimeUnit
 
-/**
- * Multi-FE FAILOVER evidence, guarded to the OPTIONAL 3-FE overlay
- * (`compose/multi-fe`, project `trino-doris-mfe`, host MySQL ports 9131/9132/9133).
- *
- * This test is SEPARATE from the default single-FE probe cluster (port 9130) that CI
- * and every other live suite use. It requires explicit mutation AND failover opt-in,
- * verified Compose ownership/disposable labels and matching native cluster identity.
- * Without the failover opt-in it is skipped without probing ports; an explicitly
- * requested but unsafe/unavailable overlay fails loud. With an authorized overlay:
- *
- *   1. the connector connects + queries through a MULTI-HOST comma-list URL
- *      (`jdbc:mysql://h:9131,h:9132,h:9133/`) — the production-shaped failover URL; and
- *   2. NEW-connection failover: after a NON-MASTER follower FE is stopped via docker,
- *      fresh connections via the multi-host URL (both raw Connector/J and through the
- *      connector) still succeed on the surviving FEs. The stopped follower is always
- *      restarted in [restartStoppedFollower] (@AfterEach), so the overlay is left intact.
- *
- * The DESTRUCTIVE master-kill / re-election-timing evidence is deliberately NOT automated
- * here (it is slow — ~60s BDBJE re-election on a hard crash — and perturbs the shared
- * overlay); it lives as a scripted, reproducible procedure with recorded output in
- * dev-docs/archive/REPORT-multi-fe-failover.md.
- *
- * Topology-specific SQL stays here; shared [DorisTestSafety] authorizes every connection
- * and lifecycle action. The public [DorisQueryRunner.dynamicCatalogBuilder] also provisions
- * the authorized single-FE base fixtures before catalogs point at the overlay.
- */
+// Requires the separately authorized three-FE overlay and restores any follower it stops.
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 @org.junit.jupiter.api.TestMethodOrder(org.junit.jupiter.api.MethodOrderer.OrderAnnotation::class)
 @EnabledIf("dev.brikk.trino.doris.TestDorisMultiFeFailover#overlayIsUp")
@@ -130,9 +105,7 @@ class TestDorisMultiFeFailover : AbstractTestQueryFramework() {
         val pool = java.util.concurrent.Executors.newSingleThreadExecutor()
         val victim = pool.submit<String> {
             runCatching {
-                // Use cancellable scan work, not sleep(): Doris can accept the forwarded
-                // KILL during scheduling yet leave a sleeping BE expression running for
-                // its full duration (confirmed on 4.1.4.1; the 4.1.3 pin also timed out).
+                // A sleeping BE expression can outlive an accepted KILL; use cancellable scan work instead.
                 DorisTestSafety.connectOverlay("jdbc:mysql://$HOST:9132/", victimProps()).use {
                     it.createStatement().execute(
                         "SELECT count(*) FROM mfe_cancel.big a CROSS JOIN mfe_cancel.big b " +

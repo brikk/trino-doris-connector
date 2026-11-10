@@ -16,19 +16,11 @@ package dev.brikk.trino.doris
 import io.trino.Session
 import io.trino.sql.planner.plan.FilterNode
 import io.trino.sql.planner.plan.TopNNode
-import io.trino.testing.AbstractTestQueryFramework
-import io.trino.testing.QueryRunner
 import org.assertj.core.api.Assertions.assertThat
 import org.assertj.core.api.Assertions.assertThatThrownBy
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.TestInstance
 
-/**
- * Configurable string pushdown modes (`doris.string-pushdown.mode` / `string_pushdown_mode`)
- * over the adversarial fixture from `dev-docs/archive/REPORT-string-comparison-probe-4.1.3.md`. Both engines'
- * semantics are PINNED here; each mode is differential-tested against NULL_ONLY (the local
- * ground truth) and the direct Doris oracle, with plan-shape and audit-log assertions.
- */
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 class TestDorisStringPushdownModes : DorisPushdownTest("p4_strings", { provisionFixture() }) {
 
@@ -39,7 +31,6 @@ class TestDorisStringPushdownModes : DorisPushdownTest("p4_strings", { provision
     private fun ids(session: Session, predicate: String): List<Any?> =
         computeActual(session, "SELECT id FROM doris.p4_strings.t WHERE $predicate ORDER BY id").onlyColumn.toList()
 
-    // --- semantics pins (the safety arguments live here) ---
 
     @Test
     fun testDefaultModeIsGuarded() {
@@ -72,7 +63,6 @@ class TestDorisStringPushdownModes : DorisPushdownTest("p4_strings", { provision
             .containsExactly("1", "9")
     }
 
-    // --- GUARDED (the default): evidence-tiered — proven shapes push fully, hazards skip ---
 
     @Test
     fun testGuardedIsResultIdenticalToTrinoOverTheHazardMatrix() {
@@ -147,7 +137,6 @@ class TestDorisStringPushdownModes : DorisPushdownTest("p4_strings", { provision
         assertThat(remoteSql(guarded, charSql)).doesNotContain("`c` =")
     }
 
-    // --- BINARY / FULL: full pushdown (verified byte semantics / caller-asserted) ---
 
     @Test
     fun testBinaryAndFullFullyPushSafeShapes() {
@@ -170,9 +159,7 @@ class TestDorisStringPushdownModes : DorisPushdownTest("p4_strings", { provision
     fun testFullModeDocumentedDivergences() {
         // Caller-asserted territory: probe-flagged divergences surface (or don't) in FULL.
         val full = modeSession(DorisStringPushdownMode.FULL)
-        // NUL literal: byte-exact on reproduction — matches [9] like local truth. (One probe
-        // run observed wrong-empty under host memory pressure; GUARDED keeps its skip as
-        // defense-in-depth, but FULL correctness holds. See probe report.)
+        // A NUL-bearing literal once returned a wrong empty result, so it must never be pushed.
         assertThat(ids(full, "v = U&'a\\0000b'")).isEqualTo(listOf(9))
         // CHAR trailing-space data: local truth {1,3,9}; byte compare misses stored 'a '.
         // This is THE documented FULL divergence.
@@ -191,7 +178,6 @@ class TestDorisStringPushdownModes : DorisPushdownTest("p4_strings", { provision
         assertThat(remoteSql(nullOnly, sql)).doesNotContain("`v` =")
     }
 
-    // --- string TopN (BINARY/FULL only; byte order == Trino codepoint order) ---
 
     @Test
     fun testStringTopNEligibilityPerMode() {
@@ -213,7 +199,6 @@ class TestDorisStringPushdownModes : DorisPushdownTest("p4_strings", { provision
             .ordered().isNotFullyPushedDown(TopNNode::class.java)
     }
 
-    // --- LIKE (BINARY/FULL only; backslash-doubling / ESCAPE passthrough per probe) ---
 
     @Test
     fun testLikePushdownPerMode() {
@@ -246,7 +231,6 @@ class TestDorisStringPushdownModes : DorisPushdownTest("p4_strings", { provision
         assertThat(ids(guarded, "v LIKE 'a%'")).isEqualTo(ids(fullyLocalSession(guarded), "v LIKE 'a%'"))
     }
 
-    // --- helpers ---
 
     @Test
     fun testNonAsciiLikeEscapesStayLocalInEveryMode() {

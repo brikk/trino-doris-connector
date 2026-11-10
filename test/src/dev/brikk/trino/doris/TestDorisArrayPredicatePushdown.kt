@@ -13,24 +13,14 @@
  */
 package dev.brikk.trino.doris
 
-import io.trino.Session
 import io.trino.sql.planner.plan.FilterNode
-import io.trino.testing.AbstractTestQueryFramework
-import io.trino.testing.QueryRunner
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.TestInstance
 
-/**
- * P2b typed ARRAY predicate pushdown: differential (pushdown vs no-pushdown vs Doris oracle),
- * NULL-semantics truth-table PINS for both engines (the exact live-proven tables the rules'
- * safety arguments rest on — a Trino or Doris upgrade that shifts any cell fails loud here),
- * plan-shape assertions, and audit-log proof of the generated remote SQL.
- */
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 class TestDorisArrayPredicatePushdown : DorisPushdownTest("p2b_pushdown", { provisionFixture() }) {
 
-    // --- truth-table pins: the safety arguments live and die by these exact cells ---
 
     @Test
     fun testTrinoContainsTruthTablePin() {
@@ -121,7 +111,6 @@ class TestDorisArrayPredicatePushdown : DorisPushdownTest("p2b_pushdown", { prov
         assertThat(doris).isEqualTo("2|0|2|0|NULL")
     }
 
-    // --- differential: pushdown == no-pushdown == oracle, including the NULL-tricky rows ---
 
     @Test
     fun testContainsPushdownDifferential() {
@@ -185,7 +174,6 @@ class TestDorisArrayPredicatePushdown : DorisPushdownTest("p2b_pushdown", { prov
         // empty / all-NULL literals never qualify a row; kept local (still correct)
         assertLocalAndEquivalent("arrays_overlap(a_int, ARRAY[NULL])")
         assertLocalAndEquivalent("arrays_overlap(a_int, CAST(ARRAY[] AS array(integer)))")
-        // approximate element family stays local (spike §7.5)
         assertLocalAndEquivalent("arrays_overlap(a_double, ARRAY[DOUBLE '2.5'])")
         // element-type mismatch (bigint literal array vs int column) stays local
         assertLocalAndEquivalent("arrays_overlap(a_int, ARRAY[BIGINT '1'])")
@@ -201,11 +189,9 @@ class TestDorisArrayPredicatePushdown : DorisPushdownTest("p2b_pushdown", { prov
         assertPushedAndEquivalent("1 <= array_position(a_int, 2)") // flipped orientation
     }
 
-    // --- negatives: unsupported shapes stay local (and remain CORRECT) ---
 
     @Test
     fun testUnsupportedShapesStayLocalAndCorrect() {
-        // approximate element family: excluded from pushdown (spike §7.5)
         assertLocalAndEquivalent("contains(a_double, DOUBLE '2.5')")
         // non-literal needle
         assertLocalAndEquivalent("contains(a_int, id)")
@@ -233,7 +219,6 @@ class TestDorisArrayPredicatePushdown : DorisPushdownTest("p2b_pushdown", { prov
         ).isEqualTo(listOf(1, 3, 5, 6)) // rows 3 and 6 over-returned by the remote form
     }
 
-    // --- remote SQL shape via the FE audit log ---
 
     @Test
     fun testRemoteSqlShapes() {
@@ -259,7 +244,6 @@ class TestDorisArrayPredicatePushdown : DorisPushdownTest("p2b_pushdown", { prov
         )
     }
 
-    // --- helpers ---
 
     private fun assertPushedAndEquivalent(predicate: String) {
         assertPushedAndIdentical("SELECT id FROM doris.p2b_pushdown.t WHERE $predicate")

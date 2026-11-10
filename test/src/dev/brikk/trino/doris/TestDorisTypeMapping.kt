@@ -46,7 +46,6 @@ import java.lang.Float.floatToRawIntBits
 import java.lang.reflect.Proxy
 import java.sql.ResultSet
 
-/** Unit tests for the COLUMN_TYPE parser and the ledger §A scalar type contract. No cluster needed. */
 class TestDorisTypeMapping {
     private val mapping = DorisTypeMapping(TESTING_TYPE_MANAGER)
 
@@ -60,7 +59,6 @@ class TestDorisTypeMapping {
         return builder.build()
     }
 
-    // --- COLUMN_TYPE parsing ---
 
     @Test
     fun testParse() {
@@ -86,7 +84,6 @@ class TestDorisTypeMapping {
             .hasMessageContaining("Malformed")
     }
 
-    // --- ledger §A type contract ---
 
     @Test
     fun testScalarMappings() {
@@ -161,21 +158,19 @@ class TestDorisTypeMapping {
         assertMappedTo("array<datetime>", ArrayType(createTimestampType(0)))
         assertThat(mapping.toColumnMapping(session, "array<ipv4>").orElseThrow().type.toString()).isEqualTo("array(ipaddress)")
         assertThat(mapping.toColumnMapping(session, "array<ipv6>").orElseThrow().type.toString()).isEqualTo("array(ipaddress)")
-        // nesting of allowlisted leaves (>=3 levels proven, spike F2)
         assertMappedTo("array<array<int(11)>>", ArrayType(ArrayType(INTEGER)))
         assertMappedTo("array<array<array<largeint>>>", ArrayType(ArrayType(ArrayType(createDecimalType(38, 0)))))
     }
 
     @Test
     fun testUnsupportedTypesAreHidden() {
-        // String-family ARRAY leaves are a hard NO-GO (unescaped wire text is provably
-        // ambiguous, spike F4); MAP/STRUCT deferred; opaque engine states hidden (ledger §A).
+        // String-family array leaves have ambiguous wire text; engine states have no value mapping.
         for (columnType in listOf(
             "array<varchar(50)>",
             "array<char(10)>",
             "array<string>",
             "array<decimalv3(76, 10)>",
-            "array<array<varchar(50)>>", // denied leaf inherits the denial (spike §7.3)
+            "array<array<varchar(50)>>",
             "map<string,int(11)>",
             "struct<int(11),string>",
             "bitmap",
@@ -212,7 +207,6 @@ class TestDorisTypeMapping {
             .hasMessageContaining("max proven is 6")
     }
 
-    // --- LARGEINT fail-loud parsing (ledger §A LARGEINT rule) ---
 
     @Test
     fun testParseLargeintBounds() {

@@ -31,19 +31,12 @@ import java.util.concurrent.Semaphore
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 
-/**
- * Cluster-scoped cancel: pure-function pins, bookkeeping/failure-tolerance units, and the
- * live single-FE probe pins (trace-id behavior on 4.1.3, KILL-by-QueryId, unknown-query-id
- * classification). The cross-FE forwarding proof lives in `TestDorisMultiFeFailover`
- * (overlay-guarded); the end-to-end connector path in `TestDorisCancellation`.
- */
 class TestDorisClusterScopedCancel {
     private val resources = DorisCancelTestResources()
 
     @AfterEach
     fun closeResources() = resources.close()
 
-    // --- pure functions ---
 
     @Test
     fun testQueryIdValidation() {
@@ -118,7 +111,6 @@ class TestDorisClusterScopedCancel {
         assertThat(DorisClusterScopedCancel.isUnknownQueryId(null)).isFalse()
     }
 
-    // --- bookkeeping + failure tolerance ---
 
     @Test
     fun testHelperFailureNeverPropagatesAndEachCallDispatches() {
@@ -211,7 +203,6 @@ class TestDorisClusterScopedCancel {
         assertThat(sql).containsExactlyElementsOf(expectedSql)
     }
 
-    // --- live probe pins (single-FE cluster) ---
 
     @Test
     @Suppress("LongMethod", "CyclomaticComplexMethod", "NestedBlockDepth") // One live probe, including failure-path cleanup.
@@ -315,11 +306,7 @@ class TestDorisClusterScopedCancel {
 
     @Test
     fun testTraceIdKillBehaviorPin() {
-        // The reference implementation's production scar: KILL QUERY "<trace-id>" is a SILENT
-        // NO-OP on Doris 4.1.2. On 4.1.3 our probe found it WORKING (single- and cross-FE) —
-        // i.e. the behavior is VERSION-UNSTABLE, which is exactly why the connector kills by
-        // the processlist QueryId instead (works on both). This pin documents the 4.1.3 state;
-        // if it starts FAILING here, the no-op regressed and this comment gains a version note.
+        // Trace-id cancellation is version-dependent; the connector uses processlist QueryIds instead.
         val pool = Executors.newSingleThreadExecutor()
         val victim = pool.submit<String> {
             runCatching {
@@ -340,7 +327,6 @@ class TestDorisClusterScopedCancel {
                                 .any { it.contains("csc_trace_pin") }
                         }
                     }
-                    // returns OK on 4.1.3 (and actually kills; on 4.1.2 it silently did NOT)
                     statement.execute("""KILL QUERY "cscpin_trace"""")
                     val outcome = victim.get(30, TimeUnit.SECONDS)
                     assertThat(outcome).contains("cancel query by user")

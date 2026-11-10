@@ -13,26 +13,15 @@
  */
 package dev.brikk.trino.doris
 
-import io.trino.Session
 import io.trino.sql.planner.plan.FilterNode
-import io.trino.testing.AbstractTestQueryFramework
-import io.trino.testing.QueryRunner
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.TestInstance
 
-/**
- * P3 boolean composition over the VALUE-SAFE tier: NOT/AND/OR compose `array_position`
- * comparisons (value-identical operands, P2b proof) and NOTHING else — `contains` /
- * `arrays_overlap` are predicate-level only and must never compose (their counterfactual
- * over-return is proven in TestDorisP2bPushdown). The 3VL pins here are the second half of
- * the composition-safety proof: identical operand values + identical connective truth tables
- * => identical composite values.
- */
+// Includes direct Doris truth tables that the connector's Boolean rewrites rely on.
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 class TestDorisBooleanComposition : DorisPushdownTest("p3_composition", { provisionFixture() }) {
 
-    // --- 3VL pins (both engines) ---
 
     @Test
     fun testTrinoThreeValuedLogicPin() {
@@ -61,7 +50,6 @@ class TestDorisBooleanComposition : DorisPushdownTest("p3_composition", { provis
         assertThat(cells).isEqualTo("N|N|0|1|N|N")
     }
 
-    // --- pushed compositions (differential incl. NULL-array rows) ---
 
     @Test
     fun testOrOfArrayPositionComparisonsPushes() {
@@ -95,7 +83,6 @@ class TestDorisBooleanComposition : DorisPushdownTest("p3_composition", { provis
         assertThat(scan).contains("((array_position(`a_int`, 1) = 1) OR (array_position(`a_int`, 9) = 1))")
     }
 
-    // --- predicate-level rules must NOT compose ---
 
     @Test
     fun testContainsAndOverlapNeverCompose() {
@@ -109,7 +96,6 @@ class TestDorisBooleanComposition : DorisPushdownTest("p3_composition", { provis
         assertThat(query("SELECT id FROM doris.p3_composition.t WHERE contains(a_int, 1)")).isFullyPushedDown()
     }
 
-    // --- helpers ---
 
     private fun assertPushedAndEquivalent(predicate: String) {
         assertPushedAndIdentical("SELECT id FROM doris.p3_composition.t WHERE $predicate")

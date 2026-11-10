@@ -45,8 +45,7 @@ class TestDorisJdbcConfig {
 
     @Test
     fun testUrlWithDatabaseRejected() {
-        // Catalog-as-schema (Doris db -> Trino schema) requires connecting without a default
-        // database (ledger §B; SR K3).
+        // Doris databases map to Trino schemas, so the connection must not choose a default database.
         val config = DorisJdbcConfig().also { it.setConnectionUrl("jdbc:mysql://doris-fe:9030/somedb") }
         assertThat(config.isUrlWithoutDatabase()).isFalse()
     }

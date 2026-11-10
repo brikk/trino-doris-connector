@@ -13,28 +13,14 @@
  */
 package dev.brikk.trino.doris
 
-import io.trino.Session
 import io.trino.sql.planner.plan.FilterNode
-import io.trino.testing.AbstractTestQueryFramework
-import io.trino.testing.QueryRunner
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.TestInstance
 
-/**
- * IPADDRESS pushdown (unlocks IP `=`/IN/range domains, `contains`, `arrays_overlap`, and TopN).
- *
- * The safety argument (probe: `dev-docs/archive/REPORT-ip-pushdown-probe-4.1.3.md`): Trino IPADDRESS is a single
- * 16-byte (IPv4-mapped) type, Doris has DISTINCT IPV4/IPV6 types. Byte ORDER is identical on
- * both engines (unsigned big-endian 16 bytes), so domains and TopN are exact once rendered in
- * the target dialect — IPV4 as dotted-quad (pushed only for v4-mapped values), IPV6 as
- * fully-expanded colon-hex. `array_contains` and `=` coerce a string needle to the column type;
- * `arrays_overlap` does NOT, so the constant-array form casts each element explicitly.
- */
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 class TestDorisIpPushdown : DorisPushdownTest("ip_pushdown", { provisionFixture() }) {
 
-    // --- domain pushdown: =, IN, range, IS NULL ---
 
     @Test
     fun testIpV4DomainPushdown() {
@@ -64,7 +50,6 @@ class TestDorisIpPushdown : DorisPushdownTest("ip_pushdown", { provisionFixture(
         assertLocalAndEquivalent("v4 IN (IPADDRESS '10.0.0.5', IPADDRESS '2001:db8::1')")
     }
 
-    // --- contains ---
 
     @Test
     fun testIpContainsPushdown() {
@@ -76,7 +61,6 @@ class TestDorisIpPushdown : DorisPushdownTest("ip_pushdown", { provisionFixture(
         assertLocalAndEquivalent("contains(a4, IPADDRESS '2001:db8::1')")
     }
 
-    // --- arrays_overlap: column×column and column×constant ---
 
     @Test
     fun testIpArraysOverlapPushdown() {
@@ -88,7 +72,6 @@ class TestDorisIpPushdown : DorisPushdownTest("ip_pushdown", { provisionFixture(
         assertLocalAndEquivalent("arrays_overlap(a4, ARRAY[CAST(NULL AS IPADDRESS)])")
     }
 
-    // --- TopN ---
 
     @Test
     fun testIpTopNPushesAndOrdersByteExact() {
@@ -101,7 +84,6 @@ class TestDorisIpPushdown : DorisPushdownTest("ip_pushdown", { provisionFixture(
         }
     }
 
-    // --- remote SQL shapes ---
 
     @Test
     fun testRemoteSqlShapes() {
@@ -123,7 +105,6 @@ class TestDorisIpPushdown : DorisPushdownTest("ip_pushdown", { provisionFixture(
         )
     }
 
-    // --- helpers ---
 
     private fun assertPushedAndEquivalent(predicate: String) {
         assertPushedAndIdentical("SELECT id FROM doris.ip_pushdown.t WHERE $predicate")

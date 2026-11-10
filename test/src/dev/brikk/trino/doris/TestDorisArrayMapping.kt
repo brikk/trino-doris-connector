@@ -17,8 +17,6 @@ import io.trino.Session
 import io.trino.sql.planner.plan.AggregationNode
 import io.trino.sql.planner.plan.ProjectNode
 import io.trino.sql.planner.plan.TopNNode
-import io.trino.testing.AbstractTestQueryFramework
-import io.trino.testing.QueryRunner
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.TestInstance
@@ -26,19 +24,10 @@ import java.math.BigDecimal
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
 
-/**
- * P2a live differential suite: for every allowlisted ARRAY element type, the Trino SELECT of
- * the array column is compared element-by-element against the Doris oracle
- * (`array_size(col)` / `CAST(element_at(col, k) AS STRING)` over direct JDBC — the spike's
- * oracle pattern; the decoder's own parse is never treated as truth).
- *
- * Fixtures live in the test-owned `p2_array` database (recreated per run); `p0_array_spike`
- * is never touched.
- */
+// Read elements individually in Doris so the oracle does not reuse the array decoder under test.
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 class TestDorisArrayMapping : DorisPushdownTest("p2_array", { provisionFixture() }) {
 
-    // --- type surface ---
 
     @Test
     fun testDescribeShowsNativeArrayTypes() {
@@ -86,7 +75,6 @@ class TestDorisArrayMapping : DorisPushdownTest("p2_array", { provisionFixture()
         )
     }
 
-    // --- differential vs the Doris oracle, per allowlisted element type ---
 
     @Test
     fun testNumericArraysMatchOracle() {
@@ -134,7 +122,6 @@ class TestDorisArrayMapping : DorisPushdownTest("p2_array", { provisionFixture()
         assertArrayColumnMatchesOracle("ip", "a_ipv6", ::compareExactText)
     }
 
-    // --- nesting (>=3 levels) and boundary rows ---
 
     @Test
     fun testNestedArrays() {
@@ -171,14 +158,12 @@ class TestDorisArrayMapping : DorisPushdownTest("p2_array", { provisionFixture()
     @Test
     fun testLargeintElementBeyondDecimal38FailsLoud() {
         // The ±(2^127−1) LARGEINT extremes exceed DECIMAL(38,0): the query FAILS, never clamps
-        // (ledger §A LARGEINT rule; spike §7.4).
         assertQueryFails(
             "SELECT a_largeint FROM doris.p2_array.large_extreme",
             ".*LARGEINT value out of DECIMAL\\(38, 0\\) range.*",
         )
     }
 
-    // --- string-family arrays: NOT native (spike F4 ambiguity) ---
 
     @Test
     fun testStringArraysAreNotExposedNatively() {
@@ -187,7 +172,7 @@ class TestDorisArrayMapping : DorisPushdownTest("p2_array", { provisionFixture()
             computeActual("DESCRIBE doris.p2_array.strs").materializedRows.map { it.getField(0) },
         ).containsExactly("id")
 
-        // The crafted ambiguity pair (spike §4): one element `a", "b` vs two elements `a`,`b`
+        // One element containing `a", "b` has the same wire rendering as two elements `a`,`b`.
         // produce BYTE-IDENTICAL wire text. A native decode would have to silently guess; the
         // connector refuses instead. Under CONVERT_TO_VARCHAR the column is plain TEXT of the
         // whole array — both rows return the identical rendering, and no element-count claim
@@ -300,7 +285,6 @@ class TestDorisArrayMapping : DorisPushdownTest("p2_array", { provisionFixture()
         .setCatalogSessionProperty(DorisQueryRunner.CATALOG, "string_pushdown_mode", mode.name)
         .build()
 
-    // --- differential machinery ---
 
     private fun assertArrayColumnMatchesOracle(table: String, column: String, compare: (Any?, String?) -> Unit) {
         val trinoRows = computeActual("SELECT id, $column FROM doris.p2_array.$table ORDER BY id").materializedRows
@@ -432,7 +416,7 @@ class TestDorisArrayMapping : DorisPushdownTest("p2_array", { provisionFixture()
                 CREATE TABLE p2_array.strs (id INT NOT NULL, a_vc ARRAY<VARCHAR(50)>)
                 DUPLICATE KEY(id) DISTRIBUTED BY HASH(id) BUCKETS 1 PROPERTIES ("replication_num" = "1")
                 """.trimIndent(),
-                // spike §4 ambiguity pair: one element `a", "b` vs two elements `a`,`b`
+                // One quoted element and two separate elements have the same wire rendering.
                 """INSERT INTO p2_array.strs VALUES (1, ARRAY('a", "b')), (2, ARRAY('a', 'b'))""",
                 """
                 CREATE TABLE p2_array.text_ordering (id INT NOT NULL, a_vc ARRAY<VARCHAR(50)>, v VARCHAR(50), s STRING)

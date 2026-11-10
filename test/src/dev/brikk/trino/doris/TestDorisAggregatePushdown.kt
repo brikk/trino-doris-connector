@@ -16,21 +16,11 @@ package dev.brikk.trino.doris
 import io.trino.Session
 import io.trino.sql.planner.plan.AggregationNode
 import io.trino.sql.planner.plan.ProjectNode
-import io.trino.testing.AbstractTestQueryFramework
-import io.trino.testing.QueryRunner
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.TestInstance
 import java.math.BigDecimal
 
-/**
- * Verified aggregate pushdown (PLAN §6.5, P4): per-family differentials (pushdown on vs
- * `aggregation_pushdown_enabled=false` vs direct-Doris oracle), plan-shape assertions
- * (isFullyPushedDown for enabled families, retained [AggregationNode] for denied ones),
- * audit-log remote-SQL shapes, and the fail-loud overflow/avg divergence pins that justify
- * every exclusion. Doris-side gating facts are pinned in [TestDorisP4AggregateProbes];
- * narrative in `dev-docs/archive/NOTES-p4-aggregates.md`.
- */
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 class TestDorisAggregatePushdown : DorisPushdownTest("p4_agg", { provisionFixture() }) {
 
@@ -78,10 +68,7 @@ class TestDorisAggregatePushdown : DorisPushdownTest("p4_agg", { provisionFixtur
         assertThat(computeActual(pushedSql).onlyValue)
             .isEqualTo(DorisTestCluster.queryScalar("SELECT count(DISTINCT c_int) FROM p4_agg.t")!!.toLong())
 
-        // RO-MAX batch 3: text count-distinct now pushes VIA THE ENGINE'S DECOMPOSITION —
-        // count(DISTINCT c_vc) lowers to count(c_vc) over GROUP BY c_vc, and varchar
-        // grouping keys are pushable (byte-exact equality) -> one remote statement.
-        // Distinctness stays Trino-exact: byte-distinct values remain distinct.
+        // Trino decomposes text count-distinct into count over byte-exact VARCHAR grouping.
         val textDistinct = "SELECT count(DISTINCT c_vc) FROM doris.p4_agg.t"
         assertThat(query(textDistinct)).isFullyPushedDown()
         assertSameAsLocal(textDistinct)
@@ -212,9 +199,6 @@ class TestDorisAggregatePushdown : DorisPushdownTest("p4_agg", { provisionFixtur
 
     @Test
     fun testGroupingKeyGateTextPushesDoubleStaysLocal() {
-        // RO-MAX batch 3 widened the grouping-key gate to VARCHAR (grouping is
-        // EQUALITY-only; string equality is byte-exact per the P4 probe): unicode text
-        // keys now PUSH and group as distinct byte sequences on both engines.
         val textKey = "SELECT g_vc, count(*) FROM doris.p4_agg.t GROUP BY g_vc"
         assertThat(query(textKey)).isFullyPushedDown()
         assertSameAsLocal(textKey)
@@ -288,6 +272,7 @@ class TestDorisAggregatePushdown : DorisPushdownTest("p4_agg", { provisionFixtur
         }
 
         private fun provisionMainTable() {
+            // The engine-semantics tests own other tables in this schema.
             DorisTestCluster.executeAsRoot(
                 "CREATE DATABASE IF NOT EXISTS p4_agg",
                 "DROP TABLE IF EXISTS p4_agg.t",

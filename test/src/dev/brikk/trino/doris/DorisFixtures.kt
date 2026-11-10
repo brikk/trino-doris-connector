@@ -16,36 +16,7 @@ package dev.brikk.trino.doris
 import io.airlift.log.Logger
 import java.util.concurrent.atomic.AtomicBoolean
 
-/**
- * Self-provisioning base fixtures: the `p0_probe` database every live suite assumes exists.
- *
- * Historically `p0_probe` was created MANUALLY by the P0 probe harness on the dev cluster and
- * never by test code — the first CI run (bare runner, fresh cluster) failed en masse because
- * of it. This bootstrapper replicates the original fixtures EXACTLY (proven by two-way
- * `EXCEPT` diffs of every table against the original dev-cluster data before it was ever
- * wiped — see dev-docs/archive/NOTES-ci-fixture-bootstrap.md):
- *
- * - `scalars` (8 rows incl. the duplicate id=6 rows): LARGEINT extremes, DOUBLE_MAX rows
- *   (the wire renders them as Infinity — the ledger's getString READ rule), one real
- *   Infinity/NaN row, -0.0 rows, DECIMAL(76,10) 65-nines extremes (needs
- *   `enable_decimal256`), zero-dates `0000-01-01`, empty-vs-NULL strings, JSON null,
- *   unicode/escape adversaries, IPv4/IPv6 extremes, VARIANT shapes.
- * - `arrays` (4 rows): every element family incl. NULL elements, nested arrays, wire-format
- *   adversaries (embedded quotes/commas/brackets in string elements).
- * - `mapstruct` (4 rows), `opaque` (2 rows: BITMAP/HLL/AGG_STATE — needs
- *   `enable_agg_state`), `scalars_view`, and `nums` (0..1000999, 1_001_000 distinct rows,
- *   seeded in ~250ms via the `numbers()` TVF).
- *
- * Idempotent: a fast row-count fingerprint check skips provisioning when the fixtures are
- * already present and complete (dev-cluster runs); any mismatch (fresh CI cluster, partial
- * state from a crashed run) drops and rebuilds the database. Session-variable statements
- * (`enable_decimal256`, `enable_agg_state`) share one connection with the DDL by
- * [DorisTestCluster.executeAsRoot]'s contract.
- *
- * Wired as the first step of [DorisQueryRunner.Builder.build] (every live suite constructs a
- * runner) AND callable directly by suites whose OWN provisioning reads `p0_probe` before the
- * runner exists (cancellation/inverted-index/TopN build derived tables from `nums`).
- */
+// Rebuilds incomplete base fixtures; session settings and dependent DDL must share one connection.
 object DorisFixtures {
     private val log = Logger.get(DorisFixtures::class.java)
     private val provisioned = AtomicBoolean(false)

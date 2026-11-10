@@ -13,7 +13,6 @@
  */
 package dev.brikk.trino.doris
 
-import io.trino.Session
 import io.trino.sql.planner.plan.FilterNode
 import io.trino.testing.AbstractTestQueryFramework
 import io.trino.testing.QueryRunner

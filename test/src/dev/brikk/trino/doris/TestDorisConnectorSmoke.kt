@@ -23,13 +23,6 @@ import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.TestInstance
 
-/**
- * P1a smoke suite against the live stock Doris 4.1.3 compose cluster (port 9130).
- *
- * Reads the pre-existing `p0_probe` fixtures (NEVER mutated) and provisions its own
- * `p1_smoke` database for controlled round-trip rows. Type expectations are the
- * ledger §A contract, verbatim.
- */
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 class TestDorisConnectorSmoke : AbstractTestQueryFramework() {
     override fun createQueryRunner(): QueryRunner {
@@ -37,14 +30,12 @@ class TestDorisConnectorSmoke : AbstractTestQueryFramework() {
         return DorisQueryRunner.builder().build()
     }
 
-    // --- metadata: schemas / tables / types ---
 
     @Test
     fun testShowSchemasShowsProbeDatabasesAndHidesSystemSchemas() {
         val schemas = computeActual("SHOW SCHEMAS FROM doris").onlyColumnAsSet
         assertThat(schemas).contains("p0_probe", "p1_smoke")
-        // G9: Doris system schemas are hidden. (Trino synthesizes its own information_schema
-        // per catalog, so that name is legitimately present at the Trino level.)
+        // Trino synthesizes information_schema, so only the native system schemas are hidden.
         assertThat(schemas).doesNotContain("mysql", "__internal_schema")
     }
 
@@ -60,7 +51,7 @@ class TestDorisConnectorSmoke : AbstractTestQueryFramework() {
             .associate { it.getField(0) as String to it.getField(1) as String }
         val expected = mapOf(
             "id" to "integer",
-            // COLUMN_TYPE tinyint(1) == Doris BOOLEAN; tinyint(4) == real TINYINT (PROBE Impl #7)
+            // Doris reports BOOLEAN as tinyint(1), distinct from native TINYINT's tinyint(4).
             "c_boolean" to "boolean",
             "c_tinyint" to "tinyint",
             "c_smallint" to "smallint",
@@ -90,9 +81,7 @@ class TestDorisConnectorSmoke : AbstractTestQueryFramework() {
 
     @Test
     fun testUnsupportedColumnsAreHiddenNotErroring() {
-        // arrays (P2a): allowlisted element types are native; string-family leaves are hidden
-        // (unescaped wire text is provably ambiguous — spike F4). mapstruct: MAP/STRUCT
-        // deferred; opaque: BITMAP/HLL/AGG_STATE are opaque engine states (ledger §A).
+        // String-family array leaves have ambiguous wire text; opaque engine states have no readable value mapping.
         assertThat(describedColumnNames("doris.p0_probe.arrays")).isEqualTo(
             setOf<Any>(
                 "id", "a_int", "a_bigint", "a_largeint", "a_float", "a_double",
@@ -107,9 +96,6 @@ class TestDorisConnectorSmoke : AbstractTestQueryFramework() {
 
     @Test
     fun testConvertToVarcharExposesComplexWireTextButNeverOpaqueStates() {
-        // unsupported-type-handling=CONVERT_TO_VARCHAR is honored exactly where the ledger
-        // permits VARCHAR-of-wire-text (denied-leaf ARRAY, MAP/STRUCT); allowlisted arrays
-        // stay NATIVE; opaque engine states stay hidden.
         val session: Session = Session.builder(getSession())
             .setCatalogSessionProperty(DorisQueryRunner.CATALOG, "unsupported_type_handling", "CONVERT_TO_VARCHAR")
             .build()
@@ -121,7 +107,6 @@ class TestDorisConnectorSmoke : AbstractTestQueryFramework() {
         assertThat(computeActual(session, "SELECT a_varchar50 FROM doris.p0_probe.arrays WHERE id = 1").onlyValue)
             .isEqualTo("""["a", "b", "c"]""")
         assertThat(computeActual(session, "SELECT m_si FROM doris.p0_probe.mapstruct WHERE id = 1").rowCount).isEqualTo(1)
-        // BITMAP/HLL/AGG_STATE remain hidden under every policy (ledger §A; PROBE Impl #9).
         assertThat(computeActual(session, "DESCRIBE doris.p0_probe.opaque").materializedRows.map { it.getField(0) })
             .containsExactly("id")
     }
@@ -131,7 +116,6 @@ class TestDorisConnectorSmoke : AbstractTestQueryFramework() {
         assertThat(query("SELECT count(*) FROM doris.p0_probe.scalars_view")).matches("VALUES BIGINT '8'")
     }
 
-    // --- scalar value round-trips (p1_smoke controlled fixture) ---
 
     @Test
     fun testIntegerAndBooleanRoundTrip() {
@@ -149,8 +133,7 @@ class TestDorisConnectorSmoke : AbstractTestQueryFramework() {
 
     @Test
     fun testLargeintOutOfDecimal38RangeFailsLoud() {
-        // p0_probe.scalars rows 1-3 hold the LARGEINT extremes +/-(2^127-1) — 39 digits, outside
-        // DECIMAL(38,0). Reading them must FAIL, never clamp (ledger §A LARGEINT rule).
+        // Native LARGEINT extremes have 39 digits and cannot fit Trino's DECIMAL(38,0).
         assertQueryFails(
             "SELECT c_largeint FROM doris.p0_probe.scalars WHERE id = 1",
             ".*LARGEINT value out of DECIMAL\\(38, 0\\) range.*",
@@ -165,7 +148,6 @@ class TestDorisConnectorSmoke : AbstractTestQueryFramework() {
 
     @Test
     fun testDecimal256ReadsExactTextAsVarchar() {
-        // Decimal256 wire text is exact; the VARCHAR mapping preserves it verbatim (PROBE Impl #3).
         assertThat(query("SELECT c_dec76_10 FROM doris.p0_probe.scalars WHERE id = 1"))
                 .matches("VALUES VARCHAR '123456789012345678901234567890.1234567890'")
     }
@@ -212,10 +194,7 @@ class TestDorisConnectorSmoke : AbstractTestQueryFramework() {
 
     @Test
     fun testDoubleInfinityRowsReadInsteadOfPoisoningTheScan() {
-        // Stock behavior: getDouble/getObject THROW on the Infinity wire value and one poisoned
-        // row kills the scan (PROBE Impl #6; STOCK). The getString read surfaces them faithfully.
-        // Note rows 2/3 hold Doris-rendered DOUBLE max (16 significant digits), which reparses to
-        // +/-Infinity — the documented wire-boundary caveat (ARRAY F3 scalar twin).
+        // Doris renders finite DOUBLE extrema with too few digits; the wire text reparses as Infinity.
         assertThat(query("SELECT id, c_double FROM doris.p0_probe.scalars WHERE id IN (2, 3)"))
                 .matches("VALUES (2, -infinity()), (3, infinity())")
         assertThat(query("SELECT count(*) FROM doris.p0_probe.scalars WHERE id = 6 AND c_double = infinity()"))
@@ -224,8 +203,7 @@ class TestDorisConnectorSmoke : AbstractTestQueryFramework() {
 
     @Test
     fun testDateEdgesIncludingYearZero() {
-        // getDate/getObject throw SQLException YEAR on 0000-01-01; the getString read is exact
-        // (PROBE Impl #6; ledger §A row date).
+        // JDBC getDate rejects year zero; text transport preserves it.
         assertThat(query("SELECT id, c_date FROM doris.p0_probe.scalars WHERE id IN (2, 3)"))
                 .matches("VALUES (2, DATE '0000-01-01'), (3, DATE '9999-12-31')")
     }
@@ -245,7 +223,6 @@ class TestDorisConnectorSmoke : AbstractTestQueryFramework() {
     fun testCharVarcharStringRoundTripIncludingUnicodeAndEmptyString() {
         assertThat(query("SELECT c_char10, c_varchar100, c_string FROM doris.p1_smoke.scalars WHERE id = 1"))
                 .matches("VALUES (CAST('abc' AS char(10)), CAST('héllo 中文 🦆' AS varchar(100)), VARCHAR 'a plain string')")
-        // Empty string is distinct from NULL (PROBE §3).
         assertThat(query("SELECT count(*) FROM doris.p1_smoke.scalars WHERE id = 2 AND c_varchar100 = '' AND c_varchar100 IS NOT NULL"))
                 .matches("VALUES BIGINT '1'")
     }
@@ -283,12 +260,9 @@ class TestDorisConnectorSmoke : AbstractTestQueryFramework() {
             )
     }
 
-    // --- pushdown posture (P1a: exact numeric/date/boolean domains only; strings NULL-only) ---
 
     @Test
     fun testNumericDatePredicatesAreFullyPushedDown() {
-        // P1b hook: additionally assert the verbatim remote SQL via the FE audit log
-        // (fe.audit.log Stmt= is the proven observability substrate, ledger §E).
         assertThat(query("SELECT id FROM doris.p1_smoke.scalars WHERE c_int > 0")).isFullyPushedDown()
         assertThat(query("SELECT n FROM doris.p0_probe.nums WHERE n > 1000995")).isFullyPushedDown()
         assertThat(query("SELECT id FROM doris.p1_smoke.scalars WHERE c_date > DATE '2020-01-01'")).isFullyPushedDown()
@@ -300,9 +274,6 @@ class TestDorisConnectorSmoke : AbstractTestQueryFramework() {
 
     @Test
     fun testStringPredicateContractUnderDefaultGuardedMode() {
-        // G5 RESOLVED by the byte-exactness probe -> evidence-tiered GUARDED default
-        // (dev-docs/archive/REPORT-string-comparison-probe-4.1.3.md; P6 tiering): proven-exact shapes push
-        // FULLY, genuine supersets keep the Trino filter, hazards stay entirely local.
         // Fully pushed: varchar/string equality + ranges (and null-ness, exact as always).
         assertThat(query("SELECT id FROM doris.p1_smoke.scalars WHERE c_varchar100 = 'héllo 中文 🦆'"))
             .isFullyPushedDown()
@@ -329,7 +300,6 @@ class TestDorisConnectorSmoke : AbstractTestQueryFramework() {
 
     @Test
     fun testLimitIsPushedDown() {
-        // LIMIT pushdown is an inherited stock baseline proven against Doris 4.1.3 (STOCK; ledger §E).
         assertThat(computeActual("SELECT n FROM doris.p0_probe.nums LIMIT 5").rowCount).isEqualTo(5)
         assertThat(query("SELECT n FROM doris.p0_probe.nums LIMIT 5"))
             .skipResultsCorrectnessCheckForPushdown()
@@ -341,10 +311,6 @@ class TestDorisConnectorSmoke : AbstractTestQueryFramework() {
     }
 
     companion object {
-        /**
-         * Provisions the `p1_smoke` fixture database directly over JDBC. `p0_probe` /
-         * `p0_array_spike` are never mutated. Recreated from scratch on every run.
-         */
         private fun provisionP1SmokeFixture() {
             DorisQueryRunner.openDirectConnection().use { connection ->
                 connection.createStatement().use { statement ->

@@ -82,7 +82,7 @@ class TestDorisFloatSpecialValues : AbstractTestQueryFramework() {
                         }
                         if (id in 10..11) {
                             // Both ordinary FLOAT text and widened DOUBLE now preserve the
-                            // stored extremum; 4.1.3's ordinary wire text lost low bits.
+                            // stored extremum; ordinary wire text can lose low bits.
                             val stored = if (id == 10) Float.MAX_VALUE else -Float.MAX_VALUE
                             assertThat(floatToIntBits(result.getDouble(3).toFloat())).isEqualTo(floatToIntBits(stored))
                             assertThat(floatToIntBits(value!!)).isEqualTo(floatToIntBits(stored))

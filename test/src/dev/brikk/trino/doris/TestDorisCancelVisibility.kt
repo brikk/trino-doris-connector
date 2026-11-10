@@ -31,6 +31,7 @@ import java.util.concurrent.Semaphore
 import java.util.concurrent.TimeUnit.SECONDS
 import java.util.concurrent.atomic.AtomicBoolean
 
+// Includes a live pin of Doris processlist visibility, independent of the connector.
 class TestDorisCancelVisibility {
     private val resources = DorisCancelTestResources()
 

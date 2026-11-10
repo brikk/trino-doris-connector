@@ -15,25 +15,12 @@ package dev.brikk.trino.doris
 
 import io.trino.Session
 import io.trino.spi.type.TimeZoneKey
-import io.trino.testing.AbstractTestQueryFramework
 import io.trino.testing.QueryRunner
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.TestInstance
 import java.util.TimeZone
 
-/**
- * Timezone audit (TODO-timezones items 1-3 + item 6, test-only): Doris DATETIME/DATE are ZONELESS and
- * map to zoneless Trino types, so every zone knob must be a NO-OP for pushed queries —
- * {Trino session zone} x {doris.time-zone} x {JVM default zone} must never change results
- * or the pushed literal bytes. DST-adversarial wall-clock values (nonexistent and ambiguous
- * local times in America/New_York) and the 0000-01-01/9999-12-31 date edges are exactly
- * where driver-side zone conversion bugs bite first — pinned here.
- *
- * `doris.time-zone` variation runs through EXTRA CATALOGS on the same cluster (tz_tokyo /
- * tz_ny differ from `doris` only in that property) — the canary asserts one representative
- * query per pushed family is result-identical across all three.
- */
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 class TestDorisTimezoneAudit : DorisPushdownTest("p5_tz", { provisionFixture() }) {
     override fun createQueryRunner(): QueryRunner {
@@ -56,7 +43,6 @@ class TestDorisTimezoneAudit : DorisPushdownTest("p5_tz", { provisionFixture() }
         .setTimeZoneKey(TimeZoneKey.getTimeZoneKey(zoneId))
         .build()
 
-    // --- item 1: parameter-binding zone matrix ---
 
     @Test
     fun testPushedTemporalLiteralsAreZoneIndependent() {
@@ -111,7 +97,6 @@ class TestDorisTimezoneAudit : DorisPushdownTest("p5_tz", { provisionFixture() }
         }
     }
 
-    // --- item 2: session-zone variation over the key datetime paths ---
 
     @Test
     fun testDatetimePathsAreSessionZoneInvariant() {
@@ -148,7 +133,6 @@ class TestDorisTimezoneAudit : DorisPushdownTest("p5_tz", { provisionFixture() }
         }
     }
 
-    // --- item 3: doris.time-zone canary, one representative per pushed family ---
 
     @Test
     fun testDorisTimeZoneCanaryAcrossEveryPushedFamily() {

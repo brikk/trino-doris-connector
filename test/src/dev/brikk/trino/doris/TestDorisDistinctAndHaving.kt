@@ -14,24 +14,16 @@
 package dev.brikk.trino.doris
 
 import io.trino.Session
-import io.trino.testing.AbstractTestQueryFramework
-import io.trino.testing.QueryRunner
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.TestInstance
 
-/**
- * READ-ONLY-MAX batch 3: DISTINCT pushdown (incl. the VARCHAR grouping-key widening),
- * HAVING verification, and domain-compaction behavior. Probe findings in
- * `dev-docs/archive/NOTES-readonly-max-batch3.md`.
- */
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 class TestDorisDistinctAndHaving : DorisPushdownTest("b3_dist", { provisionFixture() }) {
 
     private val noAggPushdown: Session
         get() = fullyLocalSession(session)
 
-    // --- item 1: DISTINCT ---
 
     @Test
     fun testDistinctPushesAsRemoteGroupBy() {
@@ -52,9 +44,6 @@ class TestDorisDistinctAndHaving : DorisPushdownTest("b3_dist", { provisionFixtu
 
     @Test
     fun testStringDistinctAndGroupByNowPush() {
-        // batch-3 widening: grouping is EQUALITY-only and string equality is byte-exact
-        // (P4 probe) -> VARCHAR keys push. The unicode adversaries (ß vs ss, ü vs U,
-        // NFC vs NFD) group as DISTINCT byte sequences on BOTH engines — differential-pinned.
         assertPushedAndIdentical("SELECT DISTINCT v FROM doris.b3_dist.t")
         assertThat(remoteSql("SELECT DISTINCT v FROM doris.b3_dist.t")).contains("GROUP BY `v`")
         assertPushedAndIdentical("SELECT v, count(*) FROM doris.b3_dist.t GROUP BY v")
@@ -69,7 +58,6 @@ class TestDorisDistinctAndHaving : DorisPushdownTest("b3_dist", { provisionFixtu
         assertThat(rows(session, charKey)).isEqualTo(rows(noAggPushdown, charKey))
     }
 
-    // --- item 2: HAVING (verified, not built) ---
 
     @Test
     fun testHavingPushesAsOuterWhereOverTheAggregatedSubquery() {
@@ -83,7 +71,6 @@ class TestDorisDistinctAndHaving : DorisPushdownTest("b3_dist", { provisionFixtu
             .contains("count(*) AS `_pfgnrtd_").contains("GROUP BY `n`").containsPattern("WHERE `_pfgnrtd_\\d+` > 100")
     }
 
-    // --- item 3: domain compaction ---
 
     @Test
     fun testDomainCompactionBehavior() {

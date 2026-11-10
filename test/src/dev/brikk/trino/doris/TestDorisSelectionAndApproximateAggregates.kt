@@ -16,35 +16,20 @@ package dev.brikk.trino.doris
 import io.trino.Session
 import io.trino.sql.planner.plan.AggregationNode
 import io.trino.sql.planner.plan.ProjectNode
-import io.trino.testing.AbstractTestQueryFramework
-import io.trino.testing.QueryRunner
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.TestInstance
 
-/**
- * READ-ONLY-MAX batch 2: aggregate pushdown expansion. Engine-path findings and Doris truth
- * tables in `dev-docs/archive/NOTES-readonly-max-batch2.md`. Differentials: pushed vs
- * `aggregation_pushdown_enabled=false` vs the direct Doris oracle.
- */
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 class TestDorisSelectionAndApproximateAggregates : DorisPushdownTest("b2_agg", { provisionFixture() }) {
 
     private val noAggPushdown: Session
         get() = fullyLocalSession(session)
 
-    // --- item 1: conditional aggregation — ENGINE-DENIED at 483, pinned precisely ---
 
     @Test
     fun testConditionalAggregationIsEngineDenied() {
-        // FILTER (and count_if, which desugars to it) becomes an aggregation MASK during
-        // planning (ImplementFilteredAggregations); PushAggregationIntoTableScan bails when
-        // any aggregation carries a mask (483 source, line 110: `allMatch(aggregation ->
-        // aggregation.getMask().isEmpty())`) — so applyAggregation is NEVER invoked for
-        // these shapes (verified via rejection-log silence). sum(CASE WHEN ...) hits the
-        // batch-1 wall instead: CASE has no ConnectorExpression form, so the aggregate's
-        // ARGUMENT is untranslatable. Both walls are the ENGINE's, pinned here so a future
-        // Trino that lifts either shows up as a plan change.
+        // Trino does not offer masked aggregates or CASE arguments to the connector.
         for (sql in listOf(
             "SELECT count_if(a_nn > 0) FROM doris.b2_agg.t",
             "SELECT count(*) FILTER (WHERE a_nn > 0) FROM doris.b2_agg.t",
@@ -60,15 +45,10 @@ class TestDorisSelectionAndApproximateAggregates : DorisPushdownTest("b2_agg", {
         }
     }
 
-    // --- item 2: avg — deny sharpened; the manual decomposition is the pushable path ---
 
     @Test
     fun testAvgStaysWholeAndManualDecompositionPushes() {
-        // The engine offers avg WHOLE to the connector (probed: implementAggregation
-        // received avg(decimal) and rejected it) and has NO sum+count decomposition rule at
-        // 483; the SPI maps one AggregateFunction to ONE remote expression, so a
-        // connector-side split is structurally impossible. The deny therefore stands —
-        // Doris avg truncates decimal scale and double-accumulates differently (P4 pins).
+        // Trino offers AVG as one aggregate; manual sum/count leaves division in Trino.
         val avg = "SELECT avg(dec18) FROM doris.b2_agg.t"
         assertThat(query(avg)).isNotFullyPushedDown(AggregationNode::class.java)
         assertThat(rows(session, avg)).isEqualTo(rows(noAggPushdown, avg))
@@ -80,7 +60,6 @@ class TestDorisSelectionAndApproximateAggregates : DorisPushdownTest("b2_agg", {
         assertThat(computeActual(decomposed).onlyValue).isEqualTo(computeActual(fullyLocalSession(session), avg).onlyValue)
     }
 
-    // --- item 3: min_by / max_by / any_value ---
 
     @Test
     fun testMinByMaxByPushForNonNullableValues() {
@@ -128,7 +107,6 @@ class TestDorisSelectionAndApproximateAggregates : DorisPushdownTest("b2_agg", {
         assertThat(computeActual("SELECT any_value(a_n) FROM doris.b2_agg.t WHERE g = 4").onlyValue).isNull()
     }
 
-    // --- item 4: approx_distinct — opt-in only ---
 
     @Test
     fun testApproxDistinctIsOptIn() {
@@ -146,7 +124,6 @@ class TestDorisSelectionAndApproximateAggregates : DorisPushdownTest("b2_agg", {
             .isEqualTo(0L) // empty input -> 0 on both engines (probed)
     }
 
-    // --- composition with batch-1 projections + pushed WHERE ---
 
     @Test
     fun testCompositionWithProjectedGroupingAndPushedWhere() {

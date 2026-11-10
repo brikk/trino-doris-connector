@@ -14,21 +14,12 @@
 package dev.brikk.trino.doris
 
 import io.trino.Session
-import io.trino.testing.AbstractTestQueryFramework
 import io.trino.testing.MaterializedRow
-import io.trino.testing.QueryRunner
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.TestInstance
 import java.util.concurrent.TimeUnit
 
-/**
- * P5 remote statistics: probe pins for what Doris 4.1.3 exposes (pre/post ANALYZE, formats,
- * permissions) + live `getTableStatistics` behavior through `SHOW STATS FOR` / EXPLAIN.
- * Probe findings table: `dev-docs/archive/NOTES-p5-statistics.md`. Test setup runs ANALYZE via ROOT
- * (never the connector — statistics writes are the user's domain) so results are
- * deterministic on a fresh cluster regardless of auto-analyze timing.
- */
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 class TestDorisStatistics : DorisPushdownTest("p5_stats", { provisionFixture() }) {
 
@@ -37,7 +28,6 @@ class TestDorisStatistics : DorisPushdownTest("p5_stats", { provisionFixture() }
         computeActual(session, "SHOW STATS FOR $table").materializedRows
             .associateBy { (it.getField(0) as String?) ?: "" }
 
-    // --- probe pins: the raw Doris statistics surface (root JDBC, no connector) ---
 
     @Test
     fun testProbePinStatsSurfacePrePostAnalyze() {
@@ -100,7 +90,6 @@ class TestDorisStatistics : DorisPushdownTest("p5_stats", { provisionFixture() }
         }
     }
 
-    // --- getTableStatistics through the engine ---
 
     @Test
     fun testRowCountReachesTheOptimizer() {

@@ -14,25 +14,16 @@
 package dev.brikk.trino.doris
 
 import io.trino.Session
-import io.trino.testing.AbstractTestQueryFramework
-import io.trino.testing.QueryRunner
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.TestInstance
 
-/**
- * P6 date-of-datetime projection pushdown + GROUP BY composition (the user's motivating
- * query: `GROUP BY date(event_at)` on a huge table -> ONE remote statement). Probe verdicts
- * in `dev-docs/archive/NOTES-p6-date-projection.md`. Differentials compare pushed results against the
- * unpushed plan (`complex_expression_pushdown = false` disables convertProjection wiring).
- */
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 class TestDorisDateProjectionPushdown : DorisPushdownTest("p6_dates", { provisionFixture() }) {
 
     private val local: io.trino.Session
         get() = fullyLocalSession(session)
 
-    // --- projection-only pushdown, all three user spellings ---
 
     @Test
     fun testDateProjectionPushesInAllThreeSpellings() {
@@ -87,12 +78,10 @@ class TestDorisDateProjectionPushdown : DorisPushdownTest("p6_dates", { provisio
             .containsPattern("date_trunc\\(`dt_6_\\d+`, 'day'\\)")
     }
 
-    // --- the motivating composition: GROUP BY date(...) + aggregates, ONE remote statement ---
 
     @Test
     fun testGroupByDateOfDatetimeFullyPushes() {
-        // count/min compose (sum(BIGINT) is deliberately NOT pushable — P4 wrap divergence —
-        // and would split the aggregation into partial/final instead)
+        // BIGINT sum can wrap in Doris, so use count/min to exercise a fully pushed composition.
         for (spelling in listOf("date(dt6)", "CAST(dt6 AS DATE)", "date_trunc('day', dt6)")) {
             val sql = "SELECT $spelling AS d, count(*), min(v) FROM doris.p6_dates.t GROUP BY 1"
             assertPushedAndIdentical(sql)
@@ -113,7 +102,6 @@ class TestDorisDateProjectionPushdown : DorisPushdownTest("p6_dates", { provisio
             .contains("`v` > 0").contains("LIMIT 10")
     }
 
-    // --- date_trunc unit matrix ---
 
     @Test
     fun testDateTruncUnitMatrixDifferentials() {
@@ -143,7 +131,6 @@ class TestDorisDateProjectionPushdown : DorisPushdownTest("p6_dates", { provisio
             .isNotFullyPushedDown(io.trino.sql.planner.plan.ProjectNode::class.java)
     }
 
-    // --- edges ---
 
     @Test
     fun testEdgeDates() {
@@ -158,7 +145,6 @@ class TestDorisDateProjectionPushdown : DorisPushdownTest("p6_dates", { provisio
         assertThat(trinoWeek.toString()).doesNotStartWith("0000-01-01")
     }
 
-    // --- predicate position: comes free from the ENGINE, not from these rules ---
 
     @Test
     fun testPredicatePositionIsAlreadyCoveredByDomainUnwrapping() {

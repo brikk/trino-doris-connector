@@ -19,11 +19,6 @@ import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.TestInstance
 
-/**
- * FE audit-log proof of the pushed remote SQL (ledger §E: `fe.audit.log` `Stmt=` shows the
- * remote statement verbatim). [DorisRemoteQueryModifier] appends the Trino query id comment to
- * every remote statement, making the audit lookup deterministic per Trino query (PLAN §8).
- */
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 class TestDorisRemoteSql : AbstractTestQueryFramework() {
     override fun createQueryRunner(): QueryRunner = DorisQueryRunner.builder().build()
@@ -47,9 +42,6 @@ class TestDorisRemoteSql : AbstractTestQueryFramework() {
 
     @Test
     fun testStringEqualityWireShapePerPushdownMode() {
-        // G5 at the wire, mode-resolved (dev-docs/archive/REPORT-string-comparison-probe-4.1.3.md): under the
-        // GUARDED default admitted string equality is fully pushed; a genuine LIKE-prefix
-        // superset retains its local filter. Under NULL_ONLY the value equality stays local.
         val sql = "SELECT id FROM doris.p0_probe.scalars WHERE c_string = 'a normal string'"
 
         val guarded = getDistributedQueryRunner().executeWithPlan(session, sql)

@@ -1,3 +1,16 @@
+/*
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
 package dev.brikk.trino.doris
 
 import io.trino.spi.Plugin
@@ -5,13 +18,7 @@ import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.Test
 import java.util.ServiceLoader
 
-/**
- * A real Trino server discovers plugins from the plugin directory through [ServiceLoader];
- * the programmatic `installPlugin(...)` used by the live suites bypasses that path entirely,
- * so a missing `META-INF/services/io.trino.spi.Plugin` registration is invisible to every
- * other test (this exact gap shipped unnoticed until 2026-07-19). This test pins the
- * classpath registration; `verifyPluginAssembly` pins the same entry inside the built jar.
- */
+// Live suites install the plugin programmatically and cannot catch missing ServiceLoader registration.
 class TestDorisPluginRegistration {
     @Test
     fun `DorisPlugin is discoverable via ServiceLoader`() {

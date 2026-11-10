@@ -15,17 +15,10 @@ package dev.brikk.trino.doris
 
 import io.trino.Session
 import io.trino.sql.planner.plan.TopNNode
-import io.trino.testing.AbstractTestQueryFramework
-import io.trino.testing.QueryRunner
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.TestInstance
 
-/**
- * Safe TopN (PLAN §6.5, P3): all four Trino NULL orderings rendered as Doris-native
- * `NULLS FIRST/LAST` (live-probed supported on 4.1.3), non-text exact sort keys only,
- * always WITH the LIMIT. Differentials run against `topn_pushdown_enabled=false`.
- */
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 class TestDorisTopNPushdown : DorisPushdownTest("p3_topn", { provisionFixture() }) {
 
@@ -73,8 +66,7 @@ class TestDorisTopNPushdown : DorisPushdownTest("p3_topn", { provisionFixture() 
 
     @Test
     fun testTextAndApproximateSortKeysStayLocal() {
-        // CHAR/VARCHAR: G5 collation unproven; DOUBLE/REAL: NaN placement unproven — the
-        // TopN must remain in Trino, and results must still be correct.
+        // Text ordering and floating-point NaN placement are not admitted for remote TopN.
         for (column in listOf("c_vc", "c_double")) {
             val sql = "SELECT id FROM doris.p3_topn.t ORDER BY $column ASC NULLS LAST, id LIMIT 3"
             assertThat(query(sql)).ordered().isNotFullyPushedDown(TopNNode::class.java)

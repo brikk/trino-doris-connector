@@ -18,14 +18,6 @@ import org.junit.jupiter.api.BeforeAll
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.TestInstance
 
-/**
- * Live pins of the Doris 4.1.3 aggregate semantics that GATE every P4 family decision
- * (PLAN §6.5 "Verify NULL, overflow, DECIMAL scale, and approximate-function behavior before
- * each rule"; full narrative in `dev-docs/archive/NOTES-p4-aggregates.md`). Direct FE connection, no
- * Trino: these facts are properties of Doris itself. If Doris ever fixes/changes any of them
- * (e.g. starts ERRORING on sum overflow), a pin goes red and the family verdict must be
- * re-derived — never silently.
- */
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 class TestDorisEngineAggregateSemantics {
     @BeforeAll
@@ -167,14 +159,7 @@ class TestDorisEngineAggregateSemantics {
         assertThat(average).isNotNull().startsWith("-") // true value is +(10^38 - 1)
     }
 
-    /**
-     * avg(BIGINT) in Doris computes an EXACT wide integer sum before dividing: MAX+1 (a sum
-     * that wraps `sum(BIGINT)` itself) averages to the true mean, and {2^53, 1, -2^53, 1}
-     * averages to exactly 0.5. Trino 483 avg(bigint) accumulates in DOUBLE
-     * (`BigintAverageAggregations`: order-dependent, a 1 added while 2^53 sits in the
-     * accumulator is LOST). Divergent accumulation semantics -> avg(bigint) never pushed
-     * (Trino-side texture in TestDorisP4Aggregates.testAvgBigintAccumulationDivergenceStaysLocal).
-     */
+    // Doris uses a wide integer sum for AVG; Trino loses low bits during double accumulation.
     @Test
     fun pinAvgBigintIsExactWhereTrinoAccumulatesInDouble() {
         assertThat(DorisTestCluster.queryScalar("SELECT avg(c_big) FROM p4_agg.probe_pin"))

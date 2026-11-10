@@ -15,18 +15,10 @@ package dev.brikk.trino.doris
 
 import io.trino.Session
 import io.trino.sql.planner.plan.FilterNode
-import io.trino.testing.AbstractTestQueryFramework
-import io.trino.testing.QueryRunner
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.TestInstance
 
-/**
- * P5 batch: `json_extract_scalar` equality -> `json_unquote(json_extract(...))`,
- * `cardinality` comparisons -> `array_size(...)` (value-safe tier), and the GUARDED-mode
- * LIKE-prefix range pre-filter (engine-derived domain + retained filter). Truth tables for
- * both engines are PINNED here; probe verdicts in `dev-docs/archive/NOTES-p5-batch.md`.
- */
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 class TestDorisJsonAndCardinalityPushdown : DorisPushdownTest("p5_batch", { provisionFixture() }) {
 
@@ -39,7 +31,6 @@ class TestDorisJsonAndCardinalityPushdown : DorisPushdownTest("p5_batch", { prov
     private fun jsonIdsLocal(predicate: String): List<Any?> =
         computeActual(fullyLocalSession(session), "SELECT id FROM doris.p5_batch.j WHERE $predicate ORDER BY id").onlyColumn.toList()
 
-    // --- json_extract_scalar equality ---
 
     @Test
     fun testJsonEqualityIsPushedWithExactRemoteShape() {
@@ -184,7 +175,6 @@ class TestDorisJsonAndCardinalityPushdown : DorisPushdownTest("p5_batch", { prov
         }
     }
 
-    // --- cardinality comparisons ---
 
     @Test
     fun testCardinalityComparisonsArePushed() {
@@ -240,7 +230,7 @@ class TestDorisJsonAndCardinalityPushdown : DorisPushdownTest("p5_batch", { prov
             assertThat(arrIds(predicate)).describedAs(predicate).isEqualTo(expected)
         }
         // upstream canonicalization: NOT(=) becomes <>, and NOT(a OR b) De-Morgans into two
-        // <> conjuncts — the NOT rule itself is exercised by the P3 pins; here we pin the
+        // <> conjuncts — the NOT rule itself is exercised by the Boolean composition tests; here we pin the
         // OR composition wire shape and the canonicalized NOT forms
         assertThat(remoteSql("SELECT id FROM doris.p5_batch.arr WHERE NOT (cardinality(a) = 3)"))
             .contains("(array_size(`a`) <> 3)")
@@ -261,7 +251,6 @@ class TestDorisJsonAndCardinalityPushdown : DorisPushdownTest("p5_batch", { prov
             .isNotFullyPushedDown(FilterNode::class.java)
     }
 
-    // --- GUARDED LIKE-prefix range pre-filter (engine-derived domain, retained filter) ---
 
     @Test
     fun testGuardedLikePrefixShipsRangePreFilterWithRetainedLike() {
@@ -297,7 +286,6 @@ class TestDorisJsonAndCardinalityPushdown : DorisPushdownTest("p5_batch", { prov
 
     @Test
     fun testFullModeStillPushesWholeLike() {
-        // in BINARY/FULL the P4 LIKE rule wins — the whole LIKE goes remote, no pre-filter split
         val full = Session.builder(session)
             .setCatalogSessionProperty(DorisQueryRunner.CATALOG, "string_pushdown_mode", "FULL")
             .build()

@@ -16,19 +16,10 @@ package dev.brikk.trino.doris
 import io.trino.Session
 import io.trino.sql.planner.plan.FilterNode
 import io.trino.sql.planner.plan.ProjectNode
-import io.trino.testing.AbstractTestQueryFramework
-import io.trino.testing.QueryRunner
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.TestInstance
 
-/**
- * Batch-1 scalar expression pushdown: coalesce/nullif, temporal extraction,
- * length->char_length, starts_with->escaped-LIKE-prefix; lower/upper stay local — plus the pinned
- * ENGINE DENIALS (CASE/IF never reach the connector at 483). Differentials compare pushed
- * vs `complex_expression_pushdown=false` (projections/predicate expressions local) vs the
- * direct Doris oracle. Probe verdicts: `dev-docs/archive/NOTES-readonly-max-batch1.md`.
- */
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 class TestDorisScalarPushdown : DorisPushdownTest("b1_scalar", { provisionFixture() }) {
 
@@ -39,7 +30,6 @@ class TestDorisScalarPushdown : DorisPushdownTest("b1_scalar", { provisionFixtur
         .setCatalogSessionProperty(DorisQueryRunner.CATALOG, "string_pushdown_mode", mode)
         .build()
 
-    // --- item 1: CASE / IF — ENGINE-DENIED, pinned ---
 
     @Test
     fun testCaseAndIfAreEngineDeniedButCorrect() {
@@ -59,7 +49,6 @@ class TestDorisScalarPushdown : DorisPushdownTest("b1_scalar", { provisionFixtur
         }
     }
 
-    // --- item 2: coalesce / nullif ---
 
     @Test
     fun testCoalesceAndNullifProjectionsPush() {
@@ -104,7 +93,6 @@ class TestDorisScalarPushdown : DorisPushdownTest("b1_scalar", { provisionFixtur
         assertThat(computeActual("SELECT nullif('a', 'A')").onlyValue).isEqualTo("a")
     }
 
-    // --- item 3: temporal extraction projections ---
 
     @Test
     fun testTemporalExtractionProjectionsPush() {
@@ -124,7 +112,6 @@ class TestDorisScalarPushdown : DorisPushdownTest("b1_scalar", { provisionFixtur
             .doesNotContain("year(").contains("`dt6` >=")
     }
 
-    // --- item 4: lower / upper (Doris 4.1.5 divergence; local in every mode) ---
 
     @Test
     fun testCaseFoldStaysLocalWithModeContractRespected() {
@@ -169,7 +156,6 @@ class TestDorisScalarPushdown : DorisPushdownTest("b1_scalar", { provisionFixtur
         assertThat(DorisTestCluster.queryScalar("SELECT lower('\u0130')")).isEqualTo("i\u0307")
     }
 
-    // --- item 5: length -> char_length ---
 
     @Test
     fun testLengthRendersCharLengthAndCountsCharacters() {
@@ -184,7 +170,6 @@ class TestDorisScalarPushdown : DorisPushdownTest("b1_scalar", { provisionFixtur
         assertThat(DorisTestCluster.queryScalar("SELECT char_length(v) FROM b1_scalar.t WHERE id = 5")).isEqualTo("1")
     }
 
-    // --- item 6: starts_with -> escaped LIKE-prefix ---
 
     @Test
     fun testStartsWithPushesAsEscapedLikePrefix() {

@@ -39,15 +39,9 @@ import java.math.BigInteger
 import java.time.LocalDate
 import java.time.LocalDateTime
 
-/**
- * Decoder unit tests over the spike report's fixture classes — wire texts are the VERBATIM
- * `getString()` values from `dev-docs/archive/REPORT-array-wire-decoder-spike.md` §3, and the malformed
- * battery is §5 (12/12 must fail loud with wire-offset info). No cluster needed.
- */
 class TestDorisArrayWireDecoder {
     private val ipAddressType = TESTING_TYPE_MANAGER.getType(io.trino.spi.type.TypeDescriptor("ipaddress"))
 
-    // --- F1: empty vs NULL element vs (SQL NULL handled by caller) ---
 
     @Test
     fun testIntArraysWithNullsAndEmpty() {
@@ -66,7 +60,6 @@ class TestDorisArrayWireDecoder {
             .containsExactly(Long.MIN_VALUE, Long.MAX_VALUE)
     }
 
-    // --- LARGEINT: exact 128-bit, fail loud out of DECIMAL(38,0) (spike §7.4) ---
 
     @Test
     fun testLargeintExactAndFailLoudOutOfDecimal38() {
@@ -82,7 +75,6 @@ class TestDorisArrayWireDecoder {
             .hasMessageContaining("out of DECIMAL(38, 0) range")
     }
 
-    // --- DECIMAL: trailing zeros / scale preserved, no double round-trip (spike F2) ---
 
     @Test
     fun testDecimalScalePreserved() {
@@ -100,7 +92,6 @@ class TestDorisArrayWireDecoder {
             .hasMessageContaining("does not fit scale")
     }
 
-    // --- BOOLEAN: bare 1/0, never true/false (spike §2) ---
 
     @Test
     fun testBooleanElements() {
@@ -113,7 +104,6 @@ class TestDorisArrayWireDecoder {
             .hasMessageContaining("BOOLEAN element is not 1/0")
     }
 
-    // --- FLOAT/DOUBLE: value-exact; F3 boundary surfaces Infinity faithfully ---
 
     @Test
     fun testFloatAndDoubleElements() {
@@ -131,7 +121,6 @@ class TestDorisArrayWireDecoder {
             .containsExactly(2.718281828459045, Double.POSITIVE_INFINITY, Double.NEGATIVE_INFINITY, Double.NaN)
     }
 
-    // --- DATE / DATETIME: quoted, edges, microseconds ---
 
     @Test
     fun testDateElements() {
@@ -162,7 +151,6 @@ class TestDorisArrayWireDecoder {
             .hasMessageContaining("does not fit")
     }
 
-    // --- IPV4/IPV6: quoted canonical text -> IPADDRESS slices ---
 
     @Test
     fun testIpAddressElements() {
@@ -181,7 +169,6 @@ class TestDorisArrayWireDecoder {
             .hasMessageContaining("Unreadable Doris IPV4/IPV6")
     }
 
-    // --- nesting: >= 3 levels proven; arbitrary depth supported ---
 
     @Test
     fun testNestedArrays() {
@@ -198,7 +185,6 @@ class TestDorisArrayWireDecoder {
             .containsExactly(listOf(listOf(listOf(1L))), emptyList<Any?>())
     }
 
-    // --- spike §5 malformed battery: all fail loud with wire-offset info ---
 
     @Test
     fun testMalformedInputsFailLoudWithOffset() {
@@ -244,7 +230,6 @@ class TestDorisArrayWireDecoder {
             .hasMessageContaining("not a valid element")
     }
 
-    // --- Block building sanity (element carriers -> Trino Block, including nesting) ---
 
     @Test
     fun testElementsBlockConstruction() {

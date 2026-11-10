@@ -16,11 +16,6 @@ package dev.brikk.trino.doris
 import java.sql.Connection
 import java.util.concurrent.TimeUnit
 
-/**
- * Direct (non-Trino) access to the live compose cluster for fixtures, side-effect oracles,
- * `information_schema.processlist` polling, and the FE audit log — the proven observability
- * substrate for pushed remote SQL (ledger §E: `fe.audit.log` `Stmt=` is verbatim).
- */
 object DorisTestCluster {
     const val GOLDEN_NATIVE_VERSION = "doris-4.1.5-release-917b20be838"
     private const val FE_CONTAINER = "trino-doris-fe"

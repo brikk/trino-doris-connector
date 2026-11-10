@@ -14,8 +14,6 @@
 package dev.brikk.trino.doris
 
 import io.trino.Session
-import io.trino.testing.AbstractTestQueryFramework
-import io.trino.testing.QueryRunner
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.TestInstance
@@ -33,7 +31,6 @@ class TestDorisJoinPushdown : DorisPushdownTest("p5_join", { provisionFixture() 
 
     override val pushdownSession: Session get() = eager
 
-    // --- gating ---
 
     @Test
     fun testJoinPushdownIsOffByDefault() {
@@ -43,7 +40,6 @@ class TestDorisJoinPushdown : DorisPushdownTest("p5_join", { provisionFixture() 
         assertThat(query(eager, sql)).isFullyPushedDown()
     }
 
-    // --- pushed shapes: differentials over the adversarial keys ---
 
     @Test
     fun testInnerLeftRightEqualityDifferentials() {
@@ -112,7 +108,6 @@ class TestDorisJoinPushdown : DorisPushdownTest("p5_join", { provisionFixture() 
         }
     }
 
-    // --- excluded shapes stay local (and correct) ---
 
     @Test
     fun testExcludedShapesStayLocal() {
@@ -136,7 +131,6 @@ class TestDorisJoinPushdown : DorisPushdownTest("p5_join", { provisionFixture() 
         assertThat(query(fullMode, denied[1])).joinIsNotFullyPushedDown()
     }
 
-    // --- snapshot posture + composition ---
 
     @Test
     fun testPushedJoinIsOneRemoteStatement() {
@@ -164,7 +158,6 @@ class TestDorisJoinPushdown : DorisPushdownTest("p5_join", { provisionFixture() 
         assertThat(remoteStatements(eager, filtered).single()).contains("`id` > 1")
     }
 
-    // --- AUTOMATIC strategy: the statistics-fed cost gate ---
 
     @Test
     fun testAutomaticPushesAnalyzedTablesAndKeepsStatlessLocal() {
