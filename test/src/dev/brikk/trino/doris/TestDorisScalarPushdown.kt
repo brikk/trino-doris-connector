@@ -30,7 +30,7 @@ import org.junit.jupiter.api.TestInstance
  * direct Doris oracle. Probe verdicts: `dev-docs/archive/NOTES-readonly-max-batch1.md`.
  */
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
-class TestDorisB1ScalarPushdown : DorisPushdownTest("b1_scalar", { provisionFixture() }) {
+class TestDorisScalarPushdown : DorisPushdownTest("b1_scalar", { provisionFixture() }) {
 
     private val local: Session
         get() = fullyLocalSession(session)
