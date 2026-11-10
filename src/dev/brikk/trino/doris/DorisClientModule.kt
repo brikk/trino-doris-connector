@@ -37,33 +37,17 @@ import io.trino.spi.connector.ConnectorAccessControl
 import java.util.Properties
 
 /**
- * Base JDBC wiring for the read-only Doris connector, translated from the Trino 483
- * SingleStoreClientModule/MySqlClientModule shapes (SR K1; PLAN §4.1/§4.2).
- *
- * Deliberate omissions vs those upstream modules:
- * - The JDBC `query()` table function is NOT bound (PLAN G7.4; SR R8 must-not-port):
- *   arbitrary SQL passthrough can mutate Doris.
- * - `JdbcMetadataConfig.bulkListColumns` stays at its `false` default: bulk column listing
- *   goes through `DatabaseMetaData.getColumns`, which is proven lossy for Doris (PROBE §1,
- *   Impl #1); per-table listing routes through DorisClient's information_schema override.
- * - `DecimalModule` is installed with number-mapping UNSUPPORTED: the `MAP_TO_NUMBER`
- *   Decimal-to-DOUBLE surrogate silently loses scale on Doris DECIMAL(>38) and is
- *   explicitly rejected (ledger §A Decimal256 stance; STOCK).
+ * Unlike the MySQL module, this binds no `query()` table function, which would pass arbitrary
+ * SQL to Doris, and leaves `bulkListColumns` off, because bulk listing reads
+ * `DatabaseMetaData.getColumns`, which misreports Doris types.
  */
 class DorisClientModule : AbstractConfigurationAwareModule() {
     override fun setup(binder: Binder) {
-        // G7 defense in depth, layer 2: the Base JDBC client stack sits BEHIND the read-only
-        // guard — every JdbcClient consumer (metadata, page source, procedures) reaches
-        // DorisClient only through ReadOnlyDorisClient.
         binder.bind(DorisClient::class.java).`in`(Scopes.SINGLETON)
         binder.bind(JdbcClient::class.java).annotatedWith(ForBaseJdbc::class.java)
             .to(ReadOnlyDorisClient::class.java).`in`(Scopes.SINGLETON)
-        // G7 layer 1: connector access control denies writes/DDL/procedures at the engine
-        // boundary, before SQL generation (JdbcModule declares the optional binder).
         newOptionalBinder(binder, ConnectorAccessControl::class.java)
             .setBinding().to(DorisReadOnlyAccessControl::class.java).`in`(Scopes.SINGLETON)
-        // Scan-path remote SQL carries the Trino query id comment (PLAN §8; DorisQueryBuilder
-        // explains why the QueryBuilder seam is used instead of the RemoteQueryModifier key).
         newOptionalBinder(binder, QueryBuilder::class.java)
             .setBinding().to(DorisQueryBuilder::class.java).`in`(Scopes.SINGLETON)
         bindSessionPropertiesProvider(binder, DorisSessionProperties::class.java)
@@ -71,20 +55,14 @@ class DorisClientModule : AbstractConfigurationAwareModule() {
             .setBinding().to(DorisJdbcMetadataFactory::class.java).`in`(Scopes.SINGLETON)
         configBinder(binder).bindConfig(DorisJdbcConfig::class.java)
         configBinder(binder).bindConfig(DorisConfig::class.java)
+        // MAP_TO_NUMBER would read DECIMAL beyond precision 38 as DOUBLE and lose digits.
         install(DecimalModule.withNumberMapping(DecimalModule.MappingToNumber.UNSUPPORTED))
-        // P5 join pushdown: OFF by default per plan (opt-in until a representative corpus
-        // exists). This is the upstream JdbcJoinPushdownSupportModule MINUS its
-        // bindConfigDefaults(joinPushdownEnabled = true) — installing the module as-is
-        // would silently flip `join-pushdown.enabled` ON (proven by the suite's
-        // off-by-default test). The strategy knobs remain (AUTOMATIC default — cost-aware
-        // via getTableStatistics — with EAGER available).
+        // JdbcJoinPushdownSupportModule without its default of join-pushdown.enabled=true, which
+        // would make join pushdown opt-out instead of opt-in.
         configBinder(binder).bindConfig(JdbcJoinPushdownConfig::class.java)
         bindSessionPropertiesProvider(binder, JdbcJoinPushdownSessionProperties::class.java)
-        // Complex join pushdown (condition-as-expression) defaults to false: our expression
-        // rewriter deliberately has no variable-to-variable comparison rules (unproven
-        // surface), and the complex path has no automatic legacy fallback — enabling it
-        // would make joins silently unpushable. The legacy path gives the per-condition
-        // typed guard (DorisClient.isSupportedJoinCondition) instead.
+        // Complex join pushdown would keep every join local: it needs variable-to-variable
+        // comparison rules, which the rewriter lacks, and never falls back to the legacy path.
         configBinder(binder).bindConfigDefaults(JdbcMetadataConfig::class.java) { config ->
             config.setComplexJoinPushdownEnabled(false)
         }
@@ -99,11 +77,8 @@ class DorisClientModule : AbstractConfigurationAwareModule() {
         credentialProvider: CredentialProvider,
         openTelemetry: OpenTelemetry,
     ): ConnectionFactory {
-        // TODO(adbc): this is the seam for the future optional Arrow Flight SQL / ADBC data
-        // plane (`doris.data-plane=jdbc|adbc`) — columnar result transport for large scans,
-        // opt-in because Flight needs direct BE reachability (hard behind k8s/NAT). Metadata,
-        // pushdown, and SQL generation stay on this JDBC plane either way. NOT scheduled;
-        // see dev-docs/BACKLOG.md for the retained, explicitly deferred transport decision.
+        // TODO(adbc): seam for an optional Arrow Flight SQL / ADBC result transport; parked, see
+        // dev-docs/BACKLOG.md.
         return DriverConnectionFactory.builder(DorisReadDriver(), config.connectionUrl, credentialProvider)
             .setConnectionProperties(connectionProperties(dorisConfig))
             .setOpenTelemetry(openTelemetry)
@@ -129,24 +104,10 @@ class DorisClientModule : AbstractConfigurationAwareModule() {
     }
 
     companion object {
-        /**
-         * Connection property pin list per ledger §B (each entry evidence-backed):
-         * - `tinyInt1isBit=false`: mandatory; the driver default reports every Doris TINYINT
-         *   as BIT/Boolean (PROBE §4, Impl #7). BOOLEAN-vs-TINYINT discrimination comes from
-         *   `information_schema.columns.COLUMN_TYPE`, not the protocol.
-         * - `characterEncoding=UTF-8` (+`useUnicode`): unicode/CJK/emoji round-trip proven (PROBE §3).
-         * - `useServerPrepStmts=false`: client prepared-statement emulation is the v1 default;
-         *   both modes proved fidelity-identical, emulation is the safer default (PROBE §5).
-         * - `connectTimeout`: explicit finite value (ledger §B; exact value is a config decision).
-         * - `sessionVariables`: Doris session vars at SESSION scope only (PROBE §9).
-         *
-         * Explicitly NOT set: `rewriteBatchedStatements` (write-only optimization, SR R1) and
-         * the MariaDB URL rewrite (SR R5). Result streaming is enabled per statement in
-         * [DorisClient.getPreparedStatement] (`enableStreamingResults()` ==
-         * `setFetchSize(Integer.MIN_VALUE)`, PROBE §7).
-         */
         internal fun connectionProperties(dorisConfig: DorisConfig): Properties {
             val properties = Properties()
+            // Otherwise the driver reports every Doris TINYINT as BIT. BOOLEAN is recognised by its
+            // COLUMN_TYPE `tinyint(1)` instead.
             properties.setProperty("tinyInt1isBit", "false")
             properties.setProperty("useUnicode", "true")
             properties.setProperty("characterEncoding", "UTF-8")
