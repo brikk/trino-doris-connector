@@ -23,10 +23,9 @@ import java.util.Properties
 import java.util.concurrent.Executor
 
 /**
- * Connector/J selects a read-only target at connect time. Thereafter a
- * connector read connection is one physical attempt, not a mutable HA routing proxy.
- * Trino owns retries; no statement/result may silently migrate after execution begins.
- * This runs below DriverConnectionFactory's telemetry wrappers, preserving instrumentation.
+ * Pins each connection to the physical connection Connector/J selects for reads, so HA routing
+ * can never move a statement or result to another host; Trino handles retries. Pinning in the
+ * driver keeps DriverConnectionFactory's telemetry wrappers on top.
  */
 internal class DorisReadDriver : NonRegisteringDriver() {
     override fun connect(url: String?, info: Properties?): Connection? =
@@ -39,9 +38,9 @@ internal class DorisReadDriver : NonRegisteringDriver() {
                 // All connector traffic is read-only, including metadata; select its route before pinning.
                 owner.isReadOnly = true
                 val selected = physicalConnection(owner)
-                // StatementImpl otherwise records a MultiHostMySQLConnection: its
-                // getSession() follows later routing changes, even after unwrapping
-                // the statement. Detach BEFORE preparing/binding any statement.
+                // StatementImpl otherwise records a MultiHostMySQLConnection, whose getSession()
+                // follows later routing changes even after unwrapping the statement. Detach
+                // before any statement is prepared.
                 selected.setProxy(null)
                 if (selected.multiHostSafeProxy !== selected || selected.connectionLock !== selected.lock) {
                     throw SQLException("Cannot pin Doris reads outside the HA routing lock")
@@ -73,7 +72,7 @@ internal class DorisReadDriver : NonRegisteringDriver() {
     }
 }
 
-/** Keep the original HA owner alive for complete pool cleanup, never for read/abort calls. */
+/** The HA owner is kept only so close cleans it up; reads and abort go to the physical connection. */
 private class PinnedReadConnection(
     private val physical: JdbcConnection,
     private val owner: Connection,
