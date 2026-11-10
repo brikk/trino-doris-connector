@@ -394,6 +394,8 @@ internal class RewriteCardinalityComparison(
             return null
         }
         val arrayArgument = call.arguments[0] as? Variable ?: return null
+        // A size check does not need the element restrictions, but sharing the allowlist keeps
+        // one set of array columns to verify against Doris.
         return support.pushableArrayColumn(context, arrayArgument)
     }
 

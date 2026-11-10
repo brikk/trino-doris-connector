@@ -12,8 +12,8 @@ Five detekt rules are advisory. They are reported as warnings and never fail the
 | `CyclomaticComplexMethod` | complexity 14 |
 | `ReturnCount` | 4 returns, not counting guard clauses and returns from lambdas |
 
-These numbers are review signals, not mandatory limits. Every other detekt rule is enforced:
-its findings have severity error and fail the build.
+These numbers are review signals, not mandatory limits. Every other enabled detekt rule is
+enforced: its findings have severity error and fail the build.
 
 Prioritize readable, cohesive code over metric compliance. Do not wrap lines, split methods,
 add trivial helpers, introduce mutable state, or rewrite clear control flow solely to clear an

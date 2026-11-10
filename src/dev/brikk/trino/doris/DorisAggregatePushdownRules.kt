@@ -50,8 +50,9 @@ internal object DorisAggregatePushdown {
 
     /**
      * Types whose values compare, order and group identically in Doris and Trino. REAL and
-     * DOUBLE are excluded: Trino orders NaN below every value while Doris returns NaN as the
-     * max, and ±0.0 ties resolve differently. Grouping and TopN admit text keys separately.
+     * DOUBLE are excluded: Trino's `max` treats NaN as smaller than every value while Doris
+     * returns NaN as the max, and ±0.0 ties resolve differently. Grouping and TopN admit text
+     * keys separately.
      */
     internal fun isExactPushableKeyType(type: Type): Boolean = when (type) {
         is TinyintType,
