@@ -36,18 +36,7 @@ import io.trino.spi.type.TimestampType
 import io.trino.spi.type.VarcharType
 import java.util.Optional
 
-/**
- * P6 date-of-datetime PROJECTION pushdown (the user's motivating shape:
- * `GROUP BY date(event_at)` on huge tables — the projection becomes a synthetic derived
- * column that the aggregate machinery then groups on remotely, collapsing the whole
- * query into one Doris statement).
- *
- * `CAST(datetime_col AS DATE)` -> `CAST(col AS DATE)` — registry-IDENTICAL;
- * live-probed identical to Doris `date()`
- * on every precision (0/3/6) incl. the `0000-01-01` / `9999-12-31` edges. Trino's
- * `date(x)` spelling desugars to this cast, so one rule covers both spellings.
- * Source restricted to plain DATETIME columns (Variable of TIMESTAMP(0..6)).
- */
+/** Trino's `date(x)` is this cast, so the rule covers both spellings. */
 internal class RewriteCastDatetimeToDate : ProjectFunctionRule<JdbcExpression, ParameterizedExpression> {
     override fun getPattern(): Pattern<out ConnectorExpression> = PATTERN
 
@@ -78,17 +67,9 @@ internal class RewriteCastDatetimeToDate : ProjectFunctionRule<JdbcExpression, P
 }
 
 /**
- * `date_trunc('unit', datetime_col)` -> `date_trunc(col, 'unit')` — the ARGUMENT ORDER
- * SWAPS (registry CONDITIONALLY_EQUIVALENT); returns
- * DATETIME of the input's precision in both engines (live-probed). Unit allowlist is
- * live-proven per unit (`dev-docs/archive/NOTES-p6-date-projection.md`): second/minute/hour/day/month/
- * quarter/year truncate identically. WEEK is DENIED: both engines are Monday-start
- * (probed on Sunday/Monday/ISO-week-1 adversaries), but at the calendar minimum Trino
- * truncates 0000-01-01/02 into year -1 (`-0001-12-27`) while Doris CLAMPS to
- * `0000-01-01` — a data-dependent divergence no literal guard can see (pinned in
- * `testEdgeDates`). millisecond is REJECTED by Doris ("time unit param only support
- * year|quarter|month|week|day|hour|minute|second") and stays local (Trino itself
- * rejects `microsecond`). Non-constant units never push.
+ * Doris takes the arguments in the opposite order. `week` is not pushed: for 0000-01-01 and
+ * 0000-01-02 Trino truncates into year -1 while Doris clamps to 0000-01-01, which no literal
+ * check can detect. Doris rejects `millisecond`.
  */
 internal class RewriteDateTrunc : ProjectFunctionRule<JdbcExpression, ParameterizedExpression> {
     override fun getPattern(): Pattern<out ConnectorExpression> = PATTERN
@@ -116,7 +97,6 @@ internal class RewriteDateTrunc : ProjectFunctionRule<JdbcExpression, Parameteri
         )
     }
 
-    /** Constant lowercase unit from the live-proven allowlist only (inline-safe by construction). */
     private fun constantUnit(argument: ConnectorExpression): String? {
         val constant = argument as? Constant ?: return null
         if (constant.type !is VarcharType) {
@@ -127,7 +107,6 @@ internal class RewriteDateTrunc : ProjectFunctionRule<JdbcExpression, Parameteri
     }
 
     companion object {
-        /** Live-proven identical truncation semantics per unit (probe + differential pins; week denied — see KDoc). */
         private val PROVEN_UNITS = setOf("second", "minute", "hour", "day", "month", "quarter", "year")
 
         private val PATTERN: Pattern<Call> = call()
