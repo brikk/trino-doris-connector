@@ -20,7 +20,6 @@ import io.trino.spi.statistics.TableStatistics
 import io.trino.spi.type.BigintType.BIGINT
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.Test
-import java.lang.reflect.Proxy
 import java.sql.Connection
 import java.sql.PreparedStatement
 import java.sql.ResultSet
@@ -106,9 +105,8 @@ class TestDorisTableStatisticsReader {
         assertThat(value.range).isEmpty()
     }
 
-    @Suppress("CyclomaticComplexMethod") // Strict fake JDBC responses for both metadata queries.
     private fun read(tableRows: Long, rows: List<Map<String, String?>>): TableStatistics {
-        val tableResult = proxy(ResultSet::class.java) { method, _ ->
+        val tableResult = jdbcProxy(ResultSet::class.java) { method, _ ->
             when (method) {
                 "next" -> true
                 "getLong" -> tableRows
@@ -117,7 +115,7 @@ class TestDorisTableStatisticsReader {
                 else -> error("Unexpected table-row result call: $method")
             }
         }
-        val tableStatement = proxy(PreparedStatement::class.java) { method, _ ->
+        val tableStatement = jdbcProxy(PreparedStatement::class.java) { method, _ ->
             when (method) {
                 "executeQuery" -> tableResult
                 "setString", "close" -> null
@@ -125,7 +123,7 @@ class TestDorisTableStatisticsReader {
             }
         }
         var row = -1
-        val columnResult = proxy(ResultSet::class.java) { method, args ->
+        val columnResult = jdbcProxy(ResultSet::class.java) { method, args ->
             when (method) {
                 "next" -> ++row < rows.size
                 "getString" -> rows[row][args[0]]
@@ -133,7 +131,7 @@ class TestDorisTableStatisticsReader {
                 else -> error("Unexpected column-statistics result call: $method")
             }
         }
-        val columnStatement = proxy(Statement::class.java) { method, args ->
+        val columnStatement = jdbcProxy(Statement::class.java) { method, args ->
             when (method) {
                 "executeQuery" -> {
                     assertThat(args[0]).isEqualTo("SHOW COLUMN CACHED STATS `schema`.`BaseTable`")
@@ -143,7 +141,7 @@ class TestDorisTableStatisticsReader {
                 else -> error("Unexpected column-statistics statement call: $method")
             }
         }
-        val connection = proxy(Connection::class.java) { method, _ ->
+        val connection = jdbcProxy(Connection::class.java) { method, _ ->
             when (method) {
                 "prepareStatement" -> tableStatement
                 "createStatement" -> columnStatement
@@ -154,6 +152,4 @@ class TestDorisTableStatisticsReader {
         return connection.use { DorisTableStatisticsReader { "`$it`" }.readStatistics(it, "schema", "BaseTable", listOf(column)) }
     }
 
-    private fun <T> proxy(type: Class<T>, handler: (String, Array<out Any?>) -> Any?): T =
-        type.cast(Proxy.newProxyInstance(type.classLoader, arrayOf(type)) { _, method, args -> handler(method.name, args ?: emptyArray()) })
 }

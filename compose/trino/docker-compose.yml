@@ -1,6 +1,6 @@
 name: trino-doris-manual
 
-# User-facing MANUAL smoke sandbox: a single Trino 483 coordinator with OUR
+# User-facing MANUAL smoke sandbox: a single Trino 484 coordinator with OUR
 # trino-doris plugin installed and DYNAMIC CATALOG MANAGEMENT enabled, so the
 # user can log into the CLI and add THEIR OWN external Doris server at runtime
 # with `CREATE CATALOG ... USING doris WITH (...)` — no rebuild, no restart.
@@ -11,19 +11,19 @@ name: trino-doris-manual
 
 services:
   trino:
-    image: trinodb/trino:483
+    image: trinodb/trino:484
     container_name: trino-doris-manual
     ports:
       # Host 18080 -> container 8080 (Trino HTTP + CLI). 18080 avoids colliding
       # with anything already bound to 8080 on the dev box.
-      - "18080:8080"
+      - "${TRINO_BIND_ADDRESS:-127.0.0.1}:18080:8080"
     volumes:
       # (a) OUR assembled plugin dir, mounted READ-ONLY into the standard Trino
       #     plugin path. This is the FIRST production-shaped load of the plugin:
       #     Trino's PluginManager ServiceLoader-scans /usr/lib/trino/plugin/*,
       #     exactly as a real install — not the in-JVM test classpath. up.sh runs
-      #     `./gradlew pluginAssemble` to (re)create this dir if it is missing or
-      #     --rebuild is passed.
+      #     `./gradlew prepareManualPlugin` to assemble/verify the exact current
+      #     version on every startup, then snapshots it before mounting.
       - ${TRINO_DORIS_PLUGIN_DIR:?run ./up.sh, which assembles the plugin and exports this}:/usr/lib/trino/plugin/trino-doris:ro
       # (b) Config override enabling dynamic catalogs. See etc/config.properties
       #     for why we replace the file instead of using the image's

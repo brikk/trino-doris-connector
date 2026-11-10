@@ -1,0 +1,126 @@
+/*
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+package dev.brikk.trino.doris
+
+import io.trino.sql.planner.plan.FilterNode
+import org.assertj.core.api.Assertions.assertThat
+import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.TestInstance
+
+// Includes direct Doris truth tables that the connector's Boolean rewrites rely on.
+@TestInstance(TestInstance.Lifecycle.PER_CLASS)
+class TestDorisBooleanComposition : DorisPushdownTest("p3_composition", { provisionFixture() }) {
+
+
+    @Test
+    fun testTrinoThreeValuedLogicPin() {
+        assertThat(computeActual("SELECT NOT CAST(NULL AS boolean)").onlyValue).isNull()
+        assertThat(computeActual("SELECT true AND CAST(NULL AS boolean)").onlyValue).isNull()
+        assertThat(computeActual("SELECT false AND CAST(NULL AS boolean)").onlyValue).isEqualTo(false)
+        assertThat(computeActual("SELECT true OR CAST(NULL AS boolean)").onlyValue).isEqualTo(true)
+        assertThat(computeActual("SELECT false OR CAST(NULL AS boolean)").onlyValue).isNull()
+        assertThat(computeActual("SELECT CAST(NULL AS boolean) OR CAST(NULL AS boolean)").onlyValue).isNull()
+    }
+
+    @Test
+    fun testDorisThreeValuedLogicPin() {
+        val cells = DorisTestCluster.querySingleColumn(
+            """
+            SELECT CONCAT_WS('|',
+                COALESCE(CAST(NOT CAST(NULL AS BOOLEAN) AS STRING), 'N'),
+                COALESCE(CAST((TRUE AND CAST(NULL AS BOOLEAN)) AS STRING), 'N'),
+                COALESCE(CAST((FALSE AND CAST(NULL AS BOOLEAN)) AS STRING), 'N'),
+                COALESCE(CAST((TRUE OR CAST(NULL AS BOOLEAN)) AS STRING), 'N'),
+                COALESCE(CAST((FALSE OR CAST(NULL AS BOOLEAN)) AS STRING), 'N'),
+                COALESCE(CAST((CAST(NULL AS BOOLEAN) OR CAST(NULL AS BOOLEAN)) AS STRING), 'N'))
+            """.trimIndent(),
+        ).single()
+        // NOT N=N; T AND N=N; F AND N=F; T OR N=T; F OR N=N; N OR N=N — identical to Trino.
+        assertThat(cells).isEqualTo("N|N|0|1|N|N")
+    }
+
+
+    @Test
+    fun testOrOfArrayPositionComparisonsPushes() {
+        assertPushedAndEquivalent("array_position(a_int, 1) = 1 OR array_position(a_int, 9) = 1")
+        assertPushedAndEquivalent("array_position(a_int, 5) = 0 OR array_position(b_int, 9) = 2")
+    }
+
+    @Test
+    fun testNestedAndOrCompositionPushes() {
+        assertPushedAndEquivalent(
+            "(array_position(a_int, 1) = 1 AND array_position(b_int, 9) = 2) OR array_position(a_int, 7) >= 1",
+        )
+    }
+
+    @Test
+    fun testNotOfArrayPositionComparisonPushes() {
+        // (the engine may canonicalize NOT(=) into <>; either way the shape pushes)
+        assertPushedAndEquivalent("NOT (array_position(a_int, 5) = 1)")
+        assertPushedAndEquivalent("NOT (array_position(a_int, 1) = 1 OR array_position(a_int, 9) = 1)")
+    }
+
+    @Test
+    fun testRemoteCompositionSqlShape() {
+        val scan = remoteSql(
+            "SELECT id FROM doris.p3_composition.t WHERE array_position(a_int, 1) = 1 OR array_position(a_int, 9) = 1",
+        )
+        assertThat(scan).contains("((array_position(`a_int`, 1) = 1) OR (array_position(`a_int`, 9) = 1))")
+    }
+
+
+    @Test
+    fun testContainsAndOverlapNeverCompose() {
+        // NOT / OR / AND over contains or arrays_overlap: the whole conjunct stays local
+        // (and remains correct) — pushing it would over-return on NULL-element rows.
+        assertLocalAndEquivalent("NOT contains(a_int, 5)")
+        assertLocalAndEquivalent("contains(a_int, 1) OR array_position(a_int, 9) = 1")
+        assertLocalAndEquivalent("arrays_overlap(a_int, b_int) OR array_position(a_int, 9) = 1")
+        assertLocalAndEquivalent("NOT (contains(a_int, 5) AND array_position(a_int, 1) = 1)")
+        // ... while plain contains still pushes on its own (predicate-level, top-level conjunct)
+        assertThat(query("SELECT id FROM doris.p3_composition.t WHERE contains(a_int, 1)")).isFullyPushedDown()
+    }
+
+
+    private fun assertPushedAndEquivalent(predicate: String) {
+        assertPushedAndIdentical("SELECT id FROM doris.p3_composition.t WHERE $predicate")
+    }
+
+    private fun assertLocalAndEquivalent(predicate: String) {
+        assertLocalAndIdentical("SELECT id FROM doris.p3_composition.t WHERE $predicate", FilterNode::class.java)
+    }
+
+    companion object {
+        private fun provisionFixture() {
+            provisionFixture(
+                "p3_composition",
+                """
+                CREATE TABLE p3_composition.t (id INT NOT NULL, a_int ARRAY<INT>, b_int ARRAY<INT>)
+                DUPLICATE KEY(id) DISTRIBUTED BY HASH(id) BUCKETS 1 PROPERTIES ("replication_num" = "1")
+                """.trimIndent(),
+                // NULL arrays and NULL elements are the 3VL-critical rows
+                """
+                INSERT INTO p3_composition.t VALUES
+                (1, ARRAY(1, 2, 3), ARRAY(3, 9)),
+                (2, ARRAY(4, 5), ARRAY(6, 7)),
+                (3, ARRAY(1, NULL), ARRAY(NULL, 9)),
+                (4, NULL, ARRAY(1)),
+                (5, ARRAY(), ARRAY()),
+                (6, ARRAY(7, NULL), ARRAY(9, 9)),
+                (7, ARRAY(9), NULL)
+                """.trimIndent(),
+            )
+        }
+    }
+}

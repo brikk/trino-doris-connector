@@ -21,8 +21,10 @@ import io.trino.spi.expression.Call
 import io.trino.spi.expression.Constant
 import io.trino.spi.expression.FunctionName
 import io.trino.spi.expression.StandardFunctions.EQUAL_OPERATOR_FUNCTION_NAME
+import io.trino.spi.expression.StandardFunctions.NOT_EQUAL_OPERATOR_FUNCTION_NAME
 import io.trino.spi.expression.Variable
 import io.trino.spi.type.BooleanType.BOOLEAN
+import io.trino.spi.type.Type
 import io.trino.spi.type.VarcharType.VARCHAR
 import io.trino.testing.TestingConnectorSession
 import io.trino.type.JsonType.JSON
@@ -35,6 +37,18 @@ class TestDorisJsonExtractScalarEquality {
     private val rewriter = JdbcConnectorExpressionRewriterBuilder.newBuilder()
         .add(RewriteJsonExtractScalarEquality { "`$it`" })
         .build()
+
+    @Test
+    fun testOnlyEqualityOverNativeJsonIsAdmitted() {
+        for (reversed in listOf(false, true)) {
+            assertThat(rewrite("$.a", reversed, comparison = NOT_EQUAL_OPERATOR_FUNCTION_NAME)).isEmpty
+            assertThat(rewrite("$.a", reversed, inputType = VARCHAR)).isEmpty
+            for (remoteType in listOf("variant", "string", "varchar(100)")) {
+                assertThat(rewrite("$.a", reversed, remoteType = remoteType)).describedAs(remoteType).isEmpty
+            }
+            assertThat(rewrite("$.a", reversed, literal = "a\u0000b")).isEmpty
+        }
+    }
 
     @Test
     fun testDottedPathsPreserveRenderingAndParameters() {
@@ -59,20 +73,66 @@ class TestDorisJsonExtractScalarEquality {
         }
     }
 
-    private fun rewrite(path: String, reversed: Boolean) = rewriter.rewrite(
+    @Test
+    fun testRefreshedEvidencePathsRemainOutsideTheDottedFieldAllowlist() {
+        // brikk's 484/4.1.5 capture: these paths differ by engine or exceed our
+        // admission contract even when a particular input happens to agree.
+        for (path in listOf("$", "$[-1]", "$[*]", "$.\"a.b\"", """$["a.b"]""", "$.a[0].b")) {
+            for (reversed in listOf(false, true)) {
+                assertThat(rewrite(path, reversed)).describedAs("$path reversed=$reversed").isEmpty
+            }
+        }
+    }
+
+    @Test
+    fun testRefreshedEvidenceNumericAndContainerLiteralsStayLocal() {
+        for (literal in listOf(
+            "100.0", "100", "1.2300", "1.23", "1.0E-7", "1e-7", "1e-07",
+            "-0.0", "-0", "0.00", "9007199254740993.1200", "9007199254740994",
+            "inf", "-inf", "+inf", "Infinity", "-Infinity", "NaN", "nan",
+            """{"b":1}""", "[1,2]",
+        )) {
+            for (reversed in listOf(false, true)) {
+                assertThat(rewrite("$.a", reversed, literal)).describedAs("$literal reversed=$reversed").isEmpty
+            }
+        }
+    }
+
+    @Test
+    fun testOrdinaryTextAndBooleanLiteralsRemainAdmitted() {
+        // The JSON string "null" is distinct from a JSON null value, which both
+        // scalar extractors turn into SQL NULL for the captured missing/null paths.
+        for (literal in listOf("hello", "true", "false", "null", "", "中文", "emoji😀")) {
+            for (reversed in listOf(false, true)) {
+                val rewritten = rewrite("$.a", reversed, literal).orElseThrow()
+                assertThat(rewritten.parameters().last()).isEqualTo(
+                    QueryParameter(DorisTypeMapping.toTypeHandle("string"), VARCHAR, Optional.of(utf8Slice(literal))),
+                )
+            }
+        }
+    }
+
+    private fun rewrite(
+        path: String,
+        reversed: Boolean,
+        literal: String = "x",
+        inputType: Type = JSON,
+        remoteType: String = "json",
+        comparison: FunctionName = EQUAL_OPERATOR_FUNCTION_NAME,
+    ) = rewriter.rewrite(
         session,
         Call(
             BOOLEAN,
-            EQUAL_OPERATOR_FUNCTION_NAME,
+            comparison,
             listOf(
                 Call(
                     VARCHAR,
                     FunctionName("json_extract_scalar"),
-                    listOf(Variable("json_symbol", JSON), Constant(utf8Slice(path), VARCHAR)),
+                    listOf(Variable("json_symbol", inputType), Constant(utf8Slice(path), VARCHAR)),
                 ),
-                Constant(utf8Slice("x"), VARCHAR),
+                Constant(utf8Slice(literal), VARCHAR),
             ).let { if (reversed) it.reversed() else it },
         ),
-        mapOf("json_symbol" to JdbcColumnHandle("doc", DorisTypeMapping.toTypeHandle("json"), JSON)),
+        mapOf("json_symbol" to JdbcColumnHandle("doc", DorisTypeMapping.toTypeHandle(remoteType), inputType)),
     )
 }

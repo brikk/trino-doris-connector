@@ -16,7 +16,6 @@ package dev.brikk.trino.doris
 import org.assertj.core.api.Assertions.assertThat
 import org.assertj.core.api.Assertions.assertThatThrownBy
 import org.junit.jupiter.api.Test
-import java.lang.reflect.Proxy
 import java.sql.Connection
 import java.sql.PreparedStatement
 import java.sql.ResultSet
@@ -29,6 +28,7 @@ import java.util.concurrent.TimeUnit.SECONDS
 import java.util.concurrent.TimeoutException
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicReference
 
 class TestDorisPreparedStatement {
     @Test
@@ -37,7 +37,6 @@ class TestDorisPreparedStatement {
     @Test
     fun testLateResultCloseWaitsForAbort() = assertCleanupWaitsForAbort(lateResult = true)
 
-    @Suppress("LongMethod", "CyclomaticComplexMethod") // Two schedules share the same strict JDBC fakes.
     private fun assertCleanupWaitsForAbort(lateResult: Boolean) {
         val executeEntered = CountDownLatch(1)
         val releaseExecute = CountDownLatch(if (lateResult) 1 else 0)
@@ -47,13 +46,13 @@ class TestDorisPreparedStatement {
         val aborted = AtomicBoolean()
         val statementCloses = AtomicInteger()
         val resultCloses = AtomicInteger()
-        val result = jdbcProxy(ResultSet::class.java) { method ->
+        val result = jdbcProxy(ResultSet::class.java) { method, _ ->
             check(method == "close") { "unexpected result call: $method" }
             assertThat(aborted.get()).describedAs("abort before raw ResultSet.close").isTrue()
             resultCloses.incrementAndGet()
             null
         }
-        val delegate = jdbcProxy(PreparedStatement::class.java) { method ->
+        val delegate = jdbcProxy(PreparedStatement::class.java) { method, _ ->
             when (method) {
                 "executeQuery" -> {
                     executeEntered.countDown()
@@ -69,12 +68,14 @@ class TestDorisPreparedStatement {
                 else -> throw AssertionError("unexpected statement call: $method")
             }
         }
-        val connection = jdbcProxy(Connection::class.java) { method ->
+        val connection = jdbcProxy(Connection::class.java) { method, _ ->
             check(method == "abort") { "unexpected connection call: $method" }
             aborted.set(true)
             null
         }
-        val statement = DorisPreparedStatement(delegate, connection) {
+        val answeredBeforeCancel = AtomicReference<Boolean>()
+        val statement = DorisPreparedStatement(delegate, connection) { answered, _ ->
+            answeredBeforeCancel.set(answered)
             cancelEntered.countDown()
             await(releaseCancel)
         }
@@ -87,6 +88,7 @@ class TestDorisPreparedStatement {
             if (!lateResult) execution.get(5, SECONDS)
             val cancellation = executor.submit { statement.cancel() }.also { futures.add(it) }
             await(cancelEntered)
+            assertThat(answeredBeforeCancel.get()).describedAs("Doris answered before the cancel began").isEqualTo(!lateResult)
             val cleanup = if (lateResult) {
                 releaseExecute.countDown()
                 execution
@@ -118,12 +120,32 @@ class TestDorisPreparedStatement {
     }
 
     @Test
+    fun testStatementThatFailedBeforeCancelReportsDorisAnswered() {
+        val answeredBeforeCancel = AtomicReference<Boolean>()
+        val delegate = jdbcProxy(PreparedStatement::class.java) { method, _ ->
+            when (method) {
+                "executeQuery" -> throw SQLException("Doris rejected the query")
+                "close" -> null
+                else -> throw AssertionError("unexpected statement call: $method")
+            }
+        }
+        val connection = jdbcProxy(Connection::class.java) { method, _ ->
+            check(method == "abort") { "unexpected connection call: $method" }
+            null
+        }
+        val statement = DorisPreparedStatement(delegate, connection) { answered, _ -> answeredBeforeCancel.set(answered) }
+        assertThatThrownBy { statement.executeQuery() }.isInstanceOf(SQLException::class.java)
+        statement.close()
+        assertThat(answeredBeforeCancel.get()).isTrue()
+    }
+
+    @Test
     fun testDisabledHelperStillAbortsWithoutRawCancelAndCloseIsIdempotent() {
         val aborts = AtomicInteger()
         val rawCancels = AtomicInteger()
         val closes = AtomicInteger()
-        val result = jdbcProxy(ResultSet::class.java) { throw AssertionError("unexpected result call: $it") }
-        val delegate = jdbcProxy(PreparedStatement::class.java) { method ->
+        val result = jdbcProxy(ResultSet::class.java) { method, _ -> throw AssertionError("unexpected result call: $method") }
+        val delegate = jdbcProxy(PreparedStatement::class.java) { method, _ ->
             when (method) {
                 "executeQuery" -> result
                 "cancel" -> { rawCancels.incrementAndGet(); null }
@@ -131,12 +153,12 @@ class TestDorisPreparedStatement {
                 else -> throw AssertionError("unexpected statement call: $method")
             }
         }
-        val connection = jdbcProxy(Connection::class.java) { method ->
+        val connection = jdbcProxy(Connection::class.java) { method, _ ->
             check(method == "abort") { "unexpected connection call: $method" }
             aborts.incrementAndGet()
             null
         }
-        val statement = DorisPreparedStatement(delegate, connection) {} // Disabled helper is a no-op.
+        val statement = DorisPreparedStatement(delegate, connection) { _, _ -> } // Disabled helper is a no-op.
         assertThat(statement.unwrap(PreparedStatement::class.java)).isSameAs(statement)
         assertThat(statement.isWrapperFor(PreparedStatement::class.java)).isTrue()
         statement.executeQuery()
@@ -150,6 +172,4 @@ class TestDorisPreparedStatement {
 
     private fun await(latch: CountDownLatch) = assertThat(latch.await(5, SECONDS)).isTrue()
 
-    private fun <T> jdbcProxy(type: Class<T>, handler: (String) -> Any?): T =
-        type.cast(Proxy.newProxyInstance(type.classLoader, arrayOf(type)) { _, method, _ -> handler(method.name) })
 }

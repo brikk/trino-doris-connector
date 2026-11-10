@@ -21,14 +21,7 @@ import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.TestInstance
 import java.sql.SQLException
 
-/**
- * SELECT-only fixture account (PLAN G7.1, §7, §10-P1): the `trino_ro` Doris user holds only
- * `SELECT_PRIV` on the internal catalog, so even IF every connector-code layer regressed,
- * Doris itself denies writes. The GRANT statements are documented in `compose/README.md`.
- *
- * The stock DELETE incident (STOCK) proved code-only enforcement is insufficient — this
- * server-side belt is independent of connector code by design.
- */
+// Pins Doris account privileges independently of connector access control.
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 class TestDorisTrinoRoAccount : AbstractTestQueryFramework() {
     override fun createQueryRunner(): QueryRunner {
@@ -47,13 +40,9 @@ class TestDorisTrinoRoAccount : AbstractTestQueryFramework() {
 
     @Test
     fun testDorisItselfDeniesWritesForTrinoRo() {
-        // Belt independent of connector code: raw mutating statements over direct JDBC as
-        // trino_ro must be denied BY DORIS.
         assertDorisDenies("INSERT INTO p0_probe.nums VALUES (999999999)")
         assertDorisDenies("DELETE FROM p0_probe.nums WHERE n = 0")
-        // UPDATE needs a UNIQUE-key table to get past Doris's table-model check and reach the
-        // privilege check (a DUP-table UPDATE fails on the model check instead — STOCK saw the
-        // same); the fixture provisions p1_ro_smoke.uniq for exactly this.
+        // UPDATE needs a UNIQUE-key table to reach the privilege check rather than fail on the table model.
         assertDorisDenies("UPDATE p1_ro_smoke.uniq SET v = 'hacked' WHERE id = 1")
         assertDorisDenies("TRUNCATE TABLE p0_probe.nums")
         assertDorisDenies("DROP TABLE p0_probe.nums")

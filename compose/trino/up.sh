@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 #
-# Bring up the MANUAL trino-doris smoke sandbox: a single Trino 483 coordinator
+# Bring up the MANUAL trino-doris smoke sandbox: a single Trino 484 coordinator
 # with OUR plugin installed (production-shaped plugin-dir ServiceLoader load) and
 # dynamic catalog management enabled. Then print a copy-paste cheat sheet.
 #
 # Usage:
-#   ./up.sh              # assemble plugin if missing, up Trino, wait healthy, print cheat sheet
-#   ./up.sh --rebuild    # force `./gradlew pluginAssemble` even if the dir exists
+#   ./up.sh              # assemble/verify current plugin, up Trino, wait healthy, print cheat sheet
+#   ./up.sh --rebuild    # additionally rerun build tasks instead of using up-to-date output
 #   ./down.sh            # tear down (alias for ./up.sh --down)
 #
 set -euo pipefail
@@ -35,35 +35,21 @@ case "${1:-}" in
     *) err "unknown arg: ${1}"; exit 2 ;;
 esac
 
-# --- Locate the assembled plugin dir (build/trino-plugin/trino-doris-<version>) ----
-# Resolve <version> from the gradle build the same way the build does. We avoid a
-# gradle invocation just to read the version: match the single trino-doris-* dir.
-find_plugin_dir() {
-    local base="${REPO_ROOT}/build/trino-plugin"
-    [[ -d "${base}" ]] || return 1
-    local d
-    d="$(find "${base}" -maxdepth 1 -type d -name 'trino-doris-*' | head -n1)"
-    [[ -n "${d}" ]] || return 1
-    # Must contain the SPI-registered plugin jar to be a real assembly.
-    [[ -n "$(find "${d}" -maxdepth 1 -name 'trino-doris-connector-*.jar' | head -n1)" ]] || return 1
-    printf '%s' "${d}"
-}
-
-assemble_plugin() {
-    log "Assembling plugin via ./gradlew pluginAssemble (mise JDK 25)…"
-    export JAVA_HOME="${HOME}/.local/share/mise/installs/java/25"
-    [[ -x "${JAVA_HOME}/bin/java" ]] || { err "mise JDK 25 not found at ${JAVA_HOME}"; exit 1; }
-    ( cd "${REPO_ROOT}" && ./gradlew pluginAssemble )
-}
-
-PLUGIN_DIR="$(find_plugin_dir || true)"
-if [[ -z "${PLUGIN_DIR}" || "${REBUILD}" -eq 1 ]]; then
-    [[ "${REBUILD}" -eq 1 ]] && log "--rebuild requested." || log "Plugin dir not found."
-    assemble_plugin
-    PLUGIN_DIR="$(find_plugin_dir)" || { err "pluginAssemble did not produce a plugin dir"; exit 1; }
-fi
+# --- Assemble/verify, then consume the exact path written by that Gradle run ----
+# Always invoke verification, even with an existing assembly. Gradle's normal
+# up-to-date checks keep this cheap. Old versioned directories are never searched.
+log "Assembling and verifying the current plugin via ./gradlew prepareManualPlugin…"
+export JAVA_HOME="${JAVA_HOME:-${HOME}/.local/share/mise/installs/java/25}"
+[[ -x "${JAVA_HOME}/bin/java" ]] || { err "JDK 25 not found at ${JAVA_HOME}"; exit 1; }
+GRADLE_ARGS=(prepareManualPlugin --console=plain)
+[[ "${REBUILD}" -eq 0 ]] || GRADLE_ARGS+=(--rerun-tasks)
+( cd "${REPO_ROOT}" && ./gradlew "${GRADLE_ARGS[@]}" )
+IFS= read -r PLUGIN_DIR < "${REPO_ROOT}/build/manual-plugin-path.txt"
+[[ -d "${PLUGIN_DIR}" ]] || { err "verified plugin directory is missing: ${PLUGIN_DIR}"; exit 1; }
 log "Plugin dir: ${PLUGIN_DIR}"
-log "  ServiceLoader SPI: $(unzip -p "$(find "${PLUGIN_DIR}" -name 'trino-doris-connector-*.jar' | head -n1)" META-INF/services/io.trino.spi.Plugin 2>/dev/null || echo '??')"
+CONNECTOR_JARS=("${PLUGIN_DIR}"/trino-doris-connector-*.jar)
+[[ "${#CONNECTOR_JARS[@]}" -eq 1 && -f "${CONNECTOR_JARS[0]}" ]] || { err "ambiguous connector JAR"; exit 1; }
+log "  ServiceLoader SPI: $(unzip -p "${CONNECTOR_JARS[0]}" META-INF/services/io.trino.spi.Plugin)"
 
 # SNAPSHOT the plugin dir instead of mounting Gradle's live output: a later
 # `./gradlew build` rewrites those jars underneath the running JVM and the server
@@ -83,7 +69,7 @@ if ! docker network inspect trino-doris-dev_doris-net >/dev/null 2>&1; then
     exit 1
 fi
 
-log "Starting Trino 483 with the plugin dir mounted read-only…"
+log "Starting Trino 484 with the plugin dir mounted read-only…"
 # --force-recreate: compose does NOT recreate on unchanged config, and the plugin
 # snapshot content changing is invisible to it — without this flag a --rebuild
 # silently leaves the OLD plugin running in the live JVM (bitten 2026-07-19; the

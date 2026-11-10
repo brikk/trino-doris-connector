@@ -19,18 +19,9 @@ import io.trino.spi.TrinoException
 import io.trino.spi.connector.ConnectorSession
 
 /**
- * Appends the Trino query id to every remote statement as a safe SQL comment
- * (PLAN §4.1 `DorisRemoteQueryModifier` / §8 observability), rendered as
- * `... [slash][star]trino_query_id=20260719_021530_00003_abcde[star][slash]`.
- *
- * This makes the Doris FE audit log (`fe.audit.log` `Stmt=`) deterministically greppable by
- * Trino query id — the observability substrate for pushdown-correctness proofs (ledger §E) and
- * for the cancellation test's `information_schema.processlist` lookups.
- *
- * Composes with (rather than replaces) the modifier bound by base-jdbc's
- * `RemoteQueryModifierModule`, so a user-configured `query.comment-format` still applies.
- * The query id is validated against a strict alphabet — comment-breakout is impossible, and an
- * unexpected id shape fails loud rather than being silently dropped.
+ * Appends the Trino query id as a comment to each remote statement, after any configured
+ * `query.comment-format`, so the Doris audit log can be searched by query id. The id is checked
+ * against a strict alphabet so it cannot close the comment.
  */
 class DorisRemoteQueryModifier(
     private val delegate: RemoteQueryModifier,

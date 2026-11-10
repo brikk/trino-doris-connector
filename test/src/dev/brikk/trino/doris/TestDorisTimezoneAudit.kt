@@ -15,30 +15,16 @@ package dev.brikk.trino.doris
 
 import io.trino.Session
 import io.trino.spi.type.TimeZoneKey
-import io.trino.testing.AbstractTestQueryFramework
 import io.trino.testing.QueryRunner
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.TestInstance
 import java.util.TimeZone
 
-/**
- * Timezone audit (TODO-timezones items 1-3 + item 6, test-only): Doris DATETIME/DATE are ZONELESS and
- * map to zoneless Trino types, so every zone knob must be a NO-OP for pushed queries —
- * {Trino session zone} x {doris.time-zone} x {JVM default zone} must never change results
- * or the pushed literal bytes. DST-adversarial wall-clock values (nonexistent and ambiguous
- * local times in America/New_York) and the 0000-01-01/9999-12-31 date edges are exactly
- * where driver-side zone conversion bugs bite first — pinned here.
- *
- * `doris.time-zone` variation runs through EXTRA CATALOGS on the same cluster (tz_tokyo /
- * tz_ny differ from `doris` only in that property) — the canary asserts one representative
- * query per pushed family is result-identical across all three.
- */
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
-class TestDorisTimezoneAudit : AbstractTestQueryFramework() {
+class TestDorisTimezoneAudit : DorisPushdownTest("p5_tz", { provisionFixture() }) {
     override fun createQueryRunner(): QueryRunner {
-        provisionFixture()
-        val runner = DorisQueryRunner.builder().build()
+        val runner = super.createQueryRunner()
         for ((catalog, zone) in listOf("tz_tokyo" to "Asia/Tokyo", "tz_ny" to "America/New_York")) {
             runner.createCatalog(
                 catalog,
@@ -53,20 +39,16 @@ class TestDorisTimezoneAudit : AbstractTestQueryFramework() {
         return runner
     }
 
+    /** Keeps the order of an ORDER BY query; other queries are sorted so they compare as sets. */
+    private fun rowsInQueryOrder(session: Session, sql: String): List<String> {
+        val rows = computeActual(session, sql).materializedRows.map { it.toString() }
+        return if (sql.contains("ORDER BY")) rows else rows.sorted()
+    }
+
     private fun sessionInZone(zoneId: String): Session = Session.builder(session)
         .setTimeZoneKey(TimeZoneKey.getTimeZoneKey(zoneId))
         .build()
 
-    private fun rows(session: Session, sql: String): List<String> =
-        computeActual(session, sql).materializedRows.map { it.toString() }.sorted()
-
-    private fun remoteSql(session: Session, sql: String): String {
-        val execution = getDistributedQueryRunner().executeWithPlan(session, sql)
-        val marker = DorisRemoteQueryModifier.marker(execution.queryId().toString())
-        return DorisTestCluster.awaitAuditLogStatements(marker, 60_000).single { it.contains("p5_tz") }
-    }
-
-    // --- item 1: parameter-binding zone matrix ---
 
     @Test
     fun testPushedTemporalLiteralsAreZoneIndependent() {
@@ -103,24 +85,25 @@ class TestDorisTimezoneAudit : AbstractTestQueryFramework() {
 
     @Test
     fun testJvmDefaultZoneDoesNotLeakIntoBinding() {
-        // A misconfigured driver-JVM default zone must not shift pushed literals (this is
-        // where java.sql.Date/Timestamp-based write functions would break; the connector
-        // uses LocalDate/LocalDateTime binding — proven here by mutation).
-        val sql = "SELECT id FROM doris.p5_tz.t WHERE dt = TIMESTAMP '2026-03-08 02:30:00' OR d = DATE '0000-01-01'"
-        val reference = rows(session, sql)
+        val predicates = listOf("dt = TIMESTAMP '2026-03-08 02:30:00'", "d = DATE '0000-01-01'")
+        val references = predicates.associateWith { rows(fullyLocalSession(session), "SELECT id FROM doris.p5_tz.t WHERE $it") }
         val original = TimeZone.getDefault()
         try {
-            // UTC+14 — the most extreme offset; any epoch-day/zone-shift bug moves a date
-            TimeZone.setDefault(TimeZone.getTimeZone("Pacific/Kiritimati"))
-            assertThat(rows(session, sql)).isEqualTo(reference)
-            TimeZone.setDefault(TimeZone.getTimeZone("America/New_York"))
-            assertThat(rows(session, sql)).isEqualTo(reference)
+            for (predicate in predicates) {
+                val sql = "SELECT id FROM doris.p5_tz.t WHERE $predicate"
+                val reference = references.getValue(predicate)
+                assertThat(reference).isNotEmpty()
+                for (zone in listOf("Pacific/Kiritimati", "America/New_York")) {
+                    TimeZone.setDefault(TimeZone.getTimeZone(zone))
+                    assertThat(query(sql)).describedAs("$predicate @ $zone").isFullyPushedDown()
+                    assertThat(rows(session, sql)).describedAs("$predicate @ $zone").isEqualTo(reference)
+                }
+            }
         } finally {
             TimeZone.setDefault(original)
         }
     }
 
-    // --- item 2: session-zone variation over the key datetime paths ---
 
     @Test
     fun testDatetimePathsAreSessionZoneInvariant() {
@@ -147,17 +130,16 @@ class TestDorisTimezoneAudit : AbstractTestQueryFramework() {
             "SELECT CAST(min(d) AS varchar), CAST(max(d) AS varchar) FROM doris.p5_tz.t",
         )
         for (sql in paths) {
-            val reference = computeActual(sessionInZone("UTC"), sql).materializedRows.map { it.toString() }.sorted()
+            val reference = rowsInQueryOrder(sessionInZone("UTC"), sql)
             for (zone in listOf("America/New_York", "Asia/Tokyo")) {
-                assertThat(rows(sessionInZone(zone), sql)).describedAs("$sql @ $zone").isEqualTo(reference)
+                assertThat(rowsInQueryOrder(sessionInZone(zone), sql)).describedAs("$sql @ $zone").isEqualTo(reference)
             }
             // non-UTC doris.time-zone leg (Tokyo catalog, same physical data)
             val viaTokyo = sql.replace("doris.p5_tz", "tz_tokyo.p5_tz")
-            assertThat(rows(session, viaTokyo)).describedAs(viaTokyo).isEqualTo(reference)
+            assertThat(rowsInQueryOrder(session, viaTokyo)).describedAs(viaTokyo).isEqualTo(reference)
         }
     }
 
-    // --- item 3: doris.time-zone canary, one representative per pushed family ---
 
     @Test
     fun testDorisTimeZoneCanaryAcrossEveryPushedFamily() {
@@ -189,9 +171,8 @@ class TestDorisTimezoneAudit : AbstractTestQueryFramework() {
 
     companion object {
         private fun provisionFixture() {
-            DorisTestCluster.executeAsRoot(
-                "DROP DATABASE IF EXISTS p5_tz",
-                "CREATE DATABASE p5_tz",
+            provisionFixture(
+                "p5_tz",
                 """
                 CREATE TABLE p5_tz.t (
                     id INT NOT NULL, n INT, d DATE, dt DATETIME, dt6 DATETIME(6),

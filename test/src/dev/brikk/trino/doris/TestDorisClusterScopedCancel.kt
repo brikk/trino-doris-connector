@@ -16,10 +16,9 @@ package dev.brikk.trino.doris
 import io.trino.spi.connector.ConnectorSession
 import io.trino.testing.TestingConnectorSession
 import org.assertj.core.api.Assertions.assertThat
+import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Test
-import java.lang.reflect.Proxy
 import java.sql.Connection
-import java.sql.DriverManager
 import java.sql.ResultSet
 import java.sql.SQLException
 import java.sql.Statement
@@ -28,17 +27,16 @@ import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.Semaphore
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 
-/**
- * Cluster-scoped cancel: pure-function pins, bookkeeping/failure-tolerance units, and the
- * live single-FE probe pins (trace-id behavior on 4.1.3, KILL-by-QueryId, unknown-query-id
- * classification). The cross-FE forwarding proof lives in `TestDorisMultiFeFailover`
- * (overlay-guarded); the end-to-end connector path in `TestDorisCancellation`.
- */
 class TestDorisClusterScopedCancel {
-    // --- pure functions ---
+    private val resources = DorisCancelTestResources()
+
+    @AfterEach
+    fun closeResources() = resources.close()
+
 
     @Test
     fun testQueryIdValidation() {
@@ -55,13 +53,13 @@ class TestDorisClusterScopedCancel {
     fun testRunningCancelCandidateClassification() {
         val marker = "trino_statement_id=00000000-0000-0000-0000-000000000001"
         // running row carrying the marker: candidate
-        assertThat(DorisClusterScopedCancel.isRunningCancelCandidate("Query", "SELECT ... /*$marker*/", marker)).isTrue()
+        assertThat(DorisClusterScopedCancel.isRunningCancelCandidate("Query", "/*$marker*/ SELECT ...", marker)).isTrue()
         // idle pooled connections never match
-        assertThat(DorisClusterScopedCancel.isRunningCancelCandidate("Sleep", "SELECT ... /*$marker*/", marker)).isFalse()
+        assertThat(DorisClusterScopedCancel.isRunningCancelCandidate("Sleep", "/*$marker*/ SELECT ...", marker)).isFalse()
         // the helper's own statements never match
-        assertThat(DorisClusterScopedCancel.isRunningCancelCandidate("Query", "  show full processlist /*$marker*/", marker)).isFalse()
+        assertThat(DorisClusterScopedCancel.isRunningCancelCandidate("Query", "  /*$marker*/ show full processlist", marker)).isFalse()
         assertThat(
-            DorisClusterScopedCancel.isRunningCancelCandidate("Query", """  kill query "x" /*$marker*/""", marker),
+            DorisClusterScopedCancel.isRunningCancelCandidate("Query", """  /*$marker*/ kill query "x"""", marker),
         ).isFalse()
         // other queries' markers never match
         assertThat(
@@ -70,9 +68,32 @@ class TestDorisClusterScopedCancel {
         assertThat(DorisClusterScopedCancel.isRunningCancelCandidate("Query", "SELECT '$marker'", marker)).isFalse()
         assertThat(DorisClusterScopedCancel.isRunningCancelCandidate("Query", "SELECT 1 /*prefix_$marker*/", marker)).isFalse()
         assertThat(
-            DorisClusterScopedCancel.isRunningCancelCandidate("Query", "SELECT 'KILL QUERY', 'SHOW FULL PROCESSLIST' /*$marker*/", marker),
+            DorisClusterScopedCancel.isRunningCancelCandidate("Query", "/*$marker*/ SELECT 'KILL QUERY', 'SHOW FULL PROCESSLIST'", marker),
         ).isTrue()
         assertThat(DorisClusterScopedCancel.isRunningCancelCandidate("Query", null, marker)).isFalse()
+    }
+
+    @Test
+    fun testOnlyTheConnectorOwnedLeadingCommentIsACandidate() {
+        val marker = "trino_statement_id=00000000-0000-0000-0000-000000000001"
+        for (sql in listOf(
+            "SELECT '/*$marker*/'", "SELECT \"/*$marker*/\"", "SELECT `/*$marker*/`",
+            "SELECT 'escaped \\\' /*$marker*/'", "SELECT 'doubled '' /*$marker*/'",
+            "-- /*$marker*/\nSELECT 1", "# /*$marker*/\nSELECT 1", "/* audit /*$marker*/ */ SELECT 1",
+            "SELECT 1 /*$marker*/", "/*trino_statement_id=00000000-0000-0000-0000-000000000002*/ SELECT '/*$marker*/'",
+            "/*$marker*/", "/*$marker*/ ", "/*$marker*/SELECT 1",
+        )) {
+            assertThat(DorisClusterScopedCancel.isRunningCancelCandidate("Query", sql, marker)).describedAs(sql).isFalse()
+        }
+        assertThat(DorisClusterScopedCancel.isRunningCancelCandidate(null, "/*$marker*/ SELECT 1", marker)).isFalse()
+        assertThat(DorisClusterScopedCancel.isRunningCancelCandidate("Query", "/*bad*/ SELECT 1", "bad")).isFalse()
+        for (sql in listOf(
+            "/*$marker*/ SELECT 1", " \n/*$marker*/ SELECT 'O\\'Reilly', '/*not_a_token*/'",
+            "/*$marker*/ /* user-configured tracing comment */ SELECT 1 /*trino_query_id=q*/",
+            "/*$marker*/ WITH t AS (SELECT 1) SELECT * FROM t",
+        )) {
+            assertThat(DorisClusterScopedCancel.isRunningCancelCandidate("Query", sql, marker)).describedAs(sql).isTrue()
+        }
     }
 
     @Test
@@ -90,7 +111,6 @@ class TestDorisClusterScopedCancel {
         assertThat(DorisClusterScopedCancel.isUnknownQueryId(null)).isFalse()
     }
 
-    // --- bookkeeping + failure tolerance ---
 
     @Test
     fun testHelperFailureNeverPropagatesAndEachCallDispatches() {
@@ -99,25 +119,23 @@ class TestDorisClusterScopedCancel {
             attempted.countDown()
             throw SQLException("no cluster reachable")
         }
-        val cancel = DorisClusterScopedCancel(failingFactory, enabled = true)
+        val cancel = resources.newCancel(failingFactory, requestSlots = Semaphore(2))
         val marker = "trino_statement_id=${UUID.randomUUID()}"
-        val before = DorisClusterScopedCancel.killsDispatched.get()
         // No registry or in-flight deduplication: the wrapper owns dispatch-once behavior.
         repeat(2) { cancel.cancel(SESSION, marker) { true } }
-        assertThat(DorisClusterScopedCancel.killsDispatched.get()).isEqualTo(before + 2)
+        assertThat(cancel.stats.killsDispatched.get()).isEqualTo(2)
         assertThat(attempted.await(5, TimeUnit.SECONDS)).isTrue()
     }
 
     @Test
     fun testDisabledDoesNothing() {
-        val cancel = DorisClusterScopedCancel({ _, _ -> throw AssertionError("must not open") }, enabled = false)
-        val before = DorisClusterScopedCancel.killsDispatched.get()
+        val cancel = resources.newCancel({ _, _ -> throw AssertionError("must not open") }, enabled = false)
         cancel.cancel(SESSION, "trino_statement_id=${UUID.randomUUID()}") { throw AssertionError("must not read execution state") }
-        assertThat(DorisClusterScopedCancel.killsDispatched.get()).isEqualTo(before)
+        assertThat(cancel.stats.killsDispatched.get()).isZero()
     }
 
     @Test
-    @Suppress("LongMethod", "CyclomaticComplexMethod", "NestedBlockDepth", "ThrowsCount") // Strict fake-JDBC script with its assertions.
+    @Suppress("NestedBlockDepth", "ThrowsCount") // Strict fake-JDBC script with its assertions.
     fun testProductionHelperRetriesEmptyAndUnassignedRowsUntilReleased() {
         val marker = "trino_statement_id=${UUID.randomUUID()}"
         val queryId = "ce96d055444242d1-a5a580d0c15a4c40"
@@ -127,7 +145,7 @@ class TestDorisClusterScopedCancel {
         )
         val scanCount = AtomicInteger()
         val finished = AtomicBoolean()
-        val closed = CountDownLatch(1)
+        val closed = CountDownLatch(scans.size)
         val events = CopyOnWriteArrayList<String>()
         val sql = CopyOnWriteArrayList<String>()
         val statement = jdbcProxy(Statement::class.java) { method, args ->
@@ -140,13 +158,15 @@ class TestDorisClusterScopedCancel {
                     // Completion DURING an empty scan must not terminate that iteration.
                     // Finished execution can still leave visible, as-yet-unkillable server rows.
                     if (scan == 1) finished.set(true)
-                    val rows = scans[scan]
+                    // Always include an unrelated audit-search row with the exact
+                    // comment inside a literal. The real helper must never kill it.
+                    val rows = scans[scan] + "deadbeef-badc0ffee"
                     var row = -1
                     jdbcProxy(ResultSet::class.java) { operation, columns ->
                         when (operation) {
                             "next" -> ++row < rows.size
                             "getString" -> when (columns[0]) {
-                                "Info" -> "SELECT sleep(30) /*$marker*/"
+                                "Info" -> if (row == rows.lastIndex) "SELECT '/*$marker*/'" else "/*$marker*/ SELECT sleep(30)"
                                 "Command" -> "Query"
                                 "QueryId" -> rows[row]
                                 else -> throw AssertionError("unexpected column: ${columns[0]}")
@@ -169,33 +189,29 @@ class TestDorisClusterScopedCancel {
             }
         }
 
-        DorisClusterScopedCancel({ _, _ -> connection }, enabled = true).cancel(SESSION, marker) {
+        resources.newCancel({ _, _ -> connection }).cancel(SESSION, marker) {
             finished.get().also { events.add("finished $it") }
         }
 
         assertThat(closed.await(10, TimeUnit.SECONDS)).describedAs("production helper released its connection").isTrue()
         assertThat(scanCount.get()).isEqualTo(scans.size)
         assertThat(events).containsExactlyElementsOf(scans.indices.flatMap { listOf("finished ${it >= 2}", "scan $it") })
-        assertThat(sql).containsExactly(
-            "SET fetch_all_fe_for_system_table = true",
-            "SHOW FULL PROCESSLIST", "SHOW FULL PROCESSLIST", "SHOW FULL PROCESSLIST",
-            "SHOW FULL PROCESSLIST", "SHOW FULL PROCESSLIST",
-            "SHOW FULL PROCESSLIST", "SHOW FULL PROCESSLIST",
-            "SHOW FULL PROCESSLIST", """KILL QUERY "$queryId"""",
-            "SHOW FULL PROCESSLIST", """KILL QUERY "$queryId"""",
-            "SHOW FULL PROCESSLIST",
-        )
+        val expectedSql = scans.flatMap { rows ->
+            listOf("SET fetch_all_fe_for_system_table = true", "SHOW FULL PROCESSLIST") +
+                rows.filter(DorisClusterScopedCancel::isValidQueryId).map { """KILL QUERY "$it"""" }
+        }
+        assertThat(sql).containsExactlyElementsOf(expectedSql)
     }
 
-    // --- live probe pins (single-FE cluster) ---
 
     @Test
-    @Suppress("LongMethod", "CyclomaticComplexMethod", "NestedBlockDepth") // One live probe, including failure-path cleanup.
+    @Suppress("NestedBlockDepth") // One live probe, including failure-path cleanup.
     fun testProductionHelperCancelsOnlyItsStatementAndRepeatIsHarmless() {
         val queryMarker = "trino_query_id=${SESSION.queryId}"
         val markers = List(2) { "trino_statement_id=${UUID.randomUUID()}" }
         val helpersClosed = CountDownLatch(2)
-        val cancel = DorisClusterScopedCancel(
+        val slots = Semaphore(2)
+        val cancel = resources.newCancel(
             DorisCancelConnectionFactory { _, _ ->
                 val connection = openRoot()
                 object : Connection by connection {
@@ -209,13 +225,14 @@ class TestDorisClusterScopedCancel {
                 }
             },
             enabled = true,
+            requestSlots = slots,
         )
         val pool = Executors.newFixedThreadPool(2)
         val victims = markers.map { marker ->
             pool.submit<String> {
                 runCatching {
                     openRoot().use { connection ->
-                        connection.createStatement().use { it.execute("SELECT sleep(30) /*$queryMarker*/ /*$marker*/") }
+                        connection.createStatement().use { it.execute("/*$marker*/ SELECT sleep(30) /*$queryMarker*/") }
                     }
                 }.exceptionOrNull()?.message ?: "completed"
             }
@@ -240,7 +257,7 @@ class TestDorisClusterScopedCancel {
                     assertThat(queryIds).doesNotHaveDuplicates()
                     cancelOnce(0)
                     assertThat(victims[0].get(20, TimeUnit.SECONDS)).contains("cancel query by user")
-                    awaitTrue("helper A finished verifying release") { helpersClosed.count == 1L }
+                    awaitTrue("request A finished verifying release") { slots.availablePermits() == 2 }
                     assertThat(runningQueryIds(statement, markers[0])).isEmpty()
                     assertThat(runningQueryIds(statement, markers[1])).contains(queryIds[1])
                     assertThat(victims[1].isDone).describedAs("sibling with the same Trino query id remains live").isFalse()
@@ -256,6 +273,7 @@ class TestDorisClusterScopedCancel {
                     cancelOnce(1)
                     assertThat(victims[1].get(20, TimeUnit.SECONDS)).contains("cancel query by user")
                     assertThat(helpersClosed.await(20, TimeUnit.SECONDS)).isTrue()
+                    awaitTrue("both logical requests released admission") { slots.availablePermits() == 2 }
                     assertThat(runningQueryIds(statement, markers[1])).isEmpty()
                 }
             }
@@ -288,11 +306,7 @@ class TestDorisClusterScopedCancel {
 
     @Test
     fun testTraceIdKillBehaviorPin() {
-        // The reference implementation's production scar: KILL QUERY "<trace-id>" is a SILENT
-        // NO-OP on Doris 4.1.2. On 4.1.3 our probe found it WORKING (single- and cross-FE) —
-        // i.e. the behavior is VERSION-UNSTABLE, which is exactly why the connector kills by
-        // the processlist QueryId instead (works on both). This pin documents the 4.1.3 state;
-        // if it starts FAILING here, the no-op regressed and this comment gains a version note.
+        // Trace-id cancellation is version-dependent; the connector uses processlist QueryIds instead.
         val pool = Executors.newSingleThreadExecutor()
         val victim = pool.submit<String> {
             runCatching {
@@ -313,7 +327,6 @@ class TestDorisClusterScopedCancel {
                                 .any { it.contains("csc_trace_pin") }
                         }
                     }
-                    // returns OK on 4.1.3 (and actually kills; on 4.1.2 it silently did NOT)
                     statement.execute("""KILL QUERY "cscpin_trace"""")
                     val outcome = victim.get(30, TimeUnit.SECONDS)
                     assertThat(outcome).contains("cancel query by user")
@@ -327,12 +340,7 @@ class TestDorisClusterScopedCancel {
     companion object {
         private val SESSION: ConnectorSession = TestingConnectorSession.builder().build()
 
-        private fun openRoot(): Connection = DriverManager.getConnection("${DorisQueryRunner.JDBC_URL}/?user=root")
-
-        private fun <T> jdbcProxy(type: Class<T>, handler: (String, Array<out Any?>) -> Any?): T =
-            type.cast(Proxy.newProxyInstance(type.classLoader, arrayOf(type)) { _, method, args ->
-                handler(method.name, args ?: emptyArray())
-            })
+        private fun openRoot(): Connection = DorisTestCluster.openRootConnection()
 
         private fun awaitTrue(description: String = "condition", condition: () -> Boolean) {
             val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(30)

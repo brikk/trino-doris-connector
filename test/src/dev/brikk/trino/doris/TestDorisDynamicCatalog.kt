@@ -13,32 +13,18 @@
  */
 package dev.brikk.trino.doris
 
+import io.airlift.units.Duration
 import io.trino.testing.AbstractTestQueryFramework
 import io.trino.testing.QueryRunner
 import org.assertj.core.api.Assertions.assertThat
-import org.junit.jupiter.api.MethodOrderer
-import org.junit.jupiter.api.Order
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.TestInstance
-import org.junit.jupiter.api.TestMethodOrder
 
-/**
- * Dynamic catalog management (https://trino.io/docs/current/sql/create-catalog.html):
- * `CREATE CATALOG ... USING doris WITH (...)` must behave identically to a statically
- * configured catalog. Test recipe follows upstream 483 `TestDynamicCatalogs`:
- * `TestingTrinoServer`/`DistributedQueryRunner` run with dynamic catalog management and an
- * in-memory catalog store BY DEFAULT — no extra coordinator properties needed in tests. (A
- * real deployment needs `catalog.management=dynamic` in the coordinator+worker config.)
- *
- * NO static `doris` catalog is created here — everything goes through SQL.
- */
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
-@TestMethodOrder(MethodOrderer.OrderAnnotation::class)
 class TestDorisDynamicCatalog : AbstractTestQueryFramework() {
     override fun createQueryRunner(): QueryRunner = DorisQueryRunner.dynamicCatalogBuilder().build()
 
     @Test
-    @Order(1)
     fun testCreateCatalogQueryAndDrop() {
         assertThat(computeActual("SHOW CATALOGS").onlyColumnAsSet).doesNotContain(DYNAMIC_CATALOG)
 
@@ -87,7 +73,6 @@ class TestDorisDynamicCatalog : AbstractTestQueryFramework() {
     }
 
     @Test
-    @Order(2)
     fun testCreateCatalogWithInvalidUrlFailsLoudlyAtCreation() {
         // DorisJdbcConfig's @AssertTrue validation runs when CREATE CATALOG instantiates the
         // connector — a bad URL fails the CREATE statement itself, loudly, as configuration
@@ -101,6 +86,14 @@ class TestDorisDynamicCatalog : AbstractTestQueryFramework() {
             """CREATE CATALOG doris_bad USING doris WITH ("connection-url" = 'jdbc:mysql://example:9030/somedb', "connection-user" = 'root')""",
             "Database (catalog) must not be specified",
         )
+        for (url in listOf("mysqlx://example:9030", "jdbc:mysql+srv://example.invalid/", "jdbc:mysql://example:9030/?DBNAME=hidden_db",
+            "jdbc:mysql://address=(host=example)(port=9030)(DBNAME=hidden_db)/",
+            "jdbc:mysql://example:9030/?propertiesTransform=java.lang.String", "jdbc:mysql://example:9030/?useConfigs=maxPerformance")) {
+            assertCreateCatalogFails(
+                "CREATE CATALOG doris_bad USING doris WITH (\"connection-url\"='$url',\"connection-user\"='root')",
+                if (url.contains("DBNAME")) "Database (catalog) must not be specified" else "Invalid JDBC URL for the Doris connector",
+            )
+        }
         // Missing required property also fails at CREATE.
         assertCreateCatalogFails(
             """CREATE CATALOG doris_bad USING doris WITH ("connection-user" = 'root')""",
@@ -116,7 +109,6 @@ class TestDorisDynamicCatalog : AbstractTestQueryFramework() {
     }
 
     @Test
-    @Order(3)
     fun testUnreachableHostSucceedsAtCreateAndFailsLoudAtFirstUse() {
         // Base JDBC opens connections LAZILY: a syntactically valid URL to an unreachable
         // host passes CREATE CATALOG (only config validation runs) and fails loudly on first
@@ -126,6 +118,47 @@ class TestDorisDynamicCatalog : AbstractTestQueryFramework() {
         )
         assertQueryFails("SHOW SCHEMAS FROM doris_unreachable", "(?s).*(refused|failure|link).*")
         assertUpdate("DROP CATALOG doris_unreachable")
+        // The base JDBC URL constraint excludes direct mysql+srv schemes; the
+        // driver's option form remains valid and does not resolve DNS at CREATE.
+        assertUpdate("CREATE CATALOG doris_srv USING doris WITH (\"connection-url\"='jdbc:mysql://does-not-exist.invalid/?dnsSrv=true'," +
+            "\"connection-user\"='root')")
+        assertUpdate("DROP CATALOG doris_srv")
+    }
+
+    @Test
+    fun testTimeoutRangesFailAtConfigurationAndNativeSessionRoundingAgrees() {
+        for ((property, value) in listOf(
+            "doris.connect-timeout" to "0ms", "doris.connect-timeout" to "0.1ms", "doris.connect-timeout" to "30d",
+            "doris.query-timeout" to "100ms", "doris.query-timeout" to "2147483648s",
+        )) {
+            val sql = "CREATE CATALOG doris_bad_timeout USING doris WITH (\"connection-url\"='${DorisQueryRunner.JDBC_URL}', " +
+                "\"connection-user\"='root',\"$property\"='$value')"
+            // Airlift reports setter invocation failures at the top level; the
+            // supported-range diagnostic is retained in the configuration cause.
+            org.assertj.core.api.Assertions.assertThatThrownBy { computeActual(sql) }
+                .describedAs(sql).rootCause().hasMessageContaining("must be between")
+        }
+        assertUpdate("CREATE CATALOG doris_timeout USING doris WITH (\"connection-url\"='${DorisQueryRunner.JDBC_URL}', " +
+            "\"connection-user\"='root',\"doris.query-timeout\"='1.1s')")
+        try {
+            assertThat(query("SELECT count(*) FROM doris_timeout.p0_probe.scalars_view")).matches("VALUES BIGINT '8'")
+            assertCreateCatalogFails("SET SESSION doris_timeout.query_timeout = '100ms'", "must be between")
+        } finally {
+            assertUpdate("DROP CATALOG doris_timeout")
+        }
+        for ((text, expected) in listOf("1.1s" to 2, "2147483647s" to Int.MAX_VALUE)) {
+            val props = DorisClientModule.connectionProperties(DorisConfig().setQueryTimeout(Duration.valueOf(text))).apply {
+                setProperty("user", "root")
+            }
+            DorisTestSafety.openSingle { requireNotNull(DorisReadDriver().connect(DorisQueryRunner.JDBC_URL, props)) }.use { connection ->
+                connection.createStatement().use { statement ->
+                    statement.executeQuery("SELECT @@query_timeout").use { rows ->
+                        assertThat(rows.next()).isTrue()
+                        assertThat(rows.getInt(1)).isEqualTo(expected)
+                    }
+                }
+            }
+        }
     }
 
     companion object {

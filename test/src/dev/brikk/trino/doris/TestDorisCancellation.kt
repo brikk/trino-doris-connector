@@ -18,35 +18,17 @@ import io.trino.testing.AbstractTestQueryFramework
 import io.trino.testing.QueryRunner
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.AfterAll
-import org.junit.jupiter.api.MethodOrderer
-import org.junit.jupiter.api.Order
 import org.junit.jupiter.api.Tag
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.TestInstance
-import org.junit.jupiter.api.TestMethodOrder
 import java.util.concurrent.Callable
 import java.util.concurrent.Executors
 import java.util.concurrent.Future
 import java.util.concurrent.TimeUnit
 
-/**
- * Live cancellation contract (ledger §D): killing the Trino query must promptly release the
- * Doris work. Evidence baseline: `Statement.cancel()` returns in ~209 ms, `KILL QUERY` clears
- * the FE processlist in ~18 ms, end-to-end via stock Trino the Doris scan vanished within ~1 s
- * (PROBE §8; STOCK). CI-safe bounds below; measured numbers are printed.
- *
- * The slow query streams `p1_cancel.big` (~500 MB on the wire) into a deliberately slow Trino
- * cross join, so the remote Doris statement stays genuinely RUNNING (send-blocked) — small
- * scans complete server-side into buffers immediately and are not cancellable-in-flight
- * (proven by the P1b timeout probe). Remote statements are identified in
- * `information_schema.processlist` by the `trino_query_id=` comment — no heuristics.
- *
- * Tests are ordered and clean up their Trino query via kill_query even on failure, so a
- * failing test cannot leave a CPU-burning zombie query that starves the next one.
- */
+// A large streamed scan keeps Doris send-blocked; small scans finish before cancellation can reach them.
 @Tag("cancellation")
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
-@TestMethodOrder(MethodOrderer.OrderAnnotation::class)
 class TestDorisCancellation : AbstractTestQueryFramework() {
     private val executor = Executors.newSingleThreadExecutor()
 
@@ -61,35 +43,22 @@ class TestDorisCancellation : AbstractTestQueryFramework() {
     }
 
     @Test
-    @Order(1)
     fun testKillQueryReleasesDorisWork() {
         val queryFuture = submitSlowQuery(getSession(), KILL_MARKER)
         try {
-            // 1. The Trino query is running and its remote statement is live on the Doris FE.
             val trinoQueryId = awaitRunningTrinoQueryId(KILL_MARKER)
             val remoteMarker = DorisRemoteQueryModifier.marker(trinoQueryId)
             val dorisQueryId = awaitRemoteStatement(remoteMarker)
 
-            // 2. Kill the Trino query; the Doris-side work must be RELEASED promptly.
-            val dispatchedBefore = DorisClusterScopedCancel.killsDispatched.get()
             val killStart = System.nanoTime()
             getQueryRunner().execute(
                 getSession(),
                 "CALL system.runtime.kill_query(query_id => '$trinoQueryId', message => 'p1b cancellation test')",
             )
             awaitDorisRelease(remoteMarker, dorisQueryId, CLEARANCE_BOUND_MILLIS)
-            // Path attribution is informational, NOT a contract: the release above is the
-            // contract, and it is legitimately satisfiable by either the cluster-scoped kill
-            // or the socket-abort belt (on starved 2-core CI the belt can win, or the engine
-            // can drive the abort late — CI 2026-07-19 timed out here at 15s while the release
-            // itself had already passed). The cluster-scoped mechanism has its own dedicated
-            // proof suite (TestDorisClusterScopedCancel + the overlay cross-FE tests).
-            val dispatchObserved = DorisClusterScopedCancel.killsDispatched.get() > dispatchedBefore
-            println("release path: cluster-scoped dispatch observed=$dispatchObserved (informational)")
             val clearanceMillis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - killStart)
-            println("Doris work released ${clearanceMillis}ms after kill_query (ledger §D baseline ~1s, bound ${CLEARANCE_BOUND_MILLIS}ms)")
+            println("Doris work released ${clearanceMillis}ms after kill_query (bound ${CLEARANCE_BOUND_MILLIS}ms)")
 
-            // 3. The Trino side failed with the kill message.
             val result = queryFuture.get(30, TimeUnit.SECONDS)
             assertThat(result.isFailure).isTrue()
             assertThat(result.exceptionOrNull()).hasMessageContaining("p1b cancellation test")
@@ -99,17 +68,8 @@ class TestDorisCancellation : AbstractTestQueryFramework() {
     }
 
     @Test
-    @Order(2)
     fun testQueryTimeoutSessionPropertyAbortsTheDorisQuery() {
-        // SET SESSION doris.query_timeout applies `SET query_timeout` server-side on the scan
-        // connection; the Doris timeout checker kills the still-running (send-blocked) query
-        // ("query is timeout, killed by timeout checker" — P1b probe; PROBE §8/§9). The
-        // 10s timeout keeps the statement observable on slow runners (first CI flake, run
-        // 29693604486). The RELEASE is asserted via the shared contract below — CI run
-        // 29694687854 proved the killed query's PROCESSLIST row can linger for minutes when
-        // the client side is too slow to touch the socket (the FE result receiver re-logs
-        // the cancel once per second until "Broken pipe"), so processlist emptiness alone is
-        // NOT the release signal; the timeout-checker kill in fe.log is.
+        // Ten seconds keeps the send-blocked statement observable before the timeout sweep.
         val session: Session = Session.builder(getSession())
             .setCatalogSessionProperty(DorisQueryRunner.CATALOG, DorisSessionProperties.QUERY_TIMEOUT, "10.00s")
             .build()
@@ -119,30 +79,16 @@ class TestDorisCancellation : AbstractTestQueryFramework() {
             val remoteMarker = DorisRemoteQueryModifier.marker(trinoQueryId)
             val start = System.nanoTime()
             val dorisQueryId = awaitRemoteStatement(remoteMarker)
-            // The Doris-side work must be RELEASED by the server-side timeout — that is the
-            // contract; the Trino-side failure propagates later, whenever the stalled scan
-            // next reads from the killed connection.
-            awaitDorisRelease(remoteMarker, dorisQueryId, TIMEOUT_RELEASE_BOUND_MILLIS)
+            await("Doris timeout checker killed $dorisQueryId", TIMEOUT_RELEASE_BOUND_MILLIS) {
+                DorisTestCluster.feLogShowsQueryTimeout(dorisQueryId)
+            }
             val releaseMillis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - start)
             println("doris.query_timeout=10s released the Doris work after ${releaseMillis}ms (bound ${TIMEOUT_RELEASE_BOUND_MILLIS}ms)")
 
-            // Trino-side propagation is NOT part of the contract: the stalled cross-join can
-            // grind for minutes between socket reads on starved hardware (CI 2-core runner —
-            // TimeoutException on run a604c9e), so demanding NATURAL propagation timing is
-            // over-assertion. Report it when it happens fast (typical locally), otherwise
-            // actively terminate and prove there is NO HANG: the future must complete with
-            // either the server timeout error or the cleanup kill message.
-            val natural = runCatching { queryFuture.get(NATURAL_PROPAGATION_GRACE_MILLIS, TimeUnit.MILLISECONDS) }.getOrNull()
-            val result = if (natural != null) {
-                println("Trino side observed the server-side timeout naturally (fast propagation)")
-                natural
-            } else {
-                // active termination (kill only — the future must stay observable)
-                killRunningTrinoQueries(TIMEOUT_MARKER)
-                queryFuture.get(TRINO_FAILURE_BOUND_MILLIS, TimeUnit.MILLISECONDS)
-            }
+            // Backpressure delays the next socket read, so allow time for the server error to propagate.
+            val result = queryFuture.get(TRINO_FAILURE_BOUND_MILLIS, TimeUnit.MILLISECONDS)
             assertThat(result.isFailure).isTrue()
-            assertThat(result.exceptionOrNull()).hasMessageMatching("(?is).*(timeout|test cleanup|cancel).*")
+            assertThat(result.exceptionOrNull()).hasMessageMatching("(?is).*time(?:out|d? out).*")
         } finally {
             cleanUp(TIMEOUT_MARKER, queryFuture)
         }
@@ -192,15 +138,7 @@ class TestDorisCancellation : AbstractTestQueryFramework() {
         return dorisQueryId!!
     }
 
-    /**
-     * The release contract, structurally CI-safe: the Doris work is released when EITHER
-     * (a) no processlist row carries the marker any more (connection torn down — the strong,
-     * locally-typical signal), OR (b) fe.log carries the persistent cancellation evidence
-     * for the Doris query id (timeout-checker kill / cancel lines). (b) is required because
-     * a send-blocked connection whose CLIENT is stalled keeps its processlist row alive for
-     * minutes AFTER the query is killed (CI run 29694687854: checker killed at ~10s, row
-     * lingered until "Broken pipe" ~90s+ later) — the work is released, the socket is not.
-     */
+    // A send-blocked socket can retain its processlist row after Doris has cancelled the query.
     private fun awaitDorisRelease(remoteMarker: String, dorisQueryId: String, boundMillis: Long) {
         var releasedVia: String? = null
         await("Doris-side release of $remoteMarker (query $dorisQueryId)", boundMillis) {
@@ -248,8 +186,6 @@ class TestDorisCancellation : AbstractTestQueryFramework() {
         private const val TIMEOUT_RELEASE_BOUND_MILLIS = 90_000L
         private const val TRINO_FAILURE_BOUND_MILLIS = 120_000L
 
-        /** Grace for NATURAL server-error propagation before the test terminates actively. */
-        private const val NATURAL_PROPAGATION_GRACE_MILLIS = 10_000L
         private const val POLL_INTERVAL_MILLIS = 250L
         private const val BIG_ROWS = 1_001_000L
 

@@ -14,22 +14,40 @@
 package dev.brikk.trino.doris
 
 import java.sql.Connection
-import java.sql.DriverManager
 import java.util.concurrent.TimeUnit
 
-/**
- * Direct (non-Trino) access to the live compose cluster for fixtures, side-effect oracles,
- * `information_schema.processlist` polling, and the FE audit log — the proven observability
- * substrate for pushed remote SQL (ledger §E: `fe.audit.log` `Stmt=` is verbatim).
- */
 object DorisTestCluster {
+    const val GOLDEN_NATIVE_VERSION = "doris-4.1.5-release-917b20be838"
     private const val FE_CONTAINER = "trino-doris-fe"
     private const val AUDIT_LOG_PATH = "/opt/apache-doris/fe/log/fe.audit.log"
 
     fun openRootConnection(): Connection = openConnection("root")
 
+    /** Fail before using fixtures if a different FE/BE release is on the validation port. */
+    fun requireGoldenVersion() {
+        openRootConnection().use { connection ->
+            connection.createStatement().use { statement ->
+                for (sql in listOf("SHOW FRONTENDS", "SHOW BACKENDS")) {
+                    statement.executeQuery(sql).use { result ->
+                        requireGoldenNodes(result, sql)
+                    }
+                }
+            }
+        }
+    }
+
+    private fun requireGoldenNodes(result: java.sql.ResultSet, sql: String) {
+        var alive = 0
+        while (result.next()) {
+            val version = result.getString("Version")
+            check(version == GOLDEN_NATIVE_VERSION) { "$sql returned $version; expected $GOLDEN_NATIVE_VERSION" }
+            if (result.getBoolean("Alive")) alive++
+        }
+        check(alive > 0) { "$sql has no alive $GOLDEN_NATIVE_VERSION nodes" }
+    }
+
     fun openConnection(user: String): Connection =
-        DriverManager.getConnection("${DorisQueryRunner.JDBC_URL}/?user=$user")
+        DorisTestSafety.connectSingle("${DorisQueryRunner.JDBC_URL}/?user=$user")
 
     /** Scalar query oracle as root (side-effect checks, processlist polling). */
     fun queryScalar(sql: String): String? {
@@ -82,39 +100,25 @@ object DorisTestCluster {
         }
     }
 
-    /**
-     * PERSISTENT cancellation evidence in fe.log for a Doris query id: the timeout checker
-     * logs "query is timeout, killed by timeout checker" and every cancellation path logs
-     * "cancel" lines carrying the query id. This is the CI-proof release signal: on a slow
-     * client the killed query's PROCESSLIST row can linger for minutes (the FE result
-     * receiver stays stuck on the stalled socket, re-logging the cancel once per second —
-     * CI run 29694687854 evidence), while the fe.log line lands the moment the checker
-     * fires. Same docker-exec substrate as the audit-log helper.
-     */
-    fun feLogShowsCancellation(dorisQueryId: String): Boolean {
-        val process = ProcessBuilder(
-            "docker", "exec", FE_CONTAINER,
-            "sh", "-c",
-            "grep -a -F -- ${shellQuote(dorisQueryId)} /opt/apache-doris/fe/log/fe.log | grep -a -i -E 'killed by timeout checker|cancel' | head -1 || true",
-        ).redirectErrorStream(true).start()
-        val output = process.inputStream.bufferedReader().readText()
-        check(process.waitFor(30, TimeUnit.SECONDS)) { "docker exec grep timed out" }
-        return output.isNotBlank()
-    }
+    // A send-blocked client can retain its processlist row after server-side cancellation.
+    fun feLogShowsCancellation(dorisQueryId: String): Boolean =
+        logMatches("/opt/apache-doris/fe/log/fe.log", dorisQueryId).any {
+            it.contains("killed by timeout checker", ignoreCase = true) || it.contains("cancel", ignoreCase = true)
+        }
+
+    fun feLogShowsQueryTimeout(dorisQueryId: String): Boolean =
+        logMatches("/opt/apache-doris/fe/log/fe.log", dorisQueryId).any { it.contains("killed by timeout checker") }
 
     /**
      * Audit-log lines containing [marker] (e.g. the `trino_query_id=<id>` comment rendered by
      * [DorisRemoteQueryModifier]). The FE audit logger flushes asynchronously (~5s lag
      * observed), so callers poll via [awaitAuditLogStatements].
      */
-    fun auditLogStatements(marker: String): List<String> {
-        val process = ProcessBuilder(
-            "docker", "exec", FE_CONTAINER,
-            "sh", "-c", "grep -F -- ${shellQuote(marker)} $AUDIT_LOG_PATH || true",
-        ).redirectErrorStream(true).start()
-        val output = process.inputStream.bufferedReader().readText()
-        check(process.waitFor(30, TimeUnit.SECONDS)) { "docker exec grep timed out" }
-        return output.lines().filter { it.isNotBlank() }
+    fun auditLogStatements(marker: String): List<String> = logMatches(AUDIT_LOG_PATH, marker)
+
+    private fun logMatches(path: String, marker: String): List<String> {
+        DorisTestSafety.requireSingle()
+        return runTestProcess(listOf("docker", "exec", FE_CONTAINER, "grep", "-a", "-F", "--", marker, path)).grepMatches()
     }
 
     fun awaitAuditLogStatements(marker: String, timeoutMillis: Long): List<String> {
@@ -162,8 +166,6 @@ object DorisTestCluster {
             }
         }
     }
-
-    private fun shellQuote(value: String): String = "'" + value.replace("'", "'\\''") + "'"
 
     private const val POLL_INTERVAL_MILLIS = 250L
 }

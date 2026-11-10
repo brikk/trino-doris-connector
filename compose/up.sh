@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Bring up the ISOLATED stock Doris 4.1.4.1 connector validation cluster.
+# Bring up the ISOLATED stock Doris 4.1.5 connector validation cluster.
 #
 # Usage:
 #   ./up.sh            # stage runtime fe.conf, up FE+BE, wait for SELECT 1 + BE alive
@@ -33,7 +33,7 @@ cp "${HERE}/fe.conf" "${HERE}/.fe.conf.runtime"
 # the BE die before it can even open its log).
 cp "${HERE}/be.conf" "${HERE}/.be.conf.runtime"
 
-log "Starting stock Doris 4.1.4.1 FE + BE (project trino-doris-dev)…"
+log "Starting stock Doris 4.1.5 FE + BE (project trino-doris-dev)…"
 docker compose -f "${COMPOSE}" up -d
 
 log "Waiting for FE to accept SQL (SELECT 1 on 9030)…"
@@ -77,3 +77,4 @@ docker exec trino-doris-fe mysql -h127.0.0.1 -P9030 -uroot -e "
 
 log "Cluster is up. FE mysql: 127.0.0.1:9130 (root, no password) | HTTP: 127.0.0.1:8130"
 log "Tear down with: ./up.sh --down"
+log "Destructive fixture tests require explicit opt-in (repo root): DORIS_TEST_ALLOW_MUTATION=1 ./gradlew build"

@@ -28,36 +28,17 @@ import io.trino.spi.type.SmallintType
 import io.trino.spi.type.TinyintType
 import java.math.BigDecimal
 import java.sql.Connection
+import java.sql.ResultSet
+import java.sql.SQLException
 
 /**
- * Doris 4.1.3 statistics reader (PLAN P4 tail "remote statistics"; SR K12 pattern with the
- * SQL re-derived against live Doris — probe verdicts in `dev-docs/NOTES-p5-statistics.md`).
- *
- * Sources (all READ-only; the connector NEVER issues ANALYZE — Doris auto-analyze is on by
- * default and users manage manual ANALYZE themselves):
- * - Row count: `information_schema.tables.TABLE_ROWS` — tablet-report-fed, EXACT for OLAP
- *   tables once the report lands (~1 report interval of staleness after writes; `-1` for
- *   views), populated WITHOUT any ANALYZE.
- * - Column stats: `SHOW COLUMN CACHED STATS` — served from the FE stats cache, populated by
- *   auto/manual ANALYZE; per column: count / ndv / num_null / data_size / min / max.
- *
- * Fidelity guards (probe-proven):
- * - `count` from column stats is exact at analyze time and FRESHER than TABLE_ROWS right
- *   after a load (TABLE_ROWS lags one tablet report, reading 0 on a just-loaded table) —
- *   the row-count estimate takes the MAX of the two sources.
- * - `ndv` is a sketch and can OVERSHOOT the row count (probed: 1006 distinct over 1000
- *   rows) — capped at the non-null row count.
- * - min/max RANGES are fed to the optimizer only for numeric families whose Doris text is
- *   the plain numeric value (integers, LARGEINT, DECIMAL, FLOAT/DOUBLE) and only when both
- *   ends parse FINITE — the probe showed `NaN` / `∞` / quoted text renderings for
- *   float/double extremes and temporal/string/IP columns, none of which may reach Trino as
- *   exact values. Temporal min/max are deliberately skipped (their stats-representation
- *   contract is unproven); ndv/nulls are still supplied for every analyzed column.
+ * Row counts come from `information_schema.tables.TABLE_ROWS`, column statistics from
+ * `SHOW COLUMN CACHED STATS`. The connector never runs ANALYZE, which writes to Doris; column
+ * statistics exist only after Doris auto-analyze or a user's ANALYZE.
  */
 internal class DorisTableStatisticsReader(
     private val quote: (String) -> String,
 ) {
-    /** One `SHOW COLUMN CACHED STATS` row, text fields verbatim. */
     private data class ColumnStatsRow(
         val count: Double?,
         val ndv: Double?,
@@ -76,12 +57,12 @@ internal class DorisTableStatisticsReader(
         val tableRows = readTableRows(connection, remoteSchema, remoteTable)
         val columnStats = readColumnStats(connection, remoteSchema, remoteTable)
 
+        // TABLE_ROWS lags a tablet report behind loads, so the larger of the two counts is used.
         val statsRowCount = columnStats.values.mapNotNull { it.count }.maxOrNull()
         val rowCount = listOfNotNull(tableRows?.toDouble(), statsRowCount).maxOrNull()
         if (rowCount == null || rowCount <= 0) {
-            // 0 is indistinguishable from tablet-report lag on a just-loaded table (probed:
-            // TABLE_ROWS reads 0 for ~1 report interval after INSERT) — feeding an exact 0
-            // would mislead the optimizer far worse than unknown, so both degrade to unknown.
+            // TABLE_ROWS reads 0 until the first tablet report after a load; an exact 0 would
+            // mislead the optimizer more than an unknown count.
             return TableStatistics.empty()
         }
 
@@ -93,7 +74,7 @@ internal class DorisTableStatisticsReader(
         return builder.build()
     }
 
-    /** `TABLE_ROWS` (tablet-report-fed); null when absent or the `-1` view marker. */
+    /** Null when absent or `-1`, which Doris reports for views. */
     private fun readTableRows(connection: Connection, remoteSchema: String, remoteTable: String): Long? {
         connection.prepareStatement(TABLE_ROWS_QUERY).use { statement ->
             statement.setString(1, remoteSchema)
@@ -108,39 +89,40 @@ internal class DorisTableStatisticsReader(
         }
     }
 
-    /** `SHOW COLUMN CACHED STATS` keyed by column name; empty when never analyzed (or a view). */
     private fun readColumnStats(connection: Connection, remoteSchema: String, remoteTable: String): Map<String, ColumnStatsRow> {
         val byColumn = LinkedHashMap<String, ColumnStatsRow>()
         val sql = "SHOW COLUMN CACHED STATS ${quote(remoteSchema)}.${quote(remoteTable)}"
-        runCatching {
+        try {
             connection.createStatement().use { statement ->
-                statement.executeQuery(sql).use { resultSet ->
-                    while (resultSet.next()) {
-                        // SHOW emits separate visible-index rows in unspecified order. The
-                        // base index name is the remote table name, including after rename.
-                        val name = resultSet.getString("column_name")
-                        if (name == null || resultSet.getString("index_name") != remoteTable) {
-                            continue
-                        }
-                        byColumn.putIfAbsent(
-                            name,
-                            ColumnStatsRow(
-                                count = resultSet.getString("count")?.toDoubleOrNull(),
-                                ndv = resultSet.getString("ndv")?.toDoubleOrNull(),
-                                numNull = resultSet.getString("num_null")?.toDoubleOrNull(),
-                                dataSize = resultSet.getString("data_size")?.toDoubleOrNull(),
-                                min = resultSet.getString("min"),
-                                max = resultSet.getString("max"),
-                            ),
-                        )
-                    }
-                }
+                statement.executeQuery(sql).use { resultSet -> collectBaseIndexStats(resultSet, remoteTable, byColumn) }
             }
-        }.onFailure { e ->
-            // e.g. views — column stats simply unavailable; row count may still be usable
+        } catch (e: SQLException) {
+            // e.g. a view; the row count may still be usable
             log.debug("SHOW COLUMN CACHED STATS failed for %s.%s: %s", remoteSchema, remoteTable, e.message)
         }
         return byColumn
+    }
+
+    private fun collectBaseIndexStats(resultSet: ResultSet, remoteTable: String, byColumn: MutableMap<String, ColumnStatsRow>) {
+        while (resultSet.next()) {
+            // SHOW emits separate visible-index rows in unspecified order. The
+            // base index name is the remote table name, including after rename.
+            val name = resultSet.getString("column_name")
+            if (name == null || resultSet.getString("index_name") != remoteTable) {
+                continue
+            }
+            byColumn.putIfAbsent(
+                name,
+                ColumnStatsRow(
+                    count = resultSet.getString("count")?.toDoubleOrNull(),
+                    ndv = resultSet.getString("ndv")?.toDoubleOrNull(),
+                    numNull = resultSet.getString("num_null")?.toDoubleOrNull(),
+                    dataSize = resultSet.getString("data_size")?.toDoubleOrNull(),
+                    min = resultSet.getString("min"),
+                    max = resultSet.getString("max"),
+                ),
+            )
+        }
     }
 
     private fun toColumnStatistics(column: JdbcColumnHandle, stats: ColumnStatsRow, rowCount: Double): ColumnStatistics {
@@ -156,7 +138,7 @@ internal class DorisTableStatisticsReader(
             builder.setNullsFraction(Estimate.of(nullsFraction))
         }
         if (stats.ndv != null) {
-            // the NDV sketch can overshoot the row count (probe: 1006 over 1000 rows)
+            // the NDV sketch can exceed the row count
             val nonNullRows = rowCount * (1.0 - (nullsFraction ?: 0.0))
             builder.setDistinctValuesCount(Estimate.of(stats.ndv.coerceAtMost(nonNullRows)))
         }
@@ -168,8 +150,8 @@ internal class DorisTableStatisticsReader(
     }
 
     /**
-     * min/max range for proven-plain-numeric families only; anything unparseable or
-     * non-finite (`NaN`, `∞`, quoted temporals/strings/IPs) yields no range.
+     * Only numeric types get a range: Doris renders temporal, string and IP min/max as quoted
+     * text, and float extremes as `NaN` or `∞`, none of which can be fed to Trino as values.
      */
     private fun numericRange(column: JdbcColumnHandle, stats: ColumnStatsRow): DoubleRange? {
         when (column.columnType) {
@@ -190,10 +172,13 @@ internal class DorisTableStatisticsReader(
         if (text.isNullOrEmpty() || text.equals("null", ignoreCase = true)) {
             return null
         }
-        // BigDecimal accepts every plain numeric rendering Doris emits for the allowed
-        // families (incl. LARGEINT/DECIMAL(76) extremes) and REJECTS NaN/Infinity/∞/quoted
-        // text — exactly the fail-closed contract we want.
-        val value = runCatching { BigDecimal(text).toDouble() }.getOrNull() ?: return null
+        // BigDecimal accepts every plain number Doris prints, including LARGEINT and DECIMAL(76)
+        // extremes, and rejects NaN, Infinity, ∞ and quoted text.
+        val value = try {
+            BigDecimal(text).toDouble()
+        } catch (e: NumberFormatException) {
+            return null
+        }
         return if (value.isFinite()) value else null
     }
 

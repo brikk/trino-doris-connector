@@ -39,15 +39,9 @@ import java.math.BigInteger
 import java.time.LocalDate
 import java.time.LocalDateTime
 
-/**
- * Decoder unit tests over the spike report's fixture classes — wire texts are the VERBATIM
- * `getString()` values from `REPORT-array-wire-decoder-spike.md` §3, and the malformed
- * battery is §5 (12/12 must fail loud with wire-offset info). No cluster needed.
- */
 class TestDorisArrayWireDecoder {
     private val ipAddressType = TESTING_TYPE_MANAGER.getType(io.trino.spi.type.TypeDescriptor("ipaddress"))
 
-    // --- F1: empty vs NULL element vs (SQL NULL handled by caller) ---
 
     @Test
     fun testIntArraysWithNullsAndEmpty() {
@@ -66,7 +60,6 @@ class TestDorisArrayWireDecoder {
             .containsExactly(Long.MIN_VALUE, Long.MAX_VALUE)
     }
 
-    // --- LARGEINT: exact 128-bit, fail loud out of DECIMAL(38,0) (spike §7.4) ---
 
     @Test
     fun testLargeintExactAndFailLoudOutOfDecimal38() {
@@ -82,7 +75,6 @@ class TestDorisArrayWireDecoder {
             .hasMessageContaining("out of DECIMAL(38, 0) range")
     }
 
-    // --- DECIMAL: trailing zeros / scale preserved, no double round-trip (spike F2) ---
 
     @Test
     fun testDecimalScalePreserved() {
@@ -100,7 +92,6 @@ class TestDorisArrayWireDecoder {
             .hasMessageContaining("does not fit scale")
     }
 
-    // --- BOOLEAN: bare 1/0, never true/false (spike §2) ---
 
     @Test
     fun testBooleanElements() {
@@ -113,7 +104,6 @@ class TestDorisArrayWireDecoder {
             .hasMessageContaining("BOOLEAN element is not 1/0")
     }
 
-    // --- FLOAT/DOUBLE: value-exact; F3 boundary surfaces Infinity faithfully ---
 
     @Test
     fun testFloatAndDoubleElements() {
@@ -131,7 +121,6 @@ class TestDorisArrayWireDecoder {
             .containsExactly(2.718281828459045, Double.POSITIVE_INFINITY, Double.NEGATIVE_INFINITY, Double.NaN)
     }
 
-    // --- DATE / DATETIME: quoted, edges, microseconds ---
 
     @Test
     fun testDateElements() {
@@ -162,25 +151,29 @@ class TestDorisArrayWireDecoder {
             .hasMessageContaining("does not fit")
     }
 
-    // --- IPV4/IPV6: quoted canonical text -> IPADDRESS slices ---
 
     @Test
     fun testIpAddressElements() {
         val element = IpAddressElement(ipAddressType, isV4 = true)
         val values = DorisArrayWireDecoder.decode("""["192.168.1.1", "0.0.0.0", "255.255.255.255"]""", element)
         assertThat(values).containsExactly(
-            DorisTypeMapping.ipAddressSlice("192.168.1.1"),
-            DorisTypeMapping.ipAddressSlice("0.0.0.0"),
-            DorisTypeMapping.ipAddressSlice("255.255.255.255"),
+            DorisIpAddress.parse("192.168.1.1"),
+            DorisIpAddress.parse("0.0.0.0"),
+            DorisIpAddress.parse("255.255.255.255"),
         )
-        assertThat(DorisArrayWireDecoder.decode("""["2001:db8::ff00:42:8329", "::", "fe80::1"]""", element))
-            .hasSize(3)
-        assertThatThrownBy { DorisArrayWireDecoder.decode("""["not-an-ip"]""", element) }
+        val ipv6 = IpAddressElement(ipAddressType, isV4 = false)
+        assertThat(DorisArrayWireDecoder.decode("""["2001:db8::ff00:42:8329", "::", "fe80::1"]""", ipv6))
+            .containsExactly(DorisIpAddress.parse("2001:db8::ff00:42:8329"), DorisIpAddress.parse("::"), DorisIpAddress.parse("fe80::1"))
+        assertThatThrownBy { DorisArrayWireDecoder.decode("""["127.0.0.1", "not-an-ip"]""", element) }
             .isInstanceOf(TrinoException::class.java)
-            .hasMessageContaining("Unreadable Doris IPV4/IPV6")
+            .hasMessageContaining("malformed IP address element 'not-an-ip'")
+            .hasMessageContaining("(at wire offset 14)")
+        // Guava accepts the syntax of a scoped address and then fails to resolve the interface.
+        assertThatThrownBy { DorisArrayWireDecoder.decode("""["fe80::1%no_such_interface"]""", ipv6) }
+            .isInstanceOf(TrinoException::class.java)
+            .hasMessageContaining("(at wire offset 1)")
     }
 
-    // --- nesting: >= 3 levels proven; arbitrary depth supported ---
 
     @Test
     fun testNestedArrays() {
@@ -197,7 +190,6 @@ class TestDorisArrayWireDecoder {
             .containsExactly(listOf(listOf(listOf(1L))), emptyList<Any?>())
     }
 
-    // --- spike §5 malformed battery: all fail loud with wire-offset info ---
 
     @Test
     fun testMalformedInputsFailLoudWithOffset() {
@@ -224,6 +216,18 @@ class TestDorisArrayWireDecoder {
     }
 
     @Test
+    fun testMalformedQuotedElementsReportTheirStartOffset() {
+        assertThatThrownBy { DorisArrayWireDecoder.decode("""["2021-01-01", "2021-13-99"]""", DateElement) }
+            .isInstanceOf(TrinoException::class.java)
+            .hasMessageContaining("malformed DATE element '2021-13-99'")
+            .hasMessageContaining("(at wire offset 15)")
+        assertThatThrownBy { DorisArrayWireDecoder.decode("""["2021-06-15 12:34:56.789012"]""", TimestampElement(createTimestampType(0))) }
+            .isInstanceOf(TrinoException::class.java)
+            .hasMessageContaining("does not fit")
+            .hasMessageContaining("(at wire offset 1)")
+    }
+
+    @Test
     fun testNullBoundaryGuard() {
         // 'null' as a prefix of a longer bare token is not a valid element
         assertThatThrownBy { DorisArrayWireDecoder.decode("[nullx]", IntegerElement) }
@@ -231,7 +235,6 @@ class TestDorisArrayWireDecoder {
             .hasMessageContaining("not a valid element")
     }
 
-    // --- Block building sanity (element carriers -> Trino Block, including nesting) ---
 
     @Test
     fun testElementsBlockConstruction() {

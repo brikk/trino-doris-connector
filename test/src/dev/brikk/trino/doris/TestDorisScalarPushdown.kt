@@ -1,0 +1,274 @@
+/*
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+package dev.brikk.trino.doris
+
+import io.trino.Session
+import io.trino.sql.planner.plan.FilterNode
+import io.trino.sql.planner.plan.ProjectNode
+import org.assertj.core.api.Assertions.assertThat
+import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.TestInstance
+
+@TestInstance(TestInstance.Lifecycle.PER_CLASS)
+class TestDorisScalarPushdown : DorisPushdownTest("b1_scalar", { provisionFixture() }) {
+
+    private val local: Session
+        get() = fullyLocalSession(session)
+
+    private fun modeSession(mode: String): Session = Session.builder(session)
+        .setCatalogSessionProperty(DorisQueryRunner.CATALOG, "string_pushdown_mode", mode)
+        .build()
+
+
+    @Test
+    fun testCaseAndIfAreEngineDeniedButCorrect() {
+        // Trino 483's ConnectorExpression grammar has NO conditional form: searched CASE
+        // decomposes into fragments, simple predicate CASEs fold into comparisons upstream,
+        // and IF desugars to CASE. The connector can never receive them (probed via the
+        // rejection log), so these stay local BY ENGINE CONTRACT — pinned here so a future
+        // Trino that starts translating conditionals shows up as a plan change.
+        for (projection in listOf(
+            "CASE WHEN n > 0 THEN 1 ELSE 2 END",
+            "CASE n WHEN 5 THEN 'five' ELSE 'other' END",
+            "IF(n > 0, 1, 2)",
+        )) {
+            val sql = "SELECT id, $projection FROM doris.b1_scalar.t"
+            assertThat(query(sql)).describedAs(projection).isNotFullyPushedDown(ProjectNode::class.java)
+            assertThat(rows(session, sql)).describedAs(projection).isEqualTo(rows(local, sql))
+        }
+    }
+
+
+    @Test
+    fun testCoalesceAndNullifProjectionsPush() {
+        for (projection in listOf(
+            "coalesce(n, 0)",
+            "coalesce(n, m, 0)",
+            "nullif(n, 5)",
+            "coalesce(nullif(n, 5), -1)", // composition
+            "coalesce(v, 'absent')", // varchar passthrough
+        )) {
+            assertPushedAndIdentical("SELECT id, $projection FROM doris.b1_scalar.t")
+        }
+        assertThat(remoteSql("SELECT coalesce(n, 0) FROM doris.b1_scalar.t")).contains("coalesce(`n`, ")
+        assertThat(remoteSql("SELECT coalesce(nullif(n, 5), -1) FROM doris.b1_scalar.t"))
+            .contains("coalesce(nullif(`n`, ")
+    }
+
+    @Test
+    fun testCoalesceNullifPredicatesAndGroupingPush() {
+        for (predicate in listOf(
+            "coalesce(n, 0) = 5",
+            "coalesce(n, 0) > 3",
+            "nullif(n, 5) IS NULL", // the equal-operands=NULL edge, as a predicate
+            "coalesce(nullif(n, 5), -1) <> -1",
+        )) {
+            assertPushedAndIdentical("SELECT id FROM doris.b1_scalar.t WHERE $predicate")
+        }
+        assertThat(remoteSql("SELECT id FROM doris.b1_scalar.t WHERE nullif(n, 5) IS NULL"))
+            .contains("(nullif(`n`, ").contains("IS NULL)")
+        // grouping key composition (exact-type keys)
+        assertPushedAndIdentical("SELECT coalesce(n, 0) AS g, count(*) FROM doris.b1_scalar.t GROUP BY 1")
+        assertThat(remoteSql("SELECT coalesce(n, 0) AS g, count(*) FROM doris.b1_scalar.t GROUP BY 1"))
+            .contains("coalesce(`n`, ").contains("GROUP BY")
+    }
+
+    @Test
+    fun testNullifSemanticsPins() {
+        // nullif(a,a)=NULL; NULL propagation; text nullif is byte-exact case-SENSITIVE
+        assertThat(computeActual("SELECT nullif(n, 5) FROM doris.b1_scalar.t WHERE id = 1").onlyValue).isNull()
+        assertThat(computeActual("SELECT coalesce(n, 0) FROM doris.b1_scalar.t WHERE id = 2").onlyValue).isEqualTo(0)
+        assertThat(DorisTestCluster.queryScalar("SELECT nullif('a', 'A')")).isEqualTo("a")
+        assertThat(computeActual("SELECT nullif('a', 'A')").onlyValue).isEqualTo("a")
+    }
+
+
+    @Test
+    fun testTemporalExtractionProjectionsPush() {
+        for (function in listOf("year", "month", "day", "hour", "minute", "second")) {
+            assertPushedAndIdentical("SELECT id, $function(dt6) FROM doris.b1_scalar.t")
+            assertPushedAndIdentical("SELECT $function(dt0) AS g, count(*) FROM doris.b1_scalar.t GROUP BY 1")
+        }
+        assertThat(remoteSql("SELECT year(dt6) AS g, count(*) FROM doris.b1_scalar.t GROUP BY 1"))
+            .contains("year(`dt6`)").contains("GROUP BY")
+        // edges: 0000-01-01 / 9999-12-31 rows are IN the fixture and covered by the
+        // differentials above; spot-pin the extreme values end-to-end
+        assertThat(computeActual("SELECT year(dt6) FROM doris.b1_scalar.t WHERE id = 3").onlyValue).isEqualTo(0L)
+        assertThat(computeActual("SELECT year(dt6) FROM doris.b1_scalar.t WHERE id = 4").onlyValue).isEqualTo(9999L)
+        // predicate position comes free via upstream unwrapping (year(dt)=2026 -> dt range)
+        assertThat(query("SELECT id FROM doris.b1_scalar.t WHERE year(dt6) = 2026")).isFullyPushedDown()
+        assertThat(remoteSql("SELECT id FROM doris.b1_scalar.t WHERE year(dt6) = 2026"))
+            .doesNotContain("year(").contains("`dt6` >=")
+    }
+
+
+    @Test
+    fun testCaseFoldStaysLocalWithModeContractRespected() {
+        for (shape in listOf(
+            "SELECT id, lower(v) FROM doris.b1_scalar.t",
+            "SELECT id, upper(v) FROM doris.b1_scalar.t",
+            "SELECT id FROM doris.b1_scalar.t WHERE lower(v) = 'abc'",
+        )) {
+            assertThat(rows(session, shape)).isEqualTo(rows(local, shape))
+        }
+        assertThat(remoteSql("SELECT id FROM doris.b1_scalar.t WHERE lower(v) = 'abc'"))
+            .doesNotContain("lower(", "upper(")
+        // NULL_ONLY: no string VALUE comparison pushes (mode contract) — projection of the
+        // transform alone is a value read and still pushes
+        val nullOnly = modeSession("NULL_ONLY")
+        assertThat(query(nullOnly, "SELECT id FROM doris.b1_scalar.t WHERE lower(v) = 'abc'"))
+            .isNotFullyPushedDown(FilterNode::class.java)
+        assertThat(rows(nullOnly, "SELECT id FROM doris.b1_scalar.t WHERE lower(v) = 'abc'"))
+            .isEqualTo(rows(session, "SELECT id FROM doris.b1_scalar.t WHERE lower(v) = 'abc'"))
+    }
+
+    @Test
+    fun testCaseFoldDivergenceBatteryPins() {
+        // Keep Trino expectations and explicitly pin the independently measured Doris
+        // differences. The corresponding functions are no longer admitted for pushdown.
+        val battery = mapOf(
+            "upper(U&'\\00B5')" to "\u039C", // micro -> GREEK CAPITAL MU (special mapping, BOTH)
+            "upper(U&'\\00DF')" to "ß", // no SS expansion on either engine
+            "lower(U&'\\0391\\03A3')" to "ασ", // no final-sigma contextual mapping on either
+            "lower(U&'\\212A')" to "k", // Kelvin sign
+            "upper(U&'\\017F')" to "S", // long s
+            "lower(U&'\\0130')" to "i", // dotted capital I
+        )
+        for ((expr, expected) in battery) {
+            assertThat(computeActual("SELECT $expr").onlyValue).describedAs("Trino $expr").isEqualTo(expected)
+        }
+        assertThat(DorisTestCluster.queryScalar("SELECT upper('\u00B5')")).isEqualTo("\u039C")
+        assertThat(DorisTestCluster.queryScalar("SELECT upper('ß')")).isEqualTo("SS")
+        assertThat(DorisTestCluster.queryScalar("SELECT lower('ΑΣ')")).isEqualTo("ας")
+        assertThat(DorisTestCluster.queryScalar("SELECT lower('\u212A')")).isEqualTo("k")
+        assertThat(DorisTestCluster.queryScalar("SELECT upper('\u017F')")).isEqualTo("S")
+        assertThat(DorisTestCluster.queryScalar("SELECT lower('\u0130')")).isEqualTo("i\u0307")
+    }
+
+
+    @Test
+    fun testLengthRendersCharLengthAndCountsCharacters() {
+        assertPushedAndIdentical("SELECT id, length(v) FROM doris.b1_scalar.t")
+        assertPushedAndIdentical("SELECT id FROM doris.b1_scalar.t WHERE length(v) = 3")
+        val statement = remoteSql("SELECT id FROM doris.b1_scalar.t WHERE length(v) = 3")
+        assertThat(statement).contains("char_length(`v`)").doesNotContain(" length(")
+        // multibyte pins: emoji=1, CJK=2, NFD=2 — matches Trino character counts exactly
+        assertThat(rows(session, "SELECT id, length(v) FROM doris.b1_scalar.t WHERE id IN (5, 6, 7)"))
+            .isEqualTo(rows(local, "SELECT id, length(v) FROM doris.b1_scalar.t WHERE id IN (5, 6, 7)"))
+        assertThat(computeActual("SELECT length(v) FROM doris.b1_scalar.t WHERE id = 5").onlyValue).isEqualTo(1L) // 😀
+        assertThat(DorisTestCluster.queryScalar("SELECT char_length(v) FROM b1_scalar.t WHERE id = 5")).isEqualTo("1")
+    }
+
+
+    @Test
+    fun testStartsWithPushesAsEscapedLikePrefix() {
+        for (predicate in listOf(
+            "starts_with(v, 'ab')",
+            "starts_with(v, 'a%b')", // metacharacter in the prefix must match LITERALLY
+            "starts_with(v, '')", // empty prefix: every non-NULL row
+        )) {
+            assertPushedAndIdentical("SELECT id FROM doris.b1_scalar.t WHERE $predicate")
+        }
+        assertThat(remoteSql("SELECT id FROM doris.b1_scalar.t WHERE starts_with(v, 'a%b')"))
+            .contains("""LIKE 'a\\%b%'""")
+        // exact rows: 'a%bc' matches the literal-% prefix; 'aXbc' must NOT
+        assertThat(rows(session, "SELECT id FROM doris.b1_scalar.t WHERE starts_with(v, 'a%b')"))
+            .isEqualTo(listOf("[8]"))
+        // NULL_ONLY: stays local (and correct)
+        val nullOnly = modeSession("NULL_ONLY")
+        assertThat(query(nullOnly, "SELECT id FROM doris.b1_scalar.t WHERE starts_with(v, 'ab')"))
+            .isNotFullyPushedDown(FilterNode::class.java)
+        assertThat(rows(nullOnly, "SELECT id FROM doris.b1_scalar.t WHERE starts_with(v, 'ab')"))
+            .isEqualTo(rows(session, "SELECT id FROM doris.b1_scalar.t WHERE starts_with(v, 'ab')"))
+    }
+
+    @Test
+    fun testDeniedScalarShapesStayLocalAndCorrect() {
+        for (sql in listOf(
+            // REAL/DOUBLE operands are outside the value-type set
+            "SELECT id, coalesce(d, 0e0) FROM doris.b1_scalar.t",
+            // CHAR operands excluded (trailing-space divergence)
+            "SELECT id, coalesce(c, 'x') FROM doris.b1_scalar.t",
+        )) {
+            assertThat(rows(session, sql)).describedAs(sql).isEqualTo(rows(local, sql))
+            assertThat(query(sql)).describedAs(sql).isNotFullyPushedDown(ProjectNode::class.java)
+        }
+        // non-constant starts_with prefix: stays a local filter
+        val nonConstant = "SELECT id FROM doris.b1_scalar.t WHERE starts_with(v, v)"
+        assertThat(rows(session, nonConstant)).isEqualTo(rows(local, nonConstant))
+        assertThat(query(nonConstant)).isNotFullyPushedDown(FilterNode::class.java)
+    }
+
+    @Test
+    fun testScalarOperationsOnTextMappingsStayLocal() {
+        for (mode in DorisStringPushdownMode.entries) {
+            val textSession = Session.builder(modeSession(mode.name))
+                .setCatalogSessionProperty(DorisQueryRunner.CATALOG, "unsupported_type_handling", "CONVERT_TO_VARCHAR")
+                .build()
+            val localTextSession = fullyLocalSession(textSession)
+            for ((table, column) in listOf(
+                "arrays" to "a_varchar50",
+                "mapstruct" to "m_si",
+                "mapstruct" to "s_ab",
+                "scalars" to "c_dec76_10",
+            )) {
+                for (expression in listOf("length($column)", "upper(coalesce($column, 'absent'))")) {
+                    val sql = "SELECT id, $expression FROM doris.p0_probe.$table"
+                    assertThat(rows(textSession, sql)).describedAs("$mode $sql").isEqualTo(rows(localTextSession, sql))
+                    assertThat(query(textSession, sql)).describedAs("$mode $sql").isNotFullyPushedDown(ProjectNode::class.java)
+                }
+                for (predicate in listOf("length($column) > 5", "nullif($column, 'absent') IS NULL")) {
+                    val sql = "SELECT id FROM doris.p0_probe.$table WHERE $predicate"
+                    assertThat(rows(textSession, sql)).describedAs("$mode $sql").isEqualTo(rows(localTextSession, sql))
+                    assertThat(query(textSession, sql)).describedAs("$mode $sql").isNotFullyPushedDown(FilterNode::class.java)
+                }
+            }
+        }
+    }
+
+    @Test
+    fun testScalarOperationsOnSyntheticGroupingKeysStillPush() {
+        assertPushedAndIdentical(
+            "SELECT coalesce(g, 'absent'), c FROM " +
+                "(SELECT coalesce(v, 'absent') AS g, count(*) AS c FROM doris.b1_scalar.t GROUP BY coalesce(v, 'absent')) " +
+                "WHERE length(g) > 2",
+        )
+    }
+
+    companion object {
+        private fun provisionFixture() {
+            provisionFixture(
+                "b1_scalar",
+                """
+                CREATE TABLE b1_scalar.t (
+                    id INT NOT NULL, n INT, m INT, v VARCHAR(50), c CHAR(10), d DOUBLE,
+                    dt0 DATETIME, dt6 DATETIME(6)
+                ) DUPLICATE KEY(id) DISTRIBUTED BY HASH(id) BUCKETS 1 PROPERTIES ("replication_num" = "1")
+                """.trimIndent(),
+                """
+                INSERT INTO b1_scalar.t VALUES
+                (1, 5, 10, 'abc', 'abc', 1.5, '2026-07-19 14:30:45', '2026-07-19 14:30:45.123456'),
+                (2, NULL, NULL, NULL, NULL, NULL, NULL, NULL),
+                (3, 0, 5, 'ABC', 'x', 0.5, '0000-01-01 00:00:00', '0000-01-01 00:00:00'),
+                (4, -7, NULL, 'abcd', 'y', -1.0, '9999-12-31 23:59:59', '9999-12-31 23:59:59.999999'),
+                (5, 1, 1, '😀', 'e', 2.0, '2026-01-01 00:00:00', '2026-01-01 00:00:00.000001'),
+                (6, 2, 2, '中文', 'f', 3.0, '2026-03-31 23:59:59', '2026-03-31 23:59:59.500000'),
+                (7, 3, 3, concat('e', unhex('CC81')), 'g', 4.0, '2026-06-15 06:07:08', '2026-06-15 06:07:08.999999'),
+                (8, 4, 4, 'a%bc', 'h', 5.0, '2026-11-01 01:30:00', '2026-11-01 01:30:00'),
+                (9, 5, 5, 'aXbc', 'i', 6.0, '2026-12-31 23:59:00', '2026-12-31 23:59:00')
+                """.trimIndent(),
+            )
+        }
+    }
+}

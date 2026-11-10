@@ -15,6 +15,7 @@
  */
 package dev.brikk.trino.doris
 
+import io.airlift.units.Duration
 import io.trino.plugin.base.mapping.DefaultIdentifierMapping
 import io.trino.plugin.jdbc.BaseJdbcConfig
 import io.trino.plugin.jdbc.ConnectionFactory
@@ -39,9 +40,7 @@ import io.trino.type.InternalTypeManager.TESTING_TYPE_MANAGER
 import org.assertj.core.api.Assertions.assertThat
 import org.assertj.core.api.Assertions.assertThatThrownBy
 import org.junit.jupiter.api.Test
-import java.lang.reflect.Proxy
 import java.sql.Connection
-import java.sql.DriverManager
 import java.sql.PreparedStatement
 import java.sql.ResultSet
 import java.sql.SQLException
@@ -58,7 +57,7 @@ import java.util.concurrent.TimeUnit.SECONDS
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 
-/** Trino 483 page-source lifecycle with controlled JDBC races and a live execute-phase proof. */
+/** Trino 484 page-source lifecycle with controlled JDBC races and a live execute-phase proof. */
 class TestDorisScanCancellation {
     @Test
     fun testLivePageSourceCloseCancelsBeforeFirstResult() {
@@ -70,12 +69,14 @@ class TestDorisScanCancellation {
         val client = DorisClient(
             BaseJdbcConfig(), config,
             ConnectionFactory {
-                DriverManager.getConnection("${DorisQueryRunner.JDBC_URL}/?user=root&connectTimeout=5000&socketTimeout=40000")
+                DorisTestSafety.connectSingle("${DorisQueryRunner.JDBC_URL}/?user=root&connectTimeout=5000&socketTimeout=40000")
             },
             DorisQueryBuilder(RemoteQueryModifier.NONE), TESTING_TYPE_MANAGER,
             DefaultIdentifierMapping(), RemoteQueryModifier.NONE,
             DorisCancelConnectionFactory { _, deadline ->
-                DorisCancelDriver(deadlineNanos = deadline).connect("${DorisQueryRunner.JDBC_URL}/?user=root", null)!!
+                DorisTestSafety.openSingle {
+                    DorisCancelDriver(deadlineNanos = deadline).connect("${DorisQueryRunner.JDBC_URL}/?user=root", null)!!
+                }
             },
         )
         val table = JdbcTableHandle(
@@ -91,9 +92,9 @@ class TestDorisScanCancellation {
                 assertThat(source.nextSourcePage).isNull()
                 awaitCondition("live execute-phase scan appears") { DorisTestCluster.runningStatements().any { it.contains(marker) } }
                 assertThat(source.isBlocked.isDone).describedAs("no result produced yet").isFalse()
-                val dispatched = DorisClusterScopedCancel.killsDispatched.get()
+                val dispatched = client.clusterScopedCancel.stats.killsDispatched.get()
                 closer.submit { source.close() }.get(TIMEOUT_SECONDS, SECONDS)
-                assertThat(DorisClusterScopedCancel.killsDispatched.get()).isEqualTo(dispatched + 1)
+                assertThat(client.clusterScopedCancel.stats.killsDispatched.get()).isEqualTo(dispatched + 1)
                 source.isBlocked.handle { _, _ -> null }.get(TIMEOUT_SECONDS, SECONDS)
                 assertThat(source.isBlocked.isCompletedExceptionally).isTrue()
                 awaitCondition("live Doris statement released") { DorisTestCluster.runningStatements().none { it.contains(marker) } }
@@ -115,13 +116,13 @@ class TestDorisScanCancellation {
             await(scan.executeEntered, "executeQuery entered")
             val execution = source.isBlocked
             assertThat(execution.isDone).isFalse()
-            val dispatched = DorisClusterScopedCancel.killsDispatched.get()
+            val dispatched = jdbc.client.clusterScopedCancel.stats.killsDispatched.get()
 
             jdbc.closeSource(source)
 
             assertThat(scan.rawCancels.get()).isZero()
             assertThat(scan.aborts.get()).isPositive()
-            assertThat(DorisClusterScopedCancel.killsDispatched.get()).isEqualTo(dispatched + 1)
+            assertThat(jdbc.client.clusterScopedCancel.stats.killsDispatched.get()).isEqualTo(dispatched + 1)
             // Connection.abort, not raw cancel/close or the helper's KILL, releases executeQuery.
             execution.handle { _, _ -> null }.get(TIMEOUT_SECONDS, SECONDS)
             assertThat(execution.isCompletedExceptionally).isTrue()
@@ -252,13 +253,13 @@ class TestDorisScanCancellation {
             assertThat(BIGINT.getLong(page.getBlock(0), 0)).isEqualTo(7L)
             assertThat(source.isFinished).isTrue()
             assertThat(scan.result.isAfterLast).isTrue()
-            val dispatched = DorisClusterScopedCancel.killsDispatched.get()
+            val dispatched = jdbc.client.clusterScopedCancel.stats.killsDispatched.get()
 
             jdbc.closeSource(source)
             jdbc.closeSource(source)
 
             // Dispatch counting is synchronous, unlike a racy absence-of-helper assertion.
-            assertThat(DorisClusterScopedCancel.killsDispatched.get()).isEqualTo(dispatched)
+            assertThat(jdbc.client.clusterScopedCancel.stats.killsDispatched.get()).isEqualTo(dispatched)
             assertThat(scan.rawCancels.get()).isZero()
             assertThat(scan.aborts.get()).isZero()
             assertThat(scan.resultClosed.get()).isTrue()
@@ -282,14 +283,28 @@ class TestDorisScanCancellation {
         }
     }
 
-    private class FakeJdbc : AutoCloseable {
+    @Test
+    fun testCatalogAndSessionTimeoutsUseTheSameScanNormalization() {
+        val config = DorisConfig().setQueryTimeout(Duration.valueOf("1.1s"))
+        for ((override, seconds) in listOf(null to 2, "3.1s" to 4, "2147483647s" to Int.MAX_VALUE)) {
+            FakeJdbc(config, override).use { jdbc ->
+                val scan = jdbc.scan()
+                jdbc.buildSql(scan)
+                assertThat(scan.sessionSql).containsExactly("SET query_timeout = $seconds")
+            }
+        }
+    }
+
+    private class FakeJdbc(
+        private val config: DorisConfig = DorisConfig().setClusterScopedCancel(true),
+        timeoutOverride: String? = null,
+    ) : AutoCloseable {
         val executor = Executors.newSingleThreadExecutor { Thread(it, "scan-test-execute").apply { isDaemon = true } }
         val closer = Executors.newSingleThreadExecutor { Thread(it, "scan-test-close").apply { isDaemon = true } }
-        private val config = DorisConfig().setClusterScopedCancel(true)
         val session = TestingConnectorSession.builder().setPropertyMetadata(
             DorisSessionProperties(config).sessionProperties +
                 JdbcMetadataSessionProperties(JdbcMetadataConfig(), Optional.empty()).sessionProperties,
-        ).build()
+        ).apply { if (timeoutOverride != null) setPropertyValues(mapOf("query_timeout" to timeoutOverride)) }.build()
         private val scans = CopyOnWriteArrayList<FakeScan>()
         private val pendingConnections = ConcurrentLinkedQueue<Connection>()
         private val sources = mutableListOf<JdbcPageSource>()
@@ -297,7 +312,7 @@ class TestDorisScanCancellation {
         val killedQueryIds = CopyOnWriteArrayList<String>()
         private val helperClosed = CountDownLatch(1)
         private val helperSql = CopyOnWriteArrayList<String>()
-        private val client = DorisClient(
+        val client = DorisClient(
             BaseJdbcConfig(), config,
             ConnectionFactory { pendingConnections.poll() ?: helperConnection() },
             DorisQueryBuilder(RemoteQueryModifier.NONE), TESTING_TYPE_MANAGER,
@@ -396,6 +411,7 @@ class TestDorisScanCancellation {
 
     private class FakeScan(val queryId: String) {
         lateinit var sql: String
+        val sessionSql = mutableListOf<String>()
         val parameters = mutableListOf<Pair<Int, Long>>()
         val executeEntered = CountDownLatch(1)
         val releaseExecute = CountDownLatch(1)
@@ -453,6 +469,13 @@ class TestDorisScanCancellation {
         val connection: Connection = jdbcProxy(Connection::class.java) { method, args ->
             when (method) {
                 "prepareStatement" -> { sql = args[0] as String; rawStatement }
+                "createStatement" -> jdbcProxy(Statement::class.java) { operation, values ->
+                    when (operation) {
+                        "execute" -> { sessionSql.add(values[0] as String); false }
+                        "close" -> null
+                        else -> error("Unexpected session setup call: $operation")
+                    }
+                }
                 "setReadOnly" -> null
                 "isClosed" -> connectionClosed.get()
                 "abort" -> {
@@ -494,6 +517,7 @@ class TestDorisScanCancellation {
             val matches = Regex("/\\*trino_statement_id=([0-9a-f-]+)\\*/").findAll(sql).toList()
             assertThat(matches).hasSize(1)
             val match = matches.single()
+            assertThat(match.range.first).describedAs("connector-owned token is the leading SQL comment").isZero()
             assertThat(UUID.fromString(match.groupValues[1]).toString()).isEqualTo(match.groupValues[1])
             return match.value
         }
@@ -510,14 +534,5 @@ class TestDorisScanCancellation {
             }
         }
 
-        private fun <T> jdbcProxy(type: Class<T>, handler: (String, Array<out Any?>) -> Any?): T =
-            type.cast(Proxy.newProxyInstance(type.classLoader, arrayOf(type)) { proxy, method, args ->
-                when (method.name) {
-                    "toString" -> "Fake${type.simpleName}"
-                    "hashCode" -> System.identityHashCode(proxy)
-                    "equals" -> proxy === args?.get(0)
-                    else -> handler(method.name, args ?: emptyArray())
-                }
-            })
     }
 }

@@ -13,18 +13,16 @@
  */
 package dev.brikk.trino.doris
 
-import io.trino.spi.TrinoException
+import io.trino.plugin.jdbc.JdbcColumnHandle
 import io.trino.spi.StandardErrorCode.GENERIC_INTERNAL_ERROR
+import io.trino.spi.TrinoException
+import io.trino.spi.type.VarcharType
 import java.util.Locale
 
 /**
- * Parsed form of a Doris `information_schema.columns.COLUMN_TYPE` string — the single
- * authoritative type source for this connector (ledger global rule 2: `getColumns` is
- * proven lossy, PROBE §1/Impl #1).
- *
- * Observed 4.1.3 examples: `tinyint(1)` (boolean), `tinyint(4)`, `int(11)`, `largeint`,
- * `decimalv3(38, 10)`, `datetime(6)`, `varchar(100)`, `string`, `array<int(11)>`,
- * `map<string,int(11)>`, `struct<int(11),string>`, `bitmap`, `hll`, `unknown` (agg_state).
+ * A parsed `information_schema.columns.COLUMN_TYPE`, such as `tinyint(1)` (BOOLEAN), `int(11)`,
+ * `decimalv3(38, 10)`, `datetime(6)`, `string`, `array<int(11)>`, `struct<int(11),string>` or
+ * `unknown` (AGG_STATE).
  */
 internal data class DorisColumnType(
     val baseName: String,
@@ -40,10 +38,8 @@ internal data class DorisColumnType(
             if (baseName.isEmpty()) {
                 throw TrinoException(GENERIC_INTERNAL_ERROR, "Malformed Doris COLUMN_TYPE: '$columnType'")
             }
-            // Parenthesized integer arguments apply only to scalar types (decimalv3(38, 10),
-            // varchar(100), datetime(6), tinyint(1), ...). Complex types (array<...>, map<...>,
-            // struct<...>) are dispatched on base name alone in P1a; their nested parens
-            // (e.g. struct<int(11),string>) are intentionally not parsed here.
+            // Only scalar types carry integer arguments. Complex types are identified by base
+            // name; the parentheses nested inside them are not parsed here.
             val arguments = if (baseEnd < lower.length && lower[baseEnd] == '(') {
                 parseArguments(lower, baseEnd, columnType)
             } else {
@@ -51,6 +47,17 @@ internal data class DorisColumnType(
             }
             return DorisColumnType(baseName, arguments, raw)
         }
+
+        /**
+         * True for a VARCHAR column backed by a Doris string type. Decimal256 and complex types
+         * rendered as text are also VARCHAR in Trino but do not compare or aggregate as strings.
+         */
+        fun isNativeString(column: JdbcColumnHandle): Boolean =
+            column.columnType is VarcharType && column.jdbcTypeHandle.jdbcTypeName()
+                .map { parse(it).baseName in NATIVE_STRING_TYPES }
+                .orElse(false)
+
+        private val NATIVE_STRING_TYPES = setOf("varchar", "string", "text")
 
         private fun parseArguments(lower: String, openParen: Int, columnType: String): List<Int> {
             val close = lower.indexOf(')', openParen)

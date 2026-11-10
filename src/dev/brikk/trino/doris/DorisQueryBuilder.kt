@@ -21,18 +21,12 @@ import io.trino.plugin.jdbc.logging.RemoteQueryModifier
 import io.trino.spi.connector.JoinCondition
 
 /**
- * The scan path applies its [RemoteQueryModifier] inside [DefaultQueryBuilder.prepareStatement]
- * (verified at 483 — NOT via `BaseJdbcClient.queryModifier`), and `RemoteQueryModifierModule`
- * binds the `RemoteQueryModifier` key non-optionally, so it cannot be rebound. This subclass is
- * the clean seam: it hands [DefaultQueryBuilder] the [DorisRemoteQueryModifier]-wrapped
- * modifier so every remote scan statement carries the Trino query id comment.
+ * Scans apply the [RemoteQueryModifier] given to [DefaultQueryBuilder], not
+ * `BaseJdbcClient.queryModifier`, and the modifier binding cannot be replaced, so the query-id
+ * comment is added here.
  *
- * Also overrides the join-condition rendering for [JoinCondition.Operator.IDENTICAL]
- * (Trino `IS NOT DISTINCT FROM`): the upstream default renders the `≡` placeholder (no
- * database accepts it) and Doris REJECTS the `IS NOT DISTINCT FROM` syntax outright —
- * Doris's null-safe equality operator is `<=>`, live-proven truth-table-identical
- * (`NULL<=>NULL`=1, `NULL<=>1`=0; joins match NULL keys to each other exactly like Trino;
- * `NOTES-p5-joins.md`).
+ * IS NOT DISTINCT FROM renders as Doris's `<=>`: the upstream default emits a `≡` placeholder,
+ * and Doris rejects the `IS NOT DISTINCT FROM` syntax.
  */
 class DorisQueryBuilder @Inject constructor(
     queryModifier: RemoteQueryModifier,

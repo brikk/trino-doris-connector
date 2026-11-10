@@ -51,6 +51,11 @@ class TestDorisReleaseCompatibility : AbstractTestQueryFramework() {
     }
 
     @Test
+    fun testGoldenNativeFeAndBeVersions() {
+        DorisTestCluster.requireGoldenVersion()
+    }
+
+    @Test
     fun testNullableOrCaseDoesNotCrashAndPreservesBranches() {
         // Doris #68401 (4.1.4.1): noncanonical nullable Boolean bytes could crash CASE.
         // Exercise both execution paths directly, then read a remote CASE view via Trino.

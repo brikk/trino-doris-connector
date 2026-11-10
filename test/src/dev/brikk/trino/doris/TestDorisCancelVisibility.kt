@@ -16,8 +16,8 @@ package dev.brikk.trino.doris
 import com.google.common.util.concurrent.MoreExecutors.directExecutor
 import io.trino.testing.TestingConnectorSession
 import org.assertj.core.api.Assertions.assertThat
+import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Test
-import java.lang.reflect.Proxy
 import java.sql.Connection
 import java.sql.PreparedStatement
 import java.sql.ResultSet
@@ -27,8 +27,17 @@ import java.util.logging.Handler
 import java.util.logging.Level
 import java.util.logging.LogRecord
 import java.util.logging.Logger
+import java.util.concurrent.Semaphore
+import java.util.concurrent.TimeUnit.SECONDS
+import java.util.concurrent.atomic.AtomicBoolean
 
+// Includes a live pin of Doris processlist visibility, independent of the connector.
 class TestDorisCancelVisibility {
+    private val resources = DorisCancelTestResources()
+
+    @AfterEach
+    fun closeResources() = resources.close()
+
     @Test
     fun testWarningIsOncePerConnectorAndCancellationStillRuns() {
         val warnings = mutableListOf<LogRecord>()
@@ -41,32 +50,36 @@ class TestDorisCancelVisibility {
         val oldLevel = logger.level
         logger.level = Level.ALL
         logger.addHandler(handler)
-        val marker = "trino_statement_id=visibility_test"
+        val marker = "trino_statement_id=00000000-0000-0000-0000-000000000001"
         val killed = mutableListOf<String>()
         var aborts = 0
         val session = TestingConnectorSession.builder().build()
         val failedSet = SQLException("access denied for session variable", "42000")
-        val factory = DorisCancelConnectionFactory { _, _ -> helper(marker, killed, failedSet) }
-        val cancel = DorisClusterScopedCancel(factory, enabled = true, executor = directExecutor())
+        val running = AtomicBoolean(true)
+        val slots = Semaphore(1)
+        val factory = DorisCancelConnectionFactory { _, _ -> helper(marker, killed, failedSet, running) }
+        val cancel = resources.newCancel(factory, executor = directExecutor(), requestSlots = slots)
         try {
             repeat(2) {
-                val result = proxy(ResultSet::class.java) { _, _ -> null }
-                val raw = proxy(PreparedStatement::class.java) { method, _ ->
+                running.set(true)
+                val result = jdbcProxy(ResultSet::class.java) { _, _ -> null }
+                val raw = jdbcProxy(PreparedStatement::class.java) { method, _ ->
                     when (method) {
                         "executeQuery" -> result
                         "close" -> null
                         else -> error("Unexpected scan call: $method")
                     }
                 }
-                val connection = proxy(Connection::class.java) { method, _ ->
+                val connection = jdbcProxy(Connection::class.java) { method, _ ->
                     check(method == "abort") { "Unexpected scan connection call: $method" }
                     aborts++
                     null
                 }
-                DorisPreparedStatement(raw, connection) { done -> cancel.cancel(session, marker, done) }.use {
+                DorisPreparedStatement(raw, connection) { answered, done -> cancel.cancel(session, marker, answered, done) }.use {
                     it.executeQuery()
                     it.cancel()
                 }
+                awaitRequest(slots)
             }
             assertThat(aborts).isEqualTo(2)
             assertThat(killed).hasSize(2)
@@ -74,10 +87,14 @@ class TestDorisCancelVisibility {
             assertThat(warnings.single().message).contains("fetch_all_fe_for_system_table", "best-effort", "once per connector")
             assertThat(warnings.single().thrown).isSameAs(failedSet)
             // A separate catalog must not have its warning suppressed by the first one.
-            DorisClusterScopedCancel(factory, enabled = true, executor = directExecutor()).cancel(session, marker) { true }
+            running.set(true)
+            resources.newCancel(factory, executor = directExecutor(), requestSlots = slots).cancel(session, marker) { true }
+            awaitRequest(slots)
             assertThat(warnings).hasSize(2)
-            DorisClusterScopedCancel({ _, _ -> helper(marker, killed, null) }, enabled = true, executor = directExecutor())
+            running.set(true)
+            resources.newCancel({ _, _ -> helper(marker, killed, null, running) }, executor = directExecutor(), requestSlots = slots)
                 .cancel(session, marker) { true }
+            awaitRequest(slots)
             assertThat(warnings).hasSize(2)
             assertThat(killed).hasSize(4)
         } finally {
@@ -101,10 +118,8 @@ class TestDorisCancelVisibility {
         }
     }
 
-    @Suppress("CyclomaticComplexMethod") // Strict JDBC script for both SET failure and successful kill.
-    private fun helper(marker: String, killed: MutableList<String>, failedSet: SQLException?): Connection {
-        var running = true
-        val statement = proxy(Statement::class.java) { method, args ->
+    private fun helper(marker: String, killed: MutableList<String>, failedSet: SQLException?, running: AtomicBoolean): Connection {
+        val statement = jdbcProxy(Statement::class.java) { method, args ->
             when (method) {
                 "execute" -> {
                     val sql = args[0] as String
@@ -113,17 +128,17 @@ class TestDorisCancelVisibility {
                     } else {
                         assertThat(sql).isEqualTo("KILL QUERY \"a-b\"")
                         killed.add(sql)
-                        running = false
+                        running.set(false)
                     }
                     false
                 }
                 "executeQuery" -> {
                     assertThat(args[0]).isEqualTo("SHOW FULL PROCESSLIST")
-                    var row = running
-                    proxy(ResultSet::class.java) { operation, columns ->
+                    var row = running.get()
+                    jdbcProxy(ResultSet::class.java) { operation, columns ->
                         when (operation) {
                             "next" -> row.also { row = false }
-                            "getString" -> mapOf("Info" to "SELECT 1 /*$marker*/", "Command" to "Query", "QueryId" to "a-b")[columns[0]]
+                            "getString" -> mapOf("Info" to "/*$marker*/ SELECT 1", "Command" to "Query", "QueryId" to "a-b")[columns[0]]
                             "close" -> null
                             else -> error("Unexpected helper result call: $operation")
                         }
@@ -133,7 +148,7 @@ class TestDorisCancelVisibility {
                 else -> error("Unexpected helper statement call: $method")
             }
         }
-        return proxy(Connection::class.java) { method, _ ->
+        return jdbcProxy(Connection::class.java) { method, _ ->
             when (method) {
                 "createStatement" -> statement
                 "setNetworkTimeout", "close" -> null
@@ -142,6 +157,9 @@ class TestDorisCancelVisibility {
         }
     }
 
-    private fun <T> proxy(type: Class<T>, handler: (String, Array<out Any?>) -> Any?): T =
-        type.cast(Proxy.newProxyInstance(type.classLoader, arrayOf(type)) { _, method, args -> handler(method.name, args ?: emptyArray()) })
+    private fun awaitRequest(slots: Semaphore) {
+        assertThat(slots.tryAcquire(1, 5, SECONDS)).describedAs("logical cancellation request finished").isTrue()
+        slots.release()
+    }
+
 }

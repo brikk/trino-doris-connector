@@ -4,7 +4,7 @@
 #   THREE FEs (fe1 master + fe2/fe3 followers) + ONE BE, project trino-doris-mfe,
 #   dedicated subnet 172.30.82.0/24, host MySQL ports 9131/9132/9133 -> the three
 #   FEs' 9030. This is a MANUAL / DEV overlay used to produce the failover
-#   evidence in dev-docs/REPORT-multi-fe-failover.md. It does NOT replace or
+#   evidence in dev-docs/archive/REPORT-multi-fe-failover.md. It does NOT replace or
 #   disturb the default single-FE probe cluster (../up.sh, project
 #   trino-doris-dev, host 9130). CI uses the single-FE cluster only.
 #
@@ -130,3 +130,4 @@ log "Overlay is UP."
 log "FE MySQL host ports: 9131 (fe1), 9132 (fe2), 9133 (fe3). HTTP: 8131/8132/8133."
 log "Multi-host failover URL: jdbc:mysql://127.0.0.1:9131,127.0.0.1:9132,127.0.0.1:9133/"
 log "Tear down (frees memory) with: ./down.sh"
+log "Failover tests require BOTH explicit opt-ins: DORIS_TEST_ALLOW_MUTATION=1 DORIS_TEST_ALLOW_FAILOVER=1 ./gradlew test --tests '*TestDorisMultiFeFailover' (repo root)"

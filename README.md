@@ -1,278 +1,217 @@
 # trino-doris-connector
 
 [![CI](https://github.com/brikk/trino-doris-connector/actions/workflows/ci.yml/badge.svg)](https://github.com/brikk/trino-doris-connector/actions/workflows/ci.yml)
-[![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://www.apache.org/licenses/LICENSE-2.0)
+[![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 
-A **read-only** [Trino](https://trino.io) connector for [Apache Doris](https://doris.apache.org).
+A **read-only Trino connector for Apache Doris**, with Doris-aware types,
+streaming reads and guarded query pushdown.
 
-Doris speaks the MySQL wire protocol, so Trino's generic MySQL connector can technically
-connect — but it silently drops Doris's complex types (ARRAY, JSON edge cases, LARGEINT
-overflows the whole query), leaves array predicates running in Trino where Doris's inverted
-indexes can't help, and will happily execute writes against your Doris cluster. This connector
-fixes all of that:
+**Target stack:** Trino **484**, Apache Doris **4.1.5**, bundled MySQL Connector/J
+**26.7.0**. Building requires **JDK 25**. Use a plugin built for the same Trino
+version as every coordinator and worker; other version combinations are not qualified.
 
-- **Correct types**, including native `ARRAY(T)` columns decoded exactly.
-- **Typed predicate pushdown** rendered so Doris **inverted indexes stay eligible** — every
-  pushed expression is verified for result equivalence (including NULL semantics) against a
-  live Doris cluster.
-- **Read-only by construction**: writes, DDL, and procedure escape hatches are denied inside
-  the connector before any SQL reaches Doris.
+## Install
 
-Built and tested against **Apache Doris 4.1.4.1**, **Trino 483**, and MySQL Connector/J 9.7.0.
+Build and verify the plugin directory from this checkout; Docker is not required
+for this command:
 
-Compose/CI use digest-pinned final release images. The
-[upgrade qualification](dev-docs/REPORT-doris-4.1.4.1-upgrade.md) records **345/346**
-tests passing in the last full run: the known, unused trace-ID cancellation pin
-timed out and passed in isolation. Production QueryId cancellation and the real-server
-smoke passed. Historical 4.1.3 probe evidence is preserved.
-
-## Features
-
-- One Doris statement per table scan — Doris runs its own distributed execution and streams
-  results back; large results are streamed, not buffered in the Trino worker.
-- Scan cancellation resolves a unique statement-id comment in the cluster-wide processlist
-  and kills by QueryId, which Doris forwards to the owning FE (`doris.cluster-scoped-cancel`,
-  default on). This covers execution before the first result and early scan closure without
-  killing sibling scans. Connector/J's connection-ID cancel is replaced; socket abort remains
-  a fallback. Each remote statement also retains the Trino query id for correlation in logs.
-- Cancellation helpers use a bounded 8-worker/64-request queue, a 15-second dispatch budget,
-  2-second connect/read timeouts, and a post-connect abort watchdog. These limits do not alter
-  normal scan connections; see [cancellation notes](dev-docs/NOTES-cancel-cluster-scoped.md) for details and limitations.
-- Dynamic catalogs: `CREATE CATALOG` / `DROP CATALOG` at runtime, with configuration validated
-  loudly at create time.
-- Doris session controls per catalog: `doris.query-timeout`, `doris.exec-mem-limit`,
-  `doris.time-zone`, `doris.connect-timeout`, plus a per-query `query_timeout` session property.
-- Table statistics for the Trino optimizer (`doris.statistics.enabled`, default on; per-query
-  `statistics_enabled`): row counts and column NDV/nulls/size/ranges from Doris's statistics
-  store. The connector only reads statistics — Doris auto-analyze (on by default) or your own
-  `ANALYZE TABLE` keeps them fresh; missing statistics simply mean unknown estimates.
-
-### Pushdown
-
-Predicates and query shapes the connector pushes into Doris:
-
-| Trino | Pushed to Doris as | Notes |
-|---|---|---|
-| Column comparisons and ranges (`=`, `<`, `BETWEEN`, `IN`, `IS NULL`) | native predicates | numeric, boolean, date, datetime, and decimal columns (incl. LARGEINT) |
-| IP comparisons and ranges (`=`, `IN`, `<`, `IS NULL`) | native `IPV4`/`IPV6` predicates | rendered in the target Doris dialect (IPV4 dotted-quad, IPV6 colon-hex); byte ordering identical on both engines; IPV4 columns push only IPv4-mapped literals (a real IPv6 literal can't equal an IPV4 value — stays in Trino) |
-| `contains(ip_array, ip)` / `arrays_overlap(ip_array, ...)` | `array_contains` / `arrays_overlap` | `ARRAY<IPV4>` / `ARRAY<IPV6>`; overlap casts the literal elements to the IP type |
-| `contains(array_col, value)` | `array_contains(col, ?)` | rendered bare so the Doris **inverted index** can fire; numeric/decimal/date/datetime/boolean elements |
-| `arrays_overlap(a, b)` / `arrays_overlap(col, ARRAY[...])` | `arrays_overlap(...)` with a NULL-element guard | column×column and column×constant-literal (either orientation); guard preserves Trino NULL semantics exactly; empty/all-NULL literal stays in Trino |
-| `array_position(a, x) <op> n` | `array_position(...)` comparisons | all six comparison operators, either orientation |
-| `cardinality(array_col) <op> n` | `array_size(col)` comparisons | all six operators, `BETWEEN`, either orientation; NULL/empty/NULL-element semantics verified identical |
-| `json_extract_scalar(json_col, '$.path') = 'text'` | `json_unquote(json_extract(col, '$.path')) = ?` | equality only, constant dotted-field paths (`$.a`, `$.a.b`); all array-subscript paths stay local because traversal differs on non-array values; literals that could collide with Doris's non-scalar/number text renderings also stay in Trino (see dev-docs/NOTES-p5-batch.md) |
-| `date(dt_col)` / `CAST(dt_col AS DATE)` / `date_trunc('unit', dt_col)` | `CAST(col AS DATE)` / `date_trunc(col, 'unit')` | projection position, composes with GROUP BY + aggregates into one remote statement; units second/minute/hour/day/month/quarter/year (`week` excluded: year-0 truncation differs) |
-| `coalesce` / `nullif` (exact types + varchar) | `coalesce(...)` / `nullif(...)` | projection, predicate, GROUP BY keys; compositions push as a unit |
-| `year/month/day/hour/minute/second(dt_col)` | same-named functions | projection/GROUP BY (comparisons already unwrap to ranges upstream) |
-| `lower(x)` / `upper(x)` | `lower(x)` / `upper(x)` | case mapping proven identical across a Unicode adversary battery |
-| `length(x)` | `char_length(x)` | character count on both engines — never Doris `length()` (bytes) |
-| `starts_with(col, 'p')` | `col LIKE 'p%'` (metacharacters escaped) | index-eligible prefix scan |
-| `NOT` / `AND` / `OR` | composed remote predicates | over value-identical operands (e.g. `array_position` / `cardinality` comparisons) |
-| `JOIN` (opt-in: `join-pushdown.enabled=true`) | `INNER/LEFT/RIGHT JOIN` as one remote statement | **off by default**; equality, `IS NOT DISTINCT FROM` (Doris `<=>`), and range conditions on non-text exact keys (numerics, decimal incl. LARGEINT, date, datetime, boolean); FULL OUTER and text/float keys stay in Trino; `join-pushdown.strategy=AUTOMATIC` (default) decides by table statistics, `EAGER` always pushes |
-| `LIMIT n` | `LIMIT n` | |
-| `ORDER BY ... LIMIT n` (TopN) | `ORDER BY ... NULLS FIRST/LAST LIMIT n` | non-text sort keys, incl. IPADDRESS (byte-order identical) (plus native VARCHAR/STRING keys in `BINARY`/`FULL` string modes); all four NULL orderings render natively |
-| String predicates and `LIKE` | mode-dependent | see [String pushdown modes](#string-pushdown-modes) |
-| `count(*)` / `count(col)` / `count(DISTINCT col)` | `count(...)` | any column type for plain counts; DISTINCT on non-text exact types only |
-| `min` / `max` | `min(col)` / `max(col)` | numeric, decimal (incl. LARGEINT), date, datetime, boolean — not text (collation), not FLOAT/DOUBLE (Doris ranks NaN largest, Trino doesn't) |
-| `sum([DISTINCT] col)` | `sum(...)` | DECIMAL(p≤18) only — every other sum type overflows *silently* in Doris where Trino raises an error, so those stay in Trino |
-| `min_by(a, b)` / `max_by(a, b)` | same-named | exact-type keys; value column must be NOT NULL (Doris skips NULL-value rows where Trino keeps them — verified) |
-| `any_value(x)` | `any_value(x)` | nondeterministic on both engines; NULL-handling verified identical |
-| `approx_distinct(x)` | `approx_count_distinct(x)` | **opt-in** (`doris.approximate-pushdown`, default off): the HLL sketches differ, so estimates won't match local results |
-| `avg(x)` | *not pushed* | Doris avg semantics diverge (scale truncation / lossy accumulation); write `sum(x)/count(x)` instead — both push and the division stays Trino-exact |
-| `GROUP BY` (with the above) | `GROUP BY ...` | exact-type and native VARCHAR/STRING keys (byte-exact grouping verified; CHAR and FLOAT/DOUBLE keys stay local); NULL grouping verified identical |
-| `SELECT DISTINCT ...` | remote `GROUP BY` | same key rules as GROUP BY; composes with WHERE and LIMIT |
-| `HAVING` | outer `WHERE` over the pushed GROUP BY subquery | verified end-to-end |
-
-Deliberately **not** pushed (kept in Trino to guarantee correct results):
-
-- `FLOAT`/`DOUBLE` equality — approximate types.
-- DATE/TIMESTAMP parameters outside Doris's year `0000–9999` range, including array needles:
-  these remain local because Doris can convert them to NULL and change query results.
-- `sum`/`avg` outside the table above — Doris wraps integer/decimal/LARGEINT sum overflow
-  silently and truncates decimal averages where Trino rounds; these run in Trino so overflow
-  still fails loudly and results stay Trino-exact.
-- Anything whose Doris semantics differ from Trino's (e.g. `element_at`, `length`): unknown or
-  unproven expressions always stay in Trino. Partially-pushable filters are split — the safe
-  conjuncts go remote, the rest are evaluated in Trino.
-
-### String pushdown modes
-
-String comparison pushdown is configurable via the catalog property
-`doris.string-pushdown.mode` and the session property `string_pushdown_mode` (session
-overrides catalog in either direction):
-
-| mode | VARCHAR/STRING predicates | CHAR predicates | string TopN | `LIKE` |
-|---|---|---|---|---|
-| `NULL_ONLY` | `IS [NOT] NULL` only | same | off | off |
-| `GUARDED` (default) | proven-exact shapes (`=`, `<>`, `IN`, ranges) push **fully** — a `WHERE col = '...' LIMIT n` collapses into one remote scan; literals containing a 0x00 byte stay local (known hazard) | not pushed | off | prefix patterns (`LIKE 'foo%'`) ship a byte-range pre-filter (`col >= 'foo' AND col < 'fop'`); the exact `LIKE` is retained locally |
-| `BINARY` | full pushdown, no retained filter | full pushdown | VARCHAR keys pushed | pushed |
-| `FULL` | same as `BINARY` | same | same | same |
-
-Background: a live probe of Doris 4.1.3 (`dev-docs/REPORT-string-comparison-probe-4.1.3.md`)
-proved its string `=`/ranges/`IN`/`LIKE`/`ORDER BY` use pure byte (memcmp) semantics over
-UTF-8 (`utf8mb4_0900_bin`) — identical to Trino's VARCHAR semantics, so `BINARY`/`FULL`
-render identically on this version. The remaining hazards are handled per mode: CHAR
-trailing-space data (Doris compares stored bytes, Trino compares trimmed values) keeps CHAR
-out of `GUARDED` value pushdown and CHAR sort keys out of TopN in every mode; `LIKE`
-patterns have backslashes doubled (Doris's default escape is `\`, Trino's no-escape `LIKE`
-treats `\` literally), and explicit `ESCAPE` clauses pass through; `GUARDED` additionally
-keeps predicates whose values contain a 0x00 byte local as defense-in-depth. `BINARY` is
-the mode whose contract is probe-verified byte semantics; `FULL` is caller-asserted.
-
-### Pushdown coverage at a glance
-
-Pushes (with live-proof evidence, see dev-docs): predicates/domains over exact types and
-strings (tiered GUARDED), IN lists up to `domain-compaction-threshold` (default 256,
-per-query `domain_compaction_threshold`; larger lists ship as ranges with the exact filter
-retained), LIKE-prefix/`starts_with`, JSON equality, array predicates (`contains`,
-`arrays_overlap`, `array_position`, `cardinality`), scalar expressions
-(`coalesce`/`nullif`/temporal extraction/`lower`/`upper`/`length`/date projections),
-aggregates (`count`/`min`/`max`/`sum(DECIMAL≤18)`/`count DISTINCT`/`min_by`/`max_by`/
-`any_value`), GROUP BY / DISTINCT / HAVING / LIMIT / TopN, and opt-in cost-aware JOINs.
-Dynamic filters from local joins also reach the remote scans.
-
-Engine-limited at Trino 483 (cannot reach any connector): `CASE`/`IF` expressions and
-conditional aggregation (`count_if`, `FILTER (WHERE ...)`, `sum(CASE ...)`) — these stay in
-Trino by engine design, over a pushed scan. Deliberately not pushed: `avg` (Doris semantics
-diverge — write `sum(x)/count(x)`, which pushes and stays exact), FLOAT/DOUBLE
-equality/ordering, `approx_distinct` unless `doris.approximate-pushdown` is opted in.
-
-### Type mapping
-
-| Doris | Trino |
-|---|---|
-| BOOLEAN, TINYINT, SMALLINT, INT, BIGINT | same |
-| LARGEINT | DECIMAL(38,0) — out-of-range values fail loudly, never truncate |
-| FLOAT / DOUBLE | REAL / DOUBLE |
-| DECIMAL(p≤38, s) | DECIMAL(p, s) |
-| DECIMAL(p>38, s) | VARCHAR (exact textual value) |
-| DATE, DATETIME(0–6) | DATE, TIMESTAMP(0–6) |
-| CHAR / VARCHAR / STRING | CHAR / VARCHAR |
-| JSON, VARIANT | JSON |
-| IPV4 / IPV6 | IPADDRESS |
-| ARRAY&lt;T&gt; (numeric, decimal, boolean, date, datetime, IP — nesting supported) | ARRAY(T) |
-| ARRAY of string types | not exposed natively (Doris's array wire text is ambiguous for strings; exposed as text with `unsupported-type-handling=CONVERT_TO_VARCHAR`) |
-| MAP / STRUCT | text with `unsupported-type-handling=CONVERT_TO_VARCHAR`, otherwise hidden |
-| BITMAP / HLL / AGG_STATE | hidden (opaque engine state) |
-
-FLOAT/DOUBLE reads support infinities, NaN, signed zero, and NULL. The sampled FLOAT extrema
-now round-trip exactly on 4.1.4.1, unlike the reduced-precision text observed on 4.1.3.
-These remain text mappings, not lossless binary transport; see the historical
-[FLOAT probe](dev-docs/REPORT-float-special-values-4.1.3.md) and
-[4.1.4.1 upgrade checks](dev-docs/REPORT-doris-4.1.4.1-upgrade.md).
-
-VARCHAR renderings of Decimal256 or unsupported complex types do not inherit native string
-grouping or ordering semantics. `GROUP BY`, `DISTINCT`, and TopN on those keys stay in Trino,
-including under `BINARY`/`FULL` string modes. Native and derived string keys remain eligible
-subject to the existing string-mode rules.
-
-### Read-only
-
-The connector is read-only end to end: `INSERT`, `DELETE`, `UPDATE`, `MERGE`, `TRUNCATE`,
-`CREATE`/`ALTER`/`DROP`, comments, property changes, and the JDBC `system.execute` procedure
-are all denied inside the connector — nothing mutating is ever sent to Doris. We also recommend
-connecting with a SELECT-only Doris account (see below) so the database enforces the same
-guarantee independently.
-
-## Building
-
-Prerequisites: JDK 25 (via [mise](https://mise.jdx.dev)) and Docker (for the live test cluster).
-
-```bash
-mise install        # JDK 25, from ./mise.toml
-./compose/up.sh     # local Doris 4.1.4.1 cluster the tests run against
-                    # (FE MySQL on 127.0.0.1:9130, HTTP on 8130, root / no password)
-./gradlew build     # compile + lint + full test suite + plugin assembly + assembly verification
+```sh
+mise install
+mise exec -- ./gradlew prepareManualPlugin
+PLUGIN_DIR="$(cat build/manual-plugin-path.txt)"
 ```
 
-Tear the test cluster down with `./compose/up.sh --down`.
+Stop Trino before installing. On **every coordinator and worker**, replace the
+previous Doris plugin installation with the verified directory. The destination
+below must not already exist:
 
-## Installing into Trino
-
-The build assembles a standard Trino plugin directory (a directory of jars):
-
-```bash
-./gradlew pluginAssemble    # -> build/trino-plugin/trino-doris-<version>/
-cp -r build/trino-plugin/trino-doris-<version> "$TRINO_HOME/plugin/"
+```sh
+cp -R "$PLUGIN_DIR" "$TRINO_HOME/plugin/doris"
 ```
 
-Restart the coordinator and workers after copying.
+Restart all nodes. Do not keep multiple versioned Doris plugin directories under
+Trino's plugin root, copy over a running installation, or mix Trino/plugin versions.
 
-### Releases (prebuilt plugin)
+## Configure a catalog
 
-As an alternative to building from source, download a prebuilt plugin archive from the
-[GitHub releases page](https://github.com/brikk/trino-doris-connector/releases). Releases are
-named `trino-doris-v<trino>-<semver>` so the compatible Trino version is explicit (e.g.
-`trino-doris-v483-0.1.0` targets Trino 483). Both `.tar.gz` and `.zip` are published, each with
-a `.sha256` sidecar:
+Doris databases are exposed as **Trino schemas**. Connect to the FE's MySQL
+endpoint, normally port 9030, **without a database path**.
 
-```bash
-sha256sum -c trino-doris-v483-0.1.0.zip.sha256
-unzip trino-doris-v483-0.1.0.zip -d "$TRINO_HOME/plugin/"   # -> $TRINO_HOME/plugin/trino-doris-v483-0.1.0/
-```
-
-Then restart the coordinator and workers. Each release is cut from a `release-<version>`
-branch and only published if the full live-test suite passes in CI.
-
-## Configuring a catalog
-
-### Static catalog
-
-`etc/catalog/doris.properties`:
+Create `etc/catalog/doris.properties`:
 
 ```properties
 connector.name=doris
 connection-url=jdbc:mysql://doris-fe-host:9030
 connection-user=trino_ro
-connection-password=***
+connection-password=YOUR_SECRET
 ```
 
-### Dynamic catalog
-
-With [dynamic catalog management](https://trino.io/docs/current/admin/properties-catalog.html)
-enabled (`catalog.management=dynamic`):
+Or, with Trino dynamic catalog management enabled:
 
 ```sql
 CREATE CATALOG doris USING doris
 WITH (
   "connection-url" = 'jdbc:mysql://doris-fe-host:9030',
   "connection-user" = 'trino_ro',
-  "connection-password" = '***'
+  "connection-password" = 'YOUR_SECRET'
 );
+
+SHOW SCHEMAS FROM doris;
+SHOW TABLES FROM doris.analytics;
+SELECT * FROM doris.analytics.events LIMIT 10;
 ```
 
-Configuration is validated at `CREATE CATALOG` time (a malformed URL fails the statement);
-host reachability is checked lazily on first use. `DROP CATALOG doris;` removes it.
-
-### Recommended: a SELECT-only Doris account
+Use a SELECT-only Doris account restricted to the required databases. For example,
+an administrator can grant access to `analytics`:
 
 ```sql
-CREATE USER 'trino_ro' IDENTIFIED BY '***';
-GRANT SELECT_PRIV ON *.* TO 'trino_ro';
+CREATE USER 'trino_ro'@'%' IDENTIFIED BY 'YOUR_SECRET';
+GRANT SELECT_PRIV ON internal.analytics.* TO 'trino_ro'@'%';
 ```
 
-## Try it: manual Trino smoke sandbox
+Restrict the account's allowed source hosts for production. The connector denies
+writes and DDL itself, but database privileges are an independent safeguard.
+`INSERT`, `UPDATE`, `DELETE`, `MERGE`, schema/table changes and the JDBC
+`system.execute` escape hatch are unavailable. No arbitrary-query table function
+is exposed.
 
-[`compose/trino/`](./compose/trino) is a one-command **manual sandbox** — a single Trino 483
-coordinator with this plugin installed and dynamic catalog management enabled, so you can log
-in and add your own Doris server at runtime:
+### Connection URLs
 
-```sh
-compose/trino/up.sh                          # assemble plugin (mise JDK 25), start Trino, print a cheat sheet
-docker exec -it trino-doris-manual trino     # get a CLI, then CREATE CATALOG ... USING doris
-compose/trino/down.sh                        # tear down
+- Multiple FEs: `jdbc:mysql://fe1:9030,fe2:9030,fe3:9030/`.
+- Connector/J load-balancing and replication JDBC URL families are supported.
+- DNS-SRV uses `dnsSrv=true` on an ordinary JDBC URL. Direct
+  `jdbc:mysql+srv:` schemes are excluded by Trino's base URL constraint.
+- Database paths and nonempty global/per-host `DBNAME` settings are rejected,
+  including encoded and mixed-case forms.
+- X Protocol (`mysqlx://`), nonempty `propertiesTransform` and `useConfigs`
+  settings are unsupported. Catalog validation does not load transforms/profiles
+  or resolve DNS. Host reachability is checked on first use.
+
+Host selection/failover occurs when opening a read connection. That physical
+connection is pinned for the attempt: there is **no in-flight HA statement
+rerouting**. A retry opens a fresh connection.
+
+## Settings
+
+| Catalog property | Default | Meaning |
+|---|---|---|
+| `doris.connect-timeout` | `10s` | FE connect budget; 1–2147483647ms |
+| `doris.query-timeout` | unset | Per-connection and per-scan Doris server timeout; 1–2147483647s |
+| `doris.exec-mem-limit` | unset | Doris session `exec_mem_limit` |
+| `doris.time-zone` | unset | Doris session time zone; never changed globally |
+| `doris.string-pushdown.mode` | `GUARDED` | String-domain/comparison policy |
+| `doris.statistics.enabled` | `true` | Expose Doris estimates to the optimizer |
+| `doris.approximate-pushdown` | `false` | Permit approximate aggregates whose estimates differ between engines |
+| `doris.cluster-scoped-cancel` | `true` | Best-effort cluster-wide QueryId cancellation helper |
+| `join-pushdown.enabled` | `false` | Enable eligible INNER join pushdown |
+| `join-pushdown.strategy` | `AUTOMATIC` | Statistics-based cost gate; `EAGER` bypasses cost, not safety checks |
+
+Valid fractional timeout values round **up** to the respective unit. A query
+timeout of `1.1s` becomes two seconds consistently at connection and scan setup.
+Unset query timeout leaves the native session value unchanged. Connect/query
+settings are not absolute wall-clock deadlines for DNS, credentials or custom
+TLS/socket code.
+
+Per-query overrides:
+
+```sql
+SET SESSION doris.query_timeout = '30s';
+SET SESSION doris.statistics_enabled = false;
+SET SESSION doris.string_pushdown_mode = 'GUARDED';
+SET SESSION doris.approximate_pushdown = false;
 ```
 
-The plugin is mounted into `/usr/lib/trino/plugin/` and loaded via Trino's real
-`ServiceLoader` plugin path (not the test classpath). See
-[`compose/trino/README.md`](./compose/trino/README.md) for the cheat sheet, image-config
-notes, and a worked end-to-end transcript (plugin load + predicate-pushdown proof).
+Disabling statistics bypasses both shared and per-transaction statistics caches;
+it does not expose warmed estimates or poison later enabled requests. Statistics
+remain advisory: the connector reads them but never issues `ANALYZE`.
 
-## Development
+## Supported data
 
-Design notes, live-probe evidence reports, and the capability ledger behind every mapping and
-pushdown decision live in [`dev-docs/`](./dev-docs).
+| Doris type | Trino representation |
+|---|---|
+| BOOLEAN, TINYINT, SMALLINT, INT, BIGINT | Corresponding boolean/integer type |
+| LARGEINT | DECIMAL(38,0); values beyond Trino's range fail rather than truncate |
+| DECIMAL(p≤38,s) | DECIMAL(p,s) |
+| DECIMAL(p>38,s) | VARCHAR containing the decimal wire text |
+| FLOAT / DOUBLE | REAL / DOUBLE via text transport |
+| DATE / DATETIME(0–6) | DATE / zoneless TIMESTAMP(0–6) |
+| CHAR / VARCHAR / STRING | CHAR / VARCHAR |
+| JSON / VARIANT | JSON, with strict decoding |
+| IPV4 / IPV6 | IPADDRESS |
+| ARRAY of supported numeric, boolean, decimal, temporal or IP elements | ARRAY(T), including supported nesting |
+| String-element arrays, MAP, STRUCT | Hidden by default; wire text with `unsupported-type-handling=CONVERT_TO_VARCHAR` |
+| BITMAP, HLL, QUANTILE_STATE, AGG_STATE | Hidden under every unsupported-type policy |
+
+Important limits:
+
+- FLOAT/DOUBLE text transport supports NULL, infinities, NaN and signed zero,
+  but is **not lossless binary transport** and cannot recover discarded precision.
+- String-array wire text is ambiguous; it is not exposed as a native string array.
+  Textualized complex/Decimal256 columns do not inherit native VARCHAR grouping,
+  comparison or ordering semantics.
+- SQL NULL and JSON null remain distinct. Invalid/non-finite JSON is rejected,
+  not silently repaired.
+- DATE/DATETIME predicates outside Doris's year 0000–9999 range stay local.
+  DATETIME is a wall clock, not an instant; TIMESTAMP WITH TIME ZONE is not exposed.
+
+## Query pushdown
+
+Doris executes one remote statement per scan and distributes that work internally;
+results stream back instead of buffering the full result in Trino.
+
+| Operation | Admission |
+|---|---|
+| Comparisons, ranges, IN and null checks | Type-aware; string behavior follows the selected mode |
+| ARRAY contains/overlap/position/size predicates | Supported typed elements and NULL-preserving guards |
+| JSON scalar equality | Restricted constant dotted-object paths and safe text literals; array-subscript paths stay local |
+| Scalar expressions | Eligible coalesce/nullif, character length, prefix matching, temporal extracts and date projections |
+| Aggregates | Eligible count/distinct, min/max, DECIMAL(p≤18) sum, any_value, guarded min_by/max_by; approximate aggregates are opt-in |
+| GROUP BY, DISTINCT, HAVING, LIMIT and TopN | Eligible native/derived keys and type-specific ordering rules |
+| Joins | Eligible INNER joins only, opt-in and cost-aware |
+
+Unsupported shapes and unsafe compositions stay in Trino. LOWER/UPPER, AVG,
+outer joins, FLOAT/DOUBLE value comparisons/orderings, and unsafe converted-text
+operations are not pushed. `min_by`/`max_by` require a non-null payload; AVG is
+not generally equivalent to manually writing `SUM/COUNT`. Conditional aggregate
+masks and CASE/IF expressions are also retained by the engine.
+
+### String pushdown modes
+
+| Mode | String predicate/order behavior |
+|---|---|
+| `NULL_ONLY` | Direct string-column null checks; not a global switch disabling all string transformations |
+| `GUARDED` | Conservative default: admitted exact predicates; LIKE-prefix prefilters retain the exact local filter; hazardous values stay local |
+| `BINARY` | Broader binary-comparison contract, including eligible text TopN |
+| `FULL` | Same renderings as BINARY under caller-asserted semantics |
+
+Safety guards still apply in every mode. CHAR trailing-space behavior has separate
+restrictions; LOWER/UPPER remain local. LIKE escapes push only for one non-NUL
+ASCII character; unsupported escapes stay local. Larger IN sets can be compacted
+to ranges while retaining an exact local filter.
+
+## Cancellation and operations
+
+Each scan has a unique leading statement token; Trino query IDs remain in SQL
+comments for log correlation. The helper uses the matching Doris QueryId, never
+Connector/J's load-balancer-unsafe numeric connection-ID kill. Closing one scan
+does not authorize killing its siblings.
+
+Helpers use short probes, close connections between retries and share bounded
+worker/pending-request capacity. Their dispatch budget includes queue/retry time.
+Cancellation is **best-effort**, with physical socket abort as an independent
+fallback. Query visibility/kill permissions, credentials and network behavior
+matter; a cancellation signal is not proof that all BE resources are already
+reclaimed. Use the Doris server-side query timeout for a per-scan work limit.
+
+## Local evaluation and development
+
+The [manual Trino sandbox](compose/trino/README.md) runs this plugin in a local
+Trino 484 container. It is unauthenticated and loopback-only by default; do not
+share it with production credentials.
+
+Build/test instructions, implementation invariants, qualification and the active
+developer backlog are in [dev-docs](dev-docs/README.md).
 
 ## License
 
-Licensed under the [Apache License, Version 2.0](./LICENSE).
+Licensed under the [Apache License, Version 2.0](LICENSE).

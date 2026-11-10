@@ -23,7 +23,7 @@ import java.lang.reflect.Method
 import java.lang.reflect.Proxy
 
 /**
- * Reflection audit of the read-only guard (PLAN G7.2): EVERY method on the Trino 483
+ * Reflection audit of the read-only guard: every method on the Trino
  * [JdbcClient] surface must be classified below. A future base-jdbc upgrade that adds a new
  * (potentially mutating) method fails [testEveryJdbcClientMethodIsClassified] loudly instead
  * of silently forwarding through the guard.
@@ -98,7 +98,7 @@ class TestReadOnlyDorisClient {
     }
 
     companion object {
-        /** Every mutating method on the 483 JdbcClient surface; the guard throws from each. */
+        /** Every mutating method on the 484 JdbcClient surface; the guard throws from each. */
         private val MUTATORS = setOf(
             "toWriteMapping(ConnectorSession,Type)",
             "getMaxWriteParallelism(ConnectorSession)",
@@ -128,7 +128,7 @@ class TestReadOnlyDorisClient {
             "finishMerge(ConnectorSession,JdbcMergeTableHandle,Set)",
             "delete(ConnectorSession,JdbcTableHandle)",
             "update(ConnectorSession,JdbcTableHandle)",
-            // system.execute choke point (PLAN G7.5): the auto-installed ExecuteProcedure runs
+            // system.execute choke point: the auto-installed ExecuteProcedure runs
             // raw SQL over getConnection(session) — both raw-statement doors are shut here.
             "execute(ConnectorSession,String)",
             "getConnection(ConnectorSession)",

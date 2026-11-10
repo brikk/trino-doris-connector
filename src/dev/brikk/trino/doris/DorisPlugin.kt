@@ -15,10 +15,4 @@ package dev.brikk.trino.doris
 
 import io.trino.plugin.jdbc.JdbcPlugin
 
-/**
- * Read-only Trino connector for Apache Doris (baseline: Doris 4.1.3, Trino 483).
- *
- * Connector name `doris` (PLAN G10). Base JDBC over MySQL Connector/J against the
- * Doris FE MySQL-protocol port (PLAN G1/G8).
- */
 class DorisPlugin : JdbcPlugin("doris", ::DorisClientModule)

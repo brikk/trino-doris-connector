@@ -13,34 +13,65 @@
  */
 package dev.brikk.trino.doris
 
+import com.mysql.cj.conf.ConnectionUrl.Type
+import com.mysql.cj.conf.ConnectionUrlParser
 import com.mysql.cj.conf.ConnectionUrlParser.parseConnectionString
 import com.mysql.cj.exceptions.CJException
-import com.mysql.cj.jdbc.Driver
 import io.trino.plugin.jdbc.BaseJdbcConfig
 import jakarta.validation.constraints.AssertTrue
-import java.sql.SQLException
 
-/**
- * Validates the Doris FE connection URL: a MySQL Connector/J `jdbc:mysql://` URL
- * WITHOUT a database path — Doris databases map to Trino schemas, so the connection
- * must not pin a default database (ledger §B; SR K3; PLAN G9/§4.4).
- */
 class DorisJdbcConfig : BaseJdbcConfig() {
-    @AssertTrue(message = "Invalid JDBC URL for the Doris connector: must be a jdbc:mysql:// URL accepted by MySQL Connector/J")
+    @AssertTrue(
+        message = "Invalid JDBC URL for the Doris connector: " +
+            "use a supported MySQL JDBC URL without propertiesTransform or useConfigs",
+    )
     fun isUrlValid(): Boolean {
-        return try {
-            Driver().acceptsURL(connectionUrl)
-        } catch (ignored: SQLException) {
-            false
+        return isSupportedUrl { _, _ -> true }
+    }
+
+    @AssertTrue(
+        message = "Database (catalog) must not be specified in the JDBC URL for the Doris connector " +
+            "(Doris databases map to Trino schemas)",
+    )
+    fun isUrlWithoutDatabase(): Boolean {
+        return isSupportedUrl { parsed, properties ->
+            parsed.path.isNullOrEmpty() && properties.none { it.hasNonEmptyValue("dbname") }
         }
     }
 
-    @AssertTrue(message = "Database (catalog) must not be specified in the JDBC URL for the Doris connector (Doris databases map to Trino schemas)")
-    fun isUrlWithoutDatabase(): Boolean {
-        return try {
-            parseConnectionString(connectionUrl).path.isNullOrEmpty()
+    /** Parses lexically: building a ConnectionUrl would resolve DNS and load transforms or config profiles. */
+    private fun isSupportedUrl(check: (ConnectionUrlParser, List<Map<String, String>>) -> Boolean): Boolean {
+        val url = connectionUrl ?: return false
+        try {
+            val parsed = parseConnectionString(url)
+            val hosts = parsed.hosts
+            if (Type.fromValue(parsed.scheme, hosts.size) !in JDBC_TYPES) {
+                return false
+            }
+            val properties = listOf(parsed.properties) + hosts.map { it.hostProperties }
+            if (properties.any { it.hasNonEmptyValue("propertiesTransform") || it.hasNonEmptyValue("useConfigs") }) {
+                return false
+            }
+            return check(parsed, properties)
         } catch (ignored: CJException) {
-            false
+            return false
+        } catch (ignored: IllegalArgumentException) {
+            // malformed %-encoding/ports must be a validation failure, not an escaping exception
+            return false
+        }
+    }
+
+    companion object {
+        // BaseJdbcConfig's own URL pattern already rejects the mysql+srv schemes.
+        private val JDBC_TYPES = setOf(
+            Type.SINGLE_CONNECTION,
+            Type.FAILOVER_CONNECTION,
+            Type.LOADBALANCE_CONNECTION,
+            Type.REPLICATION_CONNECTION,
+        )
+
+        private fun Map<String, String>.hasNonEmptyValue(key: String): Boolean {
+            return entries.any { (name, value) -> name.equals(key, ignoreCase = true) && !value.isNullOrEmpty() }
         }
     }
 }

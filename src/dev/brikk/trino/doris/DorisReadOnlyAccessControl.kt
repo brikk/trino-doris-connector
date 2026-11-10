@@ -19,20 +19,10 @@ import io.trino.spi.connector.SchemaRoutineName
 import io.trino.spi.security.AccessDeniedException.denyExecuteProcedure
 
 /**
- * Connector-boundary write denial (PLAN G7.3; ledger §C): operations fail at analysis, before
- * any remote SQL is generated.
- *
- * Extends plugin-toolkit's [ReadOnlyAccessControl], which allows reads/metadata and denies
- * table/view/MV mutations explicitly; everything it does not override inherits the
- * [io.trino.spi.connector.ConnectorAccessControl] interface DEFAULTS, which DENY (verified at
- * 483: schema create/drop/rename, truncate, authorization/grants/roles, branches, functions,
- * table procedures all deny by default).
- *
- * [checkCanExecuteProcedure] is overridden because the interface default denies ALL
- * procedures, while PLAN §7 keeps the harmless metadata-cache flush available. `system.execute`
- * (Base JDBC's auto-installed raw-SQL escape hatch) is therefore denied here at the engine
- * boundary — and even if this layer were bypassed, [ReadOnlyDorisClient] denies the 1-arg
- * `getConnection` the procedure needs (PLAN G7.5).
+ * Denies writes during analysis, before any SQL is generated. Checks that [ReadOnlyAccessControl]
+ * does not override fall back to the [io.trino.spi.connector.ConnectorAccessControl] defaults,
+ * which deny. Of the procedures only `system.flush_metadata_cache` is allowed; `system.execute`,
+ * which runs raw SQL, is denied here and again in [ReadOnlyDorisClient].
  */
 class DorisReadOnlyAccessControl : ReadOnlyAccessControl() {
     override fun checkCanExecuteProcedure(context: ConnectorSecurityContext, procedure: SchemaRoutineName) {
@@ -43,7 +33,6 @@ class DorisReadOnlyAccessControl : ReadOnlyAccessControl() {
     }
 
     companion object {
-        /** PLAN §7: "harmless metadata-cache flush" remains available; nothing else. */
         private val ALLOWED_SYSTEM_PROCEDURES = setOf("flush_metadata_cache")
     }
 }

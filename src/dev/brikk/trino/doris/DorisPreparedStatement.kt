@@ -21,11 +21,11 @@ import java.sql.ResultSet
 import java.sql.SQLException
 import java.util.concurrent.CountDownLatch
 
-/** One execution per scan. Cancellation must not acquire the driver's busy connection lock. */
+/** Scan statement whose cancel kills the Doris query cluster-wide, then aborts the connection. */
 internal class DorisPreparedStatement(
     private val delegate: PreparedStatement,
     private val connection: Connection,
-    private val cancelRemote: (() -> Boolean) -> Unit,
+    private val cancelRemote: (answered: Boolean, executionFinished: () -> Boolean) -> Unit,
 ) : PreparedStatement by delegate {
     private val lock = Any()
     private val cancellationComplete = CountDownLatch(1)
@@ -72,11 +72,15 @@ internal class DorisPreparedStatement(
         }
         try {
             if (needsAbort) {
+                // Read before the abort below, which ends execution without an answer from Doris.
+                val answered = executionFinished
                 try {
-                    cancelRemote { executionFinished }
+                    cancelRemote(answered) { executionFinished }
                 } finally {
-                    // Also covers execute-phase close, where Trino never calls abortReadConnection.
-                    // Do not call delegate.cancel(): Connector/J sends an LB-unsafe connection-ID kill.
+                    // Also covers close during execution, where Trino never calls abortReadConnection.
+                    // Not delegate.cancel(): Connector/J would send a connection-id kill, which a
+                    // load balancer can route to the wrong FE. The connection is pinned by
+                    // DorisReadDriver, so abort reaches the physical connection, not the HA proxy.
                     connection.abort(directExecutor())
                 }
             }

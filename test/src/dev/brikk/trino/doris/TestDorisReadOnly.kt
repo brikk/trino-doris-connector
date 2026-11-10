@@ -19,14 +19,6 @@ import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.TestInstance
 
-/**
- * Read-only denial suite (PLAN §7; ledger §C): every mutating operation must fail with the
- * read-only/access-denied error AND leave no side effects on Doris (verified via direct JDBC).
- *
- * Motivating evidence: stock Trino's MySQL connector against Doris executed a real DELETE that
- * permanently destroyed a row (STOCK "Write-path danger findings") — the re-run of that exact
- * scenario through this connector is [testDeleteIsDeniedTheStockDeleteDangerIsClosed].
- */
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 class TestDorisReadOnly : AbstractTestQueryFramework() {
     override fun createQueryRunner(): QueryRunner {
@@ -42,7 +34,6 @@ class TestDorisReadOnly : AbstractTestQueryFramework() {
         assertThat(DorisTestCluster.queryScalar("SELECT v FROM p1_readonly.t WHERE id = 2")).isEqualTo("two")
     }
 
-    // --- DDL ---
 
     @Test
     fun testCreateSchemaDenied() {
@@ -72,6 +63,15 @@ class TestDorisReadOnly : AbstractTestQueryFramework() {
     }
 
     @Test
+    fun testCreateViewDenied() {
+        assertQueryFails(
+            "CREATE VIEW doris.p1_readonly.denied_view AS SELECT * FROM doris.p1_readonly.t",
+            "Access Denied: Cannot create view p1_readonly.denied_view",
+        )
+        assertThat(DorisTestCluster.querySingleColumn("SHOW TABLES FROM p1_readonly")).doesNotContain("denied_view")
+    }
+
+    @Test
     fun testDropTableDenied() {
         assertQueryFails("DROP TABLE doris.p1_readonly.t", "Access Denied: Cannot drop table p1_readonly.t")
         assertThat(DorisTestCluster.querySingleColumn("SHOW TABLES FROM p1_readonly")).contains("t")
@@ -84,10 +84,25 @@ class TestDorisReadOnly : AbstractTestQueryFramework() {
         assertQueryFails("ALTER TABLE doris.p1_readonly.t DROP COLUMN v", "Access Denied: Cannot drop a column from table p1_readonly.t")
         assertQueryFails("ALTER TABLE doris.p1_readonly.t RENAME COLUMN v TO w", "Access Denied: Cannot rename a column in table p1_readonly.t")
         assertQueryFails(
+            "ALTER TABLE doris.p1_readonly.t ALTER COLUMN v SET DATA TYPE varchar(100)",
+            "Access Denied: Cannot alter a column for table p1_readonly.t",
+        )
+        assertQueryFails(
             "ALTER TABLE doris.p1_readonly.t RENAME TO doris.p1_readonly.t2",
             "Access Denied: Cannot rename table from p1_readonly.t to p1_readonly.t2",
         )
         assertThat(DorisTestCluster.querySingleColumn("SHOW TABLES FROM p1_readonly")).containsExactly("t")
+        assertNoSideEffects()
+    }
+
+    @Test
+    fun testSetPropertiesRejectedWithoutRegisteredTableProperties() {
+        assertThat(computeActual("SELECT count(*) FROM system.metadata.table_properties WHERE catalog_name = 'doris'").onlyValue).isEqualTo(0L)
+        // Trino validates properties before checking access control.
+        assertQueryFails(
+            "ALTER TABLE doris.p1_readonly.t SET PROPERTIES comment = 'denied'",
+            "line 1:48: Catalog 'doris' table property 'comment' does not exist",
+        )
         assertNoSideEffects()
     }
 
@@ -98,7 +113,6 @@ class TestDorisReadOnly : AbstractTestQueryFramework() {
         assertNoSideEffects()
     }
 
-    // --- DML ---
 
     @Test
     fun testInsertDenied() {
@@ -108,8 +122,6 @@ class TestDorisReadOnly : AbstractTestQueryFramework() {
 
     @Test
     fun testDeleteIsDeniedTheStockDeleteDangerIsClosed() {
-        // The exact stock-connector scenario that destroyed a row (STOCK): must be denied AND
-        // the row must still exist.
         assertQueryFails("DELETE FROM doris.p1_readonly.t WHERE id = 1", "Access Denied: Cannot delete from table p1_readonly.t")
         assertQueryFails("DELETE FROM doris.p1_readonly.t", "Access Denied: Cannot delete from table p1_readonly.t")
         assertNoSideEffects()
@@ -131,7 +143,7 @@ class TestDorisReadOnly : AbstractTestQueryFramework() {
             WHEN MATCHED THEN UPDATE SET v = source.v
             WHEN NOT MATCHED THEN INSERT (id, v) VALUES (source.id, source.v)
             """.trimIndent(),
-            "Access Denied: Cannot .*",
+            "Access Denied: Cannot insert into table p1_readonly.t",
         )
         assertNoSideEffects()
     }
@@ -142,12 +154,10 @@ class TestDorisReadOnly : AbstractTestQueryFramework() {
         assertNoSideEffects()
     }
 
-    // --- procedures (PLAN G7.5: system.execute must be airtight) ---
 
     @Test
     fun testSystemExecuteIsDeniedAndHasNoSideEffects() {
-        // Base JDBC auto-installs system.execute, which runs raw SQL over a plain connection —
-        // the read-only escape hatch the plan requires proven-shut before P1 completes.
+        // Base JDBC installs system.execute even though it bypasses the connector's statement builder.
         assertQueryFails(
             "CALL doris.system.execute('INSERT INTO p1_readonly.t VALUES (99, ''hack'')')",
             "Access Denied: Cannot execute procedure system.execute.*",
@@ -166,8 +176,15 @@ class TestDorisReadOnly : AbstractTestQueryFramework() {
     }
 
     @Test
+    fun testRawQueryTableFunctionIsNotRegistered() {
+        assertQueryFails(
+            "SELECT * FROM TABLE(doris.system.query(query => 'SELECT 1'))",
+            "line 1:21: Table function 'doris.system.query' not registered",
+        )
+    }
+
+    @Test
     fun testFlushMetadataCacheIsAllowedAsHarmless() {
-        // PLAN §7: harmless metadata-cache flush remains available.
         assertQuerySucceeds("CALL doris.system.flush_metadata_cache()")
     }
 
@@ -179,9 +196,8 @@ class TestDorisReadOnly : AbstractTestQueryFramework() {
 
     companion object {
         private fun provisionFixture() {
-            DorisTestCluster.executeAsRoot(
-                "DROP DATABASE IF EXISTS p1_readonly",
-                "CREATE DATABASE p1_readonly",
+            provisionFixture(
+                "p1_readonly",
                 """
                 CREATE TABLE p1_readonly.t (id INT NOT NULL, v VARCHAR(20))
                 DUPLICATE KEY(id) DISTRIBUTED BY HASH(id) BUCKETS 1

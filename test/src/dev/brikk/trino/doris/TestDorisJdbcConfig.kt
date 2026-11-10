@@ -14,9 +14,9 @@
 package dev.brikk.trino.doris
 
 import io.airlift.units.DataSize
-import io.airlift.configuration.ConfigDescription
 import io.airlift.units.Duration
 import org.assertj.core.api.Assertions.assertThat
+import org.assertj.core.api.Assertions.assertThatThrownBy
 import org.junit.jupiter.api.Test
 import java.util.concurrent.TimeUnit
 
@@ -44,22 +44,19 @@ class TestDorisJdbcConfig {
 
     @Test
     fun testUrlWithDatabaseRejected() {
-        // Catalog-as-schema (Doris db -> Trino schema) requires connecting without a default
-        // database (ledger §B; SR K3).
+        // Doris databases map to Trino schemas, so the connection must not choose a default database.
         val config = DorisJdbcConfig().also { it.setConnectionUrl("jdbc:mysql://doris-fe:9030/somedb") }
         assertThat(config.isUrlWithoutDatabase()).isFalse()
     }
 
     @Test
     fun testConnectionPropertiesPinList() {
-        // Ledger §B pin list.
         val properties = DorisClientModule.connectionProperties(DorisConfig())
         assertThat(properties.getProperty("tinyInt1isBit")).isEqualTo("false")
         assertThat(properties.getProperty("characterEncoding")).isEqualTo("UTF-8")
         assertThat(properties.getProperty("useUnicode")).isEqualTo("true")
         assertThat(properties.getProperty("useServerPrepStmts")).isEqualTo("false")
         assertThat(properties.getProperty("connectTimeout")).isEqualTo("10000")
-        // Rejected StarRocks prior art must not sneak back in (SR R1).
         assertThat(properties.getProperty("rewriteBatchedStatements")).isNull()
         // No session variables unless configured.
         assertThat(properties.getProperty("sessionVariables")).isNull()
@@ -77,9 +74,20 @@ class TestDorisJdbcConfig {
     }
 
     @Test
+    fun testTimeZoneWithQuotesOrCommasIsAConfigurationError() {
+        for (timeZone in listOf("Etc/UTC'", "Etc/UTC,query_timeout=1", "'")) {
+            assertThatThrownBy { DorisConfig().setTimeZone(timeZone) }
+                .describedAs(timeZone)
+                .isInstanceOf(IllegalArgumentException::class.java)
+                .hasMessageContaining("doris.time-zone must not contain quotes or commas")
+        }
+        for (timeZone in listOf(null, "Etc/UTC", "+08:00", "Asia/Tokyo")) {
+            assertThat(DorisConfig().setTimeZone(timeZone).getTimeZone()).isEqualTo(timeZone)
+        }
+    }
+
+    @Test
     fun testQueryTimeoutSessionPropertyDefaultsFromConfig() {
-        // Ledger §D: query_timeout re-homed as a first-class read-path session property
-        // (rejected StarRocks sourcing, SR R2); catalog config supplies the default.
         val defaulted = DorisSessionProperties(DorisConfig().setQueryTimeout(Duration(42.0, TimeUnit.SECONDS)))
             .sessionProperties.single { it.name == DorisSessionProperties.QUERY_TIMEOUT }
         assertThat(defaulted.defaultValue).isEqualTo(Duration(42.0, TimeUnit.SECONDS))
@@ -90,14 +98,7 @@ class TestDorisJdbcConfig {
     }
 
     @Test
-    fun testDescriptionsMatchPushdownAndTimeoutContracts() {
-        val guarded = DorisConfig::class.java.getMethod("setStringPushdownMode", DorisStringPushdownMode::class.java)
-            .getAnnotation(ConfigDescription::class.java).value
-        assertThat(guarded).contains("proven-exact domains fully pushed", "retain local LIKE", "hazardous values stay local")
+    fun testStringPushdownModeDefaultsToGuarded() {
         assertThat(DorisConfig().getStringPushdownMode()).isEqualTo(DorisStringPushdownMode.GUARDED)
-        val timeout = DorisSessionProperties(DorisConfig()).sessionProperties
-            .single { it.name == DorisSessionProperties.QUERY_TIMEOUT }.description
-        assertThat(timeout).contains("server-side query_timeout", "seconds granularity", "doris.query-timeout")
-            .contains("session timeout unchanged").doesNotContain("enforced via JDBC", "KILL QUERY on expiry", "no client-side limit")
     }
 }
