@@ -21,7 +21,7 @@ import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.TestInstance
 
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
-class TestDorisP5JoinPushdown : DorisPushdownTest("p5_join", { provisionFixture() }) {
+class TestDorisJoinPushdown : DorisPushdownTest("p5_join", { provisionFixture() }) {
 
     private fun joinSession(strategy: String): Session = Session.builder(session)
         .setCatalogSessionProperty(DorisQueryRunner.CATALOG, "join_pushdown_enabled", "true")
