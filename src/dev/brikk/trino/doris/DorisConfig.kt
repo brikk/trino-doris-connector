@@ -32,7 +32,7 @@ class DorisConfig {
     fun getQueryTimeout(): Duration? = queryTimeout
 
     @Config("doris.query-timeout")
-    @ConfigDescription("Doris query_timeout: 1s to 2147483647s, rounded up to whole seconds consistently at connection and scan setup")
+    @ConfigDescription("Doris query_timeout: 1s to 2147483647s, rounded up to whole seconds")
     fun setQueryTimeout(queryTimeout: Duration?): DorisConfig {
         queryTimeout?.let(DorisTimeouts::querySeconds)
         this.queryTimeout = queryTimeout
@@ -65,9 +65,9 @@ class DorisConfig {
 
     @Config("doris.string-pushdown.mode")
     @ConfigDescription(
-        "String predicate pushdown mode: NULL_ONLY, GUARDED (default: proven-exact domains fully pushed; " +
-            "LIKE-prefix pre-filters retain local LIKE; hazardous values stay local), " +
-            "BINARY (verified byte semantics), FULL (caller-asserted). Per-query override: string_pushdown_mode",
+        "String pushdown mode: NULL_ONLY (only IS NULL checks), GUARDED (default: VARCHAR comparisons, " +
+            "except values containing a NUL byte; CHAR stays in Trino), BINARY or FULL (also CHAR comparisons, " +
+            "VARCHAR TopN and LIKE). Per-query override: string_pushdown_mode",
     )
     fun setStringPushdownMode(stringPushdownMode: DorisStringPushdownMode): DorisConfig {
         this.stringPushdownMode = stringPushdownMode
@@ -92,8 +92,8 @@ class DorisConfig {
     @Config("doris.approximate-pushdown")
     @ConfigDescription(
         "Push approximate aggregates (approx_distinct -> approx_count_distinct) to Doris. " +
-            "OFF by default: both engines return HyperLogLog ESTIMATES but with different " +
-            "sketches, so pushed and local answers legitimately differ for the same data.",
+            "Off by default: both engines return HyperLogLog estimates from different sketches, " +
+            "so pushed and local answers differ for the same data.",
     )
     fun setApproximatePushdown(approximatePushdown: Boolean): DorisConfig {
         this.approximatePushdown = approximatePushdown
@@ -104,10 +104,9 @@ class DorisConfig {
 
     @Config("doris.cluster-scoped-cancel")
     @ConfigDescription(
-        "Cancel queries cluster-wide: an async helper connection resolves the running query's " +
-            "QueryId from the cluster-wide processlist and issues KILL QUERY — correct behind " +
-            "load balancers / multi-FE where the driver-level kill targets an arbitrary FE. " +
-            "The stock socket abort is retained as a fallback either way.",
+        "Cancel queries cluster-wide: a helper connection finds the running query's QueryId in the " +
+            "cluster-wide processlist and issues KILL QUERY, which works behind load balancers and with " +
+            "several frontends. The socket abort remains as a fallback.",
     )
     fun setClusterScopedCancel(clusterScopedCancel: Boolean): DorisConfig {
         this.clusterScopedCancel = clusterScopedCancel

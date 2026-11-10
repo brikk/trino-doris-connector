@@ -204,7 +204,7 @@ class TestDorisTypeMapping {
     fun testDatetimePrecisionAboveSixFailsLoud() {
         assertThatThrownBy { mapping.toColumnMapping(session, "datetime(7)") }
             .isInstanceOf(TrinoException::class.java)
-            .hasMessageContaining("max proven is 6")
+            .hasMessageContaining("maximum is 6")
     }
 
 

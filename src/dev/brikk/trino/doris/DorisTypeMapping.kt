@@ -277,7 +277,7 @@ internal class DorisTypeMapping(typeManager: TypeManager) {
             if (value.abs() > DECIMAL_38_MAX) {
                 throw TrinoException(
                     NUMERIC_VALUE_OUT_OF_RANGE,
-                    "Doris LARGEINT value out of DECIMAL(38, 0) range (fail-loud per type contract, never clamped): $value",
+                    "Doris LARGEINT value out of DECIMAL(38, 0) range: $value",
                 )
             }
             return Int128.valueOf(value)
@@ -358,7 +358,7 @@ internal class DorisTypeMapping(typeManager: TypeManager) {
         internal fun timestampType(parsed: DorisColumnType): TimestampType {
             val precision = parsed.arguments.firstOrNull() ?: 0
             if (precision !in 0..MAX_DATETIME_PRECISION) {
-                throw TrinoException(GENERIC_INTERNAL_ERROR, "Unsupported Doris DATETIME precision (max proven is 6): '${parsed.raw}'")
+                throw TrinoException(GENERIC_INTERNAL_ERROR, "Unsupported Doris DATETIME precision (maximum is 6): '${parsed.raw}'")
             }
             return createTimestampType(precision)
         }
