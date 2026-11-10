@@ -72,6 +72,15 @@ class TestDorisReadOnly : AbstractTestQueryFramework() {
     }
 
     @Test
+    fun testCreateViewDenied() {
+        assertQueryFails(
+            "CREATE VIEW doris.p1_readonly.denied_view AS SELECT * FROM doris.p1_readonly.t",
+            "Access Denied: Cannot create view p1_readonly.denied_view",
+        )
+        assertThat(DorisTestCluster.querySingleColumn("SHOW TABLES FROM p1_readonly")).doesNotContain("denied_view")
+    }
+
+    @Test
     fun testDropTableDenied() {
         assertQueryFails("DROP TABLE doris.p1_readonly.t", "Access Denied: Cannot drop table p1_readonly.t")
         assertThat(DorisTestCluster.querySingleColumn("SHOW TABLES FROM p1_readonly")).contains("t")
@@ -83,6 +92,14 @@ class TestDorisReadOnly : AbstractTestQueryFramework() {
         assertQueryFails("ALTER TABLE doris.p1_readonly.t ADD COLUMN z integer", "Access Denied: Cannot add a column to table p1_readonly.t")
         assertQueryFails("ALTER TABLE doris.p1_readonly.t DROP COLUMN v", "Access Denied: Cannot drop a column from table p1_readonly.t")
         assertQueryFails("ALTER TABLE doris.p1_readonly.t RENAME COLUMN v TO w", "Access Denied: Cannot rename a column in table p1_readonly.t")
+        assertQueryFails(
+            "ALTER TABLE doris.p1_readonly.t ALTER COLUMN v SET DATA TYPE varchar(100)",
+            "Access Denied: Cannot alter a column in table p1_readonly.t",
+        )
+        assertQueryFails(
+            "ALTER TABLE doris.p1_readonly.t SET PROPERTIES comment = 'denied'",
+            "Access Denied: Cannot set table properties to p1_readonly.t",
+        )
         assertQueryFails(
             "ALTER TABLE doris.p1_readonly.t RENAME TO doris.p1_readonly.t2",
             "Access Denied: Cannot rename table from p1_readonly.t to p1_readonly.t2",
@@ -131,7 +148,7 @@ class TestDorisReadOnly : AbstractTestQueryFramework() {
             WHEN MATCHED THEN UPDATE SET v = source.v
             WHEN NOT MATCHED THEN INSERT (id, v) VALUES (source.id, source.v)
             """.trimIndent(),
-            "Access Denied: Cannot .*",
+            "Access Denied: Cannot insert into table p1_readonly.t",
         )
         assertNoSideEffects()
     }
@@ -163,6 +180,14 @@ class TestDorisReadOnly : AbstractTestQueryFramework() {
         assertThat(DorisTestCluster.queryScalar("SELECT COUNT(*) FROM p1_readonly.t WHERE id = 99")).isEqualTo("0")
         assertThat(DorisTestCluster.querySingleColumn("SHOW DATABASES")).doesNotContain("p1_execute_hack")
         assertNoSideEffects()
+    }
+
+    @Test
+    fun testRawQueryTableFunctionIsNotRegistered() {
+        assertQueryFails(
+            "SELECT * FROM TABLE(doris.system.query(query => 'SELECT 1'))",
+            "line 1:21: Table function 'doris.system.query' not registered",
+        )
     }
 
     @Test
