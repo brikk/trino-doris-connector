@@ -134,9 +134,7 @@ class TestDorisJoinPushdown : DorisPushdownTest("p5_join", { provisionFixture() 
 
     @Test
     fun testPushedJoinIsOneRemoteStatement() {
-        // Snapshot consistency: a pushed join executes as ONE Doris statement, i.e. one
-        // MVCC snapshot — strictly better than two independent scans stitched locally
-        // (the connector's normal posture). PLAN §6.5's "test snapshot consistency".
+        // One remote statement avoids stitching together independently observed join inputs.
         val sql = "SELECT l.lv, r.rv FROM doris.p5_join.l l JOIN doris.p5_join.r r ON l.k = r.k"
         val statements = remoteStatements(eager, sql)
         assertThat(statements).hasSize(1)

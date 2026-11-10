@@ -52,14 +52,12 @@ class TestDorisJdbcConfig {
 
     @Test
     fun testConnectionPropertiesPinList() {
-        // Ledger §B pin list.
         val properties = DorisClientModule.connectionProperties(DorisConfig())
         assertThat(properties.getProperty("tinyInt1isBit")).isEqualTo("false")
         assertThat(properties.getProperty("characterEncoding")).isEqualTo("UTF-8")
         assertThat(properties.getProperty("useUnicode")).isEqualTo("true")
         assertThat(properties.getProperty("useServerPrepStmts")).isEqualTo("false")
         assertThat(properties.getProperty("connectTimeout")).isEqualTo("10000")
-        // Rejected StarRocks prior art must not sneak back in (SR R1).
         assertThat(properties.getProperty("rewriteBatchedStatements")).isNull()
         // No session variables unless configured.
         assertThat(properties.getProperty("sessionVariables")).isNull()
@@ -91,8 +89,6 @@ class TestDorisJdbcConfig {
 
     @Test
     fun testQueryTimeoutSessionPropertyDefaultsFromConfig() {
-        // Ledger §D: query_timeout re-homed as a first-class read-path session property
-        // (rejected StarRocks sourcing, SR R2); catalog config supplies the default.
         val defaulted = DorisSessionProperties(DorisConfig().setQueryTimeout(Duration(42.0, TimeUnit.SECONDS)))
             .sessionProperties.single { it.name == DorisSessionProperties.QUERY_TIMEOUT }
         assertThat(defaulted.defaultValue).isEqualTo(Duration(42.0, TimeUnit.SECONDS))

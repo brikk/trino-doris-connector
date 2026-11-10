@@ -81,9 +81,6 @@ class TestDorisTopNPushdown : DorisPushdownTest("p3_topn", { provisionFixture() 
 
     @Test
     fun testLargeLimitBeyond65535IsExact() {
-        // PLAN §9.2 safety: Doris `default_order_by_limit=-1` (probed — no bare-ORDER-BY
-        // truncation, which we never emit anyway), and a pushed TopN with limit > 65535
-        // returns exactly that many rows in order.
         val sql = "SELECT n FROM doris.p0_probe.nums ORDER BY n ASC NULLS LAST LIMIT 70000"
         assertThat(query(sql)).ordered().skipResultsCorrectnessCheckForPushdown().isFullyPushedDown()
         val rows = computeActual(sql).onlyColumn.toList()

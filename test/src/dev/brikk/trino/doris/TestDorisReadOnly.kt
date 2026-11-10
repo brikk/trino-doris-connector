@@ -172,7 +172,6 @@ class TestDorisReadOnly : DorisPushdownTest("p1_readonly", { provisionFixture() 
 
     @Test
     fun testFlushMetadataCacheIsAllowedAsHarmless() {
-        // PLAN §7: harmless metadata-cache flush remains available.
         assertQuerySucceeds("CALL doris.system.flush_metadata_cache()")
     }
 
