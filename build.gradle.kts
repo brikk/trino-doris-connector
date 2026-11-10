@@ -7,11 +7,9 @@ plugins {
     alias(libs.plugins.detekt)
 }
 
-// Default dev version. CI release flow (.github/workflows/release.yml) overrides this with
-// -Pversion=<derived-from-branch> (e.g. release-484-0.2.0 -> 484-0.2.0). A plain Gradle script
-// assignment would clobber the -P property (proven: it runs after Gradle applies project
-// properties), so honor an explicit -Pversion when present and fall back to the dev default.
-version = (findProperty("version") as? String)?.takeIf { it != "unspecified" } ?: "484-0.2.0-SNAPSHOT"
+// The release workflow passes -Pversion=<trino>-<semver>, derived from the release branch name.
+// A plain assignment here would overwrite that property, so only fall back to the dev default.
+version = (findProperty("version") as? String)?.takeIf { it != "unspecified" } ?: "484-0.5.0-SNAPSHOT"
 
 // Version labels are also directory/archive names. Reject unsafe spellings before
 // configuring any task output, not just in the GitHub publication step.
