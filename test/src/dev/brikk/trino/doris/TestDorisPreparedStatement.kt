@@ -16,7 +16,6 @@ package dev.brikk.trino.doris
 import org.assertj.core.api.Assertions.assertThat
 import org.assertj.core.api.Assertions.assertThatThrownBy
 import org.junit.jupiter.api.Test
-import java.lang.reflect.Proxy
 import java.sql.Connection
 import java.sql.PreparedStatement
 import java.sql.ResultSet
@@ -47,13 +46,13 @@ class TestDorisPreparedStatement {
         val aborted = AtomicBoolean()
         val statementCloses = AtomicInteger()
         val resultCloses = AtomicInteger()
-        val result = jdbcProxy(ResultSet::class.java) { method ->
+        val result = jdbcProxy(ResultSet::class.java) { method, _ ->
             check(method == "close") { "unexpected result call: $method" }
             assertThat(aborted.get()).describedAs("abort before raw ResultSet.close").isTrue()
             resultCloses.incrementAndGet()
             null
         }
-        val delegate = jdbcProxy(PreparedStatement::class.java) { method ->
+        val delegate = jdbcProxy(PreparedStatement::class.java) { method, _ ->
             when (method) {
                 "executeQuery" -> {
                     executeEntered.countDown()
@@ -69,7 +68,7 @@ class TestDorisPreparedStatement {
                 else -> throw AssertionError("unexpected statement call: $method")
             }
         }
-        val connection = jdbcProxy(Connection::class.java) { method ->
+        val connection = jdbcProxy(Connection::class.java) { method, _ ->
             check(method == "abort") { "unexpected connection call: $method" }
             aborted.set(true)
             null
@@ -122,8 +121,8 @@ class TestDorisPreparedStatement {
         val aborts = AtomicInteger()
         val rawCancels = AtomicInteger()
         val closes = AtomicInteger()
-        val result = jdbcProxy(ResultSet::class.java) { throw AssertionError("unexpected result call: $it") }
-        val delegate = jdbcProxy(PreparedStatement::class.java) { method ->
+        val result = jdbcProxy(ResultSet::class.java) { method, _ -> throw AssertionError("unexpected result call: $method") }
+        val delegate = jdbcProxy(PreparedStatement::class.java) { method, _ ->
             when (method) {
                 "executeQuery" -> result
                 "cancel" -> { rawCancels.incrementAndGet(); null }
@@ -131,7 +130,7 @@ class TestDorisPreparedStatement {
                 else -> throw AssertionError("unexpected statement call: $method")
             }
         }
-        val connection = jdbcProxy(Connection::class.java) { method ->
+        val connection = jdbcProxy(Connection::class.java) { method, _ ->
             check(method == "abort") { "unexpected connection call: $method" }
             aborts.incrementAndGet()
             null
@@ -150,6 +149,4 @@ class TestDorisPreparedStatement {
 
     private fun await(latch: CountDownLatch) = assertThat(latch.await(5, SECONDS)).isTrue()
 
-    private fun <T> jdbcProxy(type: Class<T>, handler: (String) -> Any?): T =
-        type.cast(Proxy.newProxyInstance(type.classLoader, arrayOf(type)) { _, method, _ -> handler(method.name) })
 }

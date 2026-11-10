@@ -18,7 +18,6 @@ import io.trino.testing.TestingConnectorSession
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Test
-import java.lang.reflect.Proxy
 import java.sql.Connection
 import java.sql.PreparedStatement
 import java.sql.ResultSet
@@ -62,15 +61,15 @@ class TestDorisCancelVisibility {
         try {
             repeat(2) {
                 running.set(true)
-                val result = proxy(ResultSet::class.java) { _, _ -> null }
-                val raw = proxy(PreparedStatement::class.java) { method, _ ->
+                val result = jdbcProxy(ResultSet::class.java) { _, _ -> null }
+                val raw = jdbcProxy(PreparedStatement::class.java) { method, _ ->
                     when (method) {
                         "executeQuery" -> result
                         "close" -> null
                         else -> error("Unexpected scan call: $method")
                     }
                 }
-                val connection = proxy(Connection::class.java) { method, _ ->
+                val connection = jdbcProxy(Connection::class.java) { method, _ ->
                     check(method == "abort") { "Unexpected scan connection call: $method" }
                     aborts++
                     null
@@ -120,7 +119,7 @@ class TestDorisCancelVisibility {
 
     @Suppress("CyclomaticComplexMethod") // Strict JDBC script for both SET failure and successful kill.
     private fun helper(marker: String, killed: MutableList<String>, failedSet: SQLException?, running: AtomicBoolean): Connection {
-        val statement = proxy(Statement::class.java) { method, args ->
+        val statement = jdbcProxy(Statement::class.java) { method, args ->
             when (method) {
                 "execute" -> {
                     val sql = args[0] as String
@@ -136,7 +135,7 @@ class TestDorisCancelVisibility {
                 "executeQuery" -> {
                     assertThat(args[0]).isEqualTo("SHOW FULL PROCESSLIST")
                     var row = running.get()
-                    proxy(ResultSet::class.java) { operation, columns ->
+                    jdbcProxy(ResultSet::class.java) { operation, columns ->
                         when (operation) {
                             "next" -> row.also { row = false }
                             "getString" -> mapOf("Info" to "/*$marker*/ SELECT 1", "Command" to "Query", "QueryId" to "a-b")[columns[0]]
@@ -149,7 +148,7 @@ class TestDorisCancelVisibility {
                 else -> error("Unexpected helper statement call: $method")
             }
         }
-        return proxy(Connection::class.java) { method, _ ->
+        return jdbcProxy(Connection::class.java) { method, _ ->
             when (method) {
                 "createStatement" -> statement
                 "setNetworkTimeout", "close" -> null
@@ -163,6 +162,4 @@ class TestDorisCancelVisibility {
         slots.release()
     }
 
-    private fun <T> proxy(type: Class<T>, handler: (String, Array<out Any?>) -> Any?): T =
-        type.cast(Proxy.newProxyInstance(type.classLoader, arrayOf(type)) { _, method, args -> handler(method.name, args ?: emptyArray()) })
 }

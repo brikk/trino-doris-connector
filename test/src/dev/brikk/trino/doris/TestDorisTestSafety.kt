@@ -3,7 +3,6 @@ package dev.brikk.trino.doris
 import org.assertj.core.api.Assertions.assertThat
 import org.assertj.core.api.Assertions.assertThatThrownBy
 import org.junit.jupiter.api.Test
-import java.lang.reflect.Proxy
 import java.sql.Connection
 import java.sql.ResultSet
 import java.sql.Statement
@@ -131,7 +130,7 @@ class TestDorisTestSafety {
 
         fun open(): Connection = gate.open(target) {
             events.add("connect")
-            proxy(Connection::class.java) { method, _ ->
+            jdbcProxy(Connection::class.java) { method, _ ->
                 when (method) {
                     "createStatement" -> statement()
                     "close" -> { events.add("close"); null }
@@ -140,7 +139,7 @@ class TestDorisTestSafety {
             }
         }
 
-        private fun statement(): Statement = proxy(Statement::class.java) { method, arguments ->
+        private fun statement(): Statement = jdbcProxy(Statement::class.java) { method, arguments ->
             when (method) {
                 "executeQuery" -> {
                     check(arguments[0] in listOf("SHOW FRONTENDS", "SHOW BACKENDS")) // no mutation before validation
@@ -155,7 +154,7 @@ class TestDorisTestSafety {
         private fun result(backend: Boolean): ResultSet {
             val hosts = (if (backend) jdbcIdentity.backendHosts else jdbcIdentity.hosts).toList()
             var row = -1
-            return proxy(ResultSet::class.java) { method, arguments ->
+            return jdbcProxy(ResultSet::class.java) { method, arguments ->
                 when (method) {
                     "next" -> ++row < hosts.size
                     "getLong" -> jdbcIdentity.clusterId
@@ -176,7 +175,5 @@ class TestDorisTestSafety {
             target.nodes.filter { it.port != null }.map { it.ip }.toSet(),
             target.nodes.filter { it.port == null }.map { it.ip }.toSet(), setOf(DorisTestCluster.GOLDEN_NATIVE_VERSION))
 
-        private fun <T> proxy(type: Class<T>, handler: (String, Array<out Any?>) -> Any?): T =
-            type.cast(Proxy.newProxyInstance(type.classLoader, arrayOf(type)) { _, method, args -> handler(method.name, args ?: emptyArray()) })
     }
 }

@@ -40,7 +40,6 @@ import io.trino.type.InternalTypeManager.TESTING_TYPE_MANAGER
 import org.assertj.core.api.Assertions.assertThat
 import org.assertj.core.api.Assertions.assertThatThrownBy
 import org.junit.jupiter.api.Test
-import java.lang.reflect.Proxy
 import java.sql.Connection
 import java.sql.PreparedStatement
 import java.sql.ResultSet
@@ -535,14 +534,5 @@ class TestDorisScanCancellation {
             }
         }
 
-        private fun <T> jdbcProxy(type: Class<T>, handler: (String, Array<out Any?>) -> Any?): T =
-            type.cast(Proxy.newProxyInstance(type.classLoader, arrayOf(type)) { proxy, method, args ->
-                when (method.name) {
-                    "toString" -> "Fake${type.simpleName}"
-                    "hashCode" -> System.identityHashCode(proxy)
-                    "equals" -> proxy === args?.get(0)
-                    else -> handler(method.name, args ?: emptyArray())
-                }
-            })
     }
 }

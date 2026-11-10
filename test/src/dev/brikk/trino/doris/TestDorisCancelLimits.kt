@@ -19,7 +19,6 @@ import org.assertj.core.api.Assertions.assertThat
 import org.assertj.core.api.Assertions.assertThatThrownBy
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Test
-import java.lang.reflect.Proxy
 import java.sql.Connection
 import java.sql.PreparedStatement
 import java.sql.ResultSet
@@ -357,13 +356,13 @@ class TestDorisCancelLimits {
     }
 
     private fun <T> jdbcProxy(type: Class<T>, handler: (String, Array<out Any?>) -> Any?): T =
-        type.cast(Proxy.newProxyInstance(type.classLoader, arrayOf(type)) { _, method, args ->
+        dev.brikk.trino.doris.jdbcProxy(type) { method, args ->
             try {
-                handler(method.name, args ?: emptyArray())
+                handler(method, args)
             } catch (failure: Throwable) {
                 // Helper failures are swallowed in production; surface strict-fake violations on the test thread.
                 if (failure !is SQLException) failures.add(failure)
                 throw failure
             }
-        })
+        }
 }

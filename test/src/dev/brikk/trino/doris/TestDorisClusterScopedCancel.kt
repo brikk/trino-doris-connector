@@ -18,7 +18,6 @@ import io.trino.testing.TestingConnectorSession
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Test
-import java.lang.reflect.Proxy
 import java.sql.Connection
 import java.sql.ResultSet
 import java.sql.SQLException
@@ -356,11 +355,6 @@ class TestDorisClusterScopedCancel {
         private val SESSION: ConnectorSession = TestingConnectorSession.builder().build()
 
         private fun openRoot(): Connection = DorisTestCluster.openRootConnection()
-
-        private fun <T> jdbcProxy(type: Class<T>, handler: (String, Array<out Any?>) -> Any?): T =
-            type.cast(Proxy.newProxyInstance(type.classLoader, arrayOf(type)) { _, method, args ->
-                handler(method.name, args ?: emptyArray())
-            })
 
         private fun awaitTrue(description: String = "condition", condition: () -> Boolean) {
             val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(30)
