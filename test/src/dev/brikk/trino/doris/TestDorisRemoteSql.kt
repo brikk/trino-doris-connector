@@ -30,9 +30,7 @@ class TestDorisRemoteSql : AbstractTestQueryFramework() {
         assertThat(execution.result().rowCount).isEqualTo(4)
 
         val marker = DorisRemoteQueryModifier.marker(execution.queryId().toString())
-        // The FE audit logger flushes asynchronously (multi-second lag observed live).
-        val statements = DorisTestCluster.awaitAuditLogStatements(marker, AUDIT_LOG_TIMEOUT_MILLIS)
-        val scanStatement = statements.single { it.contains("`nums`") }
+        val scanStatement = auditedStatements(execution.queryId(), "`nums`").single()
 
         // Domain pushdown produced the remote WHERE, and the scan carries the query-id comment.
         assertThat(scanStatement).contains("SELECT `n` FROM")
@@ -46,9 +44,7 @@ class TestDorisRemoteSql : AbstractTestQueryFramework() {
 
         val guarded = getDistributedQueryRunner().executeWithPlan(session, sql)
         assertThat(guarded.result().rowCount).isEqualTo(1)
-        val guardedRemote = DorisTestCluster
-            .awaitAuditLogStatements(DorisRemoteQueryModifier.marker(guarded.queryId().toString()), AUDIT_LOG_TIMEOUT_MILLIS)
-            .single { it.contains("`scalars`") }
+        val guardedRemote = auditedStatements(guarded.queryId(), "`scalars`").single()
         assertThat(guardedRemote).contains("a normal string")
 
         val nullOnlySession = io.trino.Session.builder(session)
@@ -56,13 +52,8 @@ class TestDorisRemoteSql : AbstractTestQueryFramework() {
             .build()
         val nullOnly = getDistributedQueryRunner().executeWithPlan(nullOnlySession, sql)
         assertThat(nullOnly.result().rowCount).isEqualTo(1)
-        val nullOnlyRemote = DorisTestCluster
-            .awaitAuditLogStatements(DorisRemoteQueryModifier.marker(nullOnly.queryId().toString()), AUDIT_LOG_TIMEOUT_MILLIS)
-            .single { it.contains("`scalars`") }
+        val nullOnlyRemote = auditedStatements(nullOnly.queryId(), "`scalars`").single()
         assertThat(nullOnlyRemote).doesNotContain("a normal string")
     }
 
-    companion object {
-        private const val AUDIT_LOG_TIMEOUT_MILLIS = 60_000L
-    }
 }

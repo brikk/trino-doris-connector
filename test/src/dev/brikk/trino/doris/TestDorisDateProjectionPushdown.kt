@@ -68,10 +68,7 @@ class TestDorisDateProjectionPushdown : DorisPushdownTest("p6_dates", { provisio
             "FROM doris.p6_dates.renamed l JOIN doris.p6_dates.renamed r ON l.id = r.id"
         assertThat(query(eager, sql)).isFullyPushedDown()
         assertThat(rows(eager, sql)).isEqualTo(rows(unpushed, sql))
-        val execution = getDistributedQueryRunner().executeWithPlan(eager, sql)
-        val marker = DorisRemoteQueryModifier.marker(execution.queryId().toString())
-        val remote = DorisTestCluster.awaitAuditLogStatements(marker, 60_000)
-            .single { it.contains("p6_dates") }.substringAfter("|Stmt=")
+        val remote = remoteSql(eager, sql).substringAfter("|Stmt=")
         // Join outputs retain the physical name with a generated suffix, not the planner symbol "dt".
         assertThat(remote).contains("INNER JOIN")
             .containsPattern("CAST\\(`dt_6_\\d+` AS DATE\\)")

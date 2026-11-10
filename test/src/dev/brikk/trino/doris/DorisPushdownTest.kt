@@ -42,9 +42,7 @@ abstract class DorisPushdownTest(private val schema: String, private val provisi
 
     protected fun remoteStatements(session: Session, sql: String): List<String> {
         val execution = getDistributedQueryRunner().executeWithPlan(session, sql)
-        val marker = DorisRemoteQueryModifier.marker(execution.queryId().toString())
-        // The FE audit logger flushes asynchronously, sometimes several seconds after query completion.
-        return DorisTestCluster.awaitAuditLogStatements(marker, 60_000).filter { it.contains(schema) }
+        return auditedStatements(execution.queryId(), schema)
     }
 
     protected fun remoteSql(session: Session, sql: String): String = remoteStatements(session, sql).single()

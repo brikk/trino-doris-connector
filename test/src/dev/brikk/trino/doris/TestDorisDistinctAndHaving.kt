@@ -101,8 +101,7 @@ class TestDorisDistinctAndHaving : DorisPushdownTest("b3_dist", { provisionFixtu
         // scan as a DYNAMIC FILTER domain in the remote SQL — the join-off alternative works
         val sql = "SELECT t.id FROM doris.b3_dist.t t JOIN doris.b3_dist.dim d ON t.k = d.k WHERE d.label = 'one'"
         val execution = getDistributedQueryRunner().executeWithPlan(session, sql)
-        val marker = DorisRemoteQueryModifier.marker(execution.queryId().toString())
-        val statements = DorisTestCluster.awaitAuditLogStatements(marker, 60_000).filter { it.contains("b3_dist") }
+        val statements = auditedStatements(execution.queryId(), "b3_dist")
         val probeScan = statements.single { it.contains("`t`") && !it.contains("`dim`") }
         assertThat(probeScan).contains("`k` = 1") // the dim side's single k value, dynamically filtered
     }

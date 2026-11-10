@@ -74,9 +74,7 @@ class TestDorisCaseFoldLocal : AbstractTestQueryFramework() {
             .matches("VALUES CAST('i' AS VARCHAR(50))")
         val execution = getDistributedQueryRunner().executeWithPlan(session,
             "SELECT upper(coalesce(v,'absent')),length(lower(v)) FROM doris.golden_415_json.casefold_local")
-        val marker = DorisRemoteQueryModifier.marker(execution.queryId().toString())
-        val statements = DorisTestCluster.awaitAuditLogStatements(marker, 60_000)
-            .filter { it.contains("casefold_local") }
+        val statements = auditedStatements(execution.queryId(), "casefold_local")
         assertThat(statements).isNotEmpty.allSatisfy { assertThat(it).doesNotContain("lower(", "upper(") }
     }
 }

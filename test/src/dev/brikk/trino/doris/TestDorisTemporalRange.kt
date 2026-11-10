@@ -136,8 +136,7 @@ class TestDorisTemporalRange : AbstractTestQueryFramework() {
         val sql = "SELECT id FROM doris.e06_temporal.t WHERE id = 2 AND d < DATE '10000-01-01'"
         assertThat(query(sql)).matches("VALUES 2")
         val execution = getDistributedQueryRunner().executeWithPlan(session, sql)
-        val marker = DorisRemoteQueryModifier.marker(execution.queryId().toString())
-        val remote = DorisTestCluster.awaitAuditLogStatements(marker, 60_000).single { it.contains("e06_temporal") }
+        val remote = auditedStatements(execution.queryId(), "e06_temporal").single()
         assertThat(remote).contains("`id` = 2").doesNotContain("10000")
     }
 

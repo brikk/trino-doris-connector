@@ -39,9 +39,7 @@ class TestDorisArrayInvertedIndex : AbstractTestQueryFramework() {
 
         val execution = getDistributedQueryRunner()
             .executeWithPlan(session, "SELECT id FROM doris.p2b_index.events WHERE contains(tags, 7)")
-        val marker = DorisRemoteQueryModifier.marker(execution.queryId().toString())
-        val statements = DorisTestCluster.awaitAuditLogStatements(marker, 60_000)
-        val remoteSql = statements.single { it.contains("`events`") }
+        val remoteSql = auditedStatements(execution.queryId(), "`events`").single()
         assertThat(remoteSql).contains("(array_contains(`tags`, 7))")
         assertThat(remoteSql).doesNotContain("= 1")
 

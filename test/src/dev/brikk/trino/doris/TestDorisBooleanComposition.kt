@@ -73,13 +73,9 @@ class TestDorisBooleanComposition : DorisPushdownTest("p3_composition", { provis
 
     @Test
     fun testRemoteCompositionSqlShape() {
-        val execution = getDistributedQueryRunner().executeWithPlan(
-            session,
+        val scan = remoteSql(
             "SELECT id FROM doris.p3_composition.t WHERE array_position(a_int, 1) = 1 OR array_position(a_int, 9) = 1",
         )
-        val marker = DorisRemoteQueryModifier.marker(execution.queryId().toString())
-        val statements = DorisTestCluster.awaitAuditLogStatements(marker, 60_000)
-        val scan = statements.single { it.contains("p3_composition") }
         assertThat(scan).contains("((array_position(`a_int`, 1) = 1) OR (array_position(`a_int`, 9) = 1))")
     }
 
