@@ -21,7 +21,7 @@ import java.sql.ResultSet
 import java.sql.SQLException
 import java.util.concurrent.CountDownLatch
 
-/** One execution per scan. Production connections are physically pinned by [DorisReadDriver]. */
+/** Scan statement whose cancel kills the Doris query cluster-wide, then aborts the connection. */
 internal class DorisPreparedStatement(
     private val delegate: PreparedStatement,
     private val connection: Connection,
@@ -75,10 +75,10 @@ internal class DorisPreparedStatement(
                 try {
                     cancelRemote { executionFinished }
                 } finally {
-                    // Also covers execute-phase close, where Trino never calls abortReadConnection.
-                    // Do not call delegate.cancel(): Connector/J sends an LB-unsafe connection-ID kill.
-                    // The captured read connection delegates abort to its physical connection,
-                    // never the mutable HA owner. No unwrap/routing operation happens here.
+                    // Also covers close during execution, where Trino never calls abortReadConnection.
+                    // Not delegate.cancel(): Connector/J would send a connection-id kill, which a
+                    // load balancer can route to the wrong FE. The connection is pinned by
+                    // DorisReadDriver, so abort reaches the physical connection, not the HA proxy.
                     connection.abort(directExecutor())
                 }
             }
