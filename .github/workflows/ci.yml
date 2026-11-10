@@ -14,7 +14,10 @@ on:
     branches: [main]
   pull_request:
 
-# Cancel superseded runs on the same ref to save the (scarce) large-runner minutes.
+permissions:
+  contents: read
+
+# Cancel superseded runs on the same ref.
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -23,9 +26,9 @@ jobs:
   build:
     name: build + live tests (Doris 4.1.5)
     runs-on: ubuntu-latest
-    # Cluster boot ~2-4 min + cold Gradle dependency resolution + detekt + ~170 live
-    # tests. 30 min leaves headroom for a cold-cache first run without hanging forever.
-    timeout-minutes: 30
+    # A cold-cache run takes about 26 minutes: cluster boot, the Gradle guard tests,
+    # then roughly 400 live tests.
+    timeout-minutes: 45
     env:
       # This job deliberately owns a disposable Compose cluster and rebuilds fixtures.
       DORIS_TEST_ALLOW_MUTATION: '1'
