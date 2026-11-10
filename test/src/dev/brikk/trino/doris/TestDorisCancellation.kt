@@ -92,15 +92,7 @@ class TestDorisCancellation : AbstractTestQueryFramework() {
     @Test
     @Order(2)
     fun testQueryTimeoutSessionPropertyAbortsTheDorisQuery() {
-        // SET SESSION doris.query_timeout applies `SET query_timeout` server-side on the scan
-        // connection; the Doris timeout checker kills the still-running (send-blocked) query
-        // ("query is timeout, killed by timeout checker" — P1b probe; PROBE §8/§9). The
-        // 10s timeout keeps the statement observable on slow runners (first CI flake, run
-        // 29693604486). The RELEASE is asserted via the shared contract below — CI run
-        // 29694687854 proved the killed query's PROCESSLIST row can linger for minutes when
-        // the client side is too slow to touch the socket (the FE result receiver re-logs
-        // the cancel once per second until "Broken pipe"), so processlist emptiness alone is
-        // NOT the release signal; the timeout-checker kill in fe.log is.
+        // Ten seconds keeps the send-blocked statement observable before the timeout sweep.
         val session: Session = Session.builder(getSession())
             .setCatalogSessionProperty(DorisQueryRunner.CATALOG, DorisSessionProperties.QUERY_TIMEOUT, "10.00s")
             .build()
@@ -110,30 +102,16 @@ class TestDorisCancellation : AbstractTestQueryFramework() {
             val remoteMarker = DorisRemoteQueryModifier.marker(trinoQueryId)
             val start = System.nanoTime()
             val dorisQueryId = awaitRemoteStatement(remoteMarker)
-            // The Doris-side work must be RELEASED by the server-side timeout — that is the
-            // contract; the Trino-side failure propagates later, whenever the stalled scan
-            // next reads from the killed connection.
-            awaitDorisRelease(remoteMarker, dorisQueryId, TIMEOUT_RELEASE_BOUND_MILLIS)
+            await("Doris timeout checker killed $dorisQueryId", TIMEOUT_RELEASE_BOUND_MILLIS) {
+                DorisTestCluster.feLogShowsQueryTimeout(dorisQueryId)
+            }
             val releaseMillis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - start)
             println("doris.query_timeout=10s released the Doris work after ${releaseMillis}ms (bound ${TIMEOUT_RELEASE_BOUND_MILLIS}ms)")
 
-            // Trino-side propagation is NOT part of the contract: the stalled cross-join can
-            // grind for minutes between socket reads on starved hardware (CI 2-core runner —
-            // TimeoutException on run a604c9e), so demanding NATURAL propagation timing is
-            // over-assertion. Report it when it happens fast (typical locally), otherwise
-            // actively terminate and prove there is NO HANG: the future must complete with
-            // either the server timeout error or the cleanup kill message.
-            val natural = runCatching { queryFuture.get(NATURAL_PROPAGATION_GRACE_MILLIS, TimeUnit.MILLISECONDS) }.getOrNull()
-            val result = if (natural != null) {
-                println("Trino side observed the server-side timeout naturally (fast propagation)")
-                natural
-            } else {
-                // active termination (kill only — the future must stay observable)
-                killRunningTrinoQueries(TIMEOUT_MARKER)
-                queryFuture.get(TRINO_FAILURE_BOUND_MILLIS, TimeUnit.MILLISECONDS)
-            }
+            // Backpressure delays the next socket read, so allow time for the server error to propagate.
+            val result = queryFuture.get(TRINO_FAILURE_BOUND_MILLIS, TimeUnit.MILLISECONDS)
             assertThat(result.isFailure).isTrue()
-            assertThat(result.exceptionOrNull()).hasMessageMatching("(?is).*(timeout|test cleanup|cancel).*")
+            assertThat(result.exceptionOrNull()).hasMessageMatching("(?is).*time(?:out|d? out).*")
         } finally {
             cleanUp(TIMEOUT_MARKER, queryFuture)
         }
@@ -239,8 +217,6 @@ class TestDorisCancellation : AbstractTestQueryFramework() {
         private const val TIMEOUT_RELEASE_BOUND_MILLIS = 90_000L
         private const val TRINO_FAILURE_BOUND_MILLIS = 120_000L
 
-        /** Grace for NATURAL server-error propagation before the test terminates actively. */
-        private const val NATURAL_PROPAGATION_GRACE_MILLIS = 10_000L
         private const val POLL_INTERVAL_MILLIS = 250L
         private const val BIG_ROWS = 1_001_000L
 
