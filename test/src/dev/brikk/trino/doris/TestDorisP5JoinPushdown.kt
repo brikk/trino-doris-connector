@@ -20,13 +20,6 @@ import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.TestInstance
 
-/**
- * P5 cost-aware join pushdown (PLAN §6.5): OFF by default; INNER on the exact
- * non-text key set; `IS NOT DISTINCT FROM` -> `<=>` (truth table live-proven); FULL OUTER
- * and text/approximate keys excluded. Differentials run pushed (EAGER) vs local (default
- * OFF) over NULL keys, duplicate keys, and empty sides — the local plan is the ground
- * truth. Probe verdicts: `dev-docs/archive/NOTES-p5-joins.md`.
- */
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 class TestDorisP5JoinPushdown : AbstractTestQueryFramework() {
     override fun createQueryRunner(): QueryRunner {
@@ -48,7 +41,7 @@ class TestDorisP5JoinPushdown : AbstractTestQueryFramework() {
 
     private fun assertPushedAndIdentical(sql: String) {
         assertThat(query(eager, sql)).describedAs(sql).isFullyPushedDown()
-        assertThat(rows(eager, sql)).describedAs(sql).isEqualTo(rows(session, sql))
+        assertThat(rows(eager, sql)).describedAs(sql).isEqualTo(rows(fullyLocalSession(eager), sql))
     }
 
     private fun remoteStatements(session: Session, sql: String): List<String> {
@@ -75,7 +68,7 @@ class TestDorisP5JoinPushdown : AbstractTestQueryFramework() {
             val sql = "SELECT l.lv, r.rv FROM doris.p5_join.l l $joinKind doris.p5_join.r r ON l.k = r.k"
             if (joinKind == "JOIN") assertPushedAndIdentical(sql) else {
                 assertThat(query(eager, sql)).joinIsNotFullyPushedDown()
-                assertThat(rows(eager, sql)).isEqualTo(rows(session, sql))
+                assertThat(rows(eager, sql)).isEqualTo(rows(fullyLocalSession(eager), sql))
             }
         }
         // exact semantics pins: NULL keys never match; duplicates multiply (2x2)
@@ -90,27 +83,30 @@ class TestDorisP5JoinPushdown : AbstractTestQueryFramework() {
 
     @Test
     fun testOuterNullSafeJoinStaysLocal() {
-        // Doris rejects IS NOT DISTINCT FROM syntax; the QueryBuilder renders <=> —
-        // truth-table proven identical (NULL<=>NULL=1, NULL<=>1=0). LEFT JOIN shape:
-        // for INNER joins the engine plans IS NOT DISTINCT FROM as cross-join + filter,
-        // which never reaches applyJoin (pinned by the engine, not a connector choice).
         val sql = "SELECT l.lv, r.rv FROM doris.p5_join.l l LEFT JOIN doris.p5_join.r r ON l.k IS NOT DISTINCT FROM r.k"
         assertThat(query(eager, sql)).joinIsNotFullyPushedDown()
-        assertThat(rows(eager, sql)).isEqualTo(rows(session, sql))
+        assertThat(rows(eager, sql)).isEqualTo(rows(fullyLocalSession(eager), sql))
         // the NULL keys DO match each other under this operator
         assertThat(rows(eager, sql)).anySatisfy { assertThat(it).contains("lnull").contains("rnull") }
         assertThat(remoteStatements(eager, sql)).allSatisfy { assertThat(it).doesNotContain("JOIN", "<=>") }
     }
 
     @Test
+    fun testInnerEquiJoinWithNullSafeConditionPushes() {
+        // An equi conjunct keeps the null-safe condition inside the inner JoinNode.
+        val sql = "SELECT l.lv, r.rv FROM doris.p5_join.l l JOIN doris.p5_join.r r " +
+            "ON l.id = r.id AND l.k IS NOT DISTINCT FROM r.k"
+        assertPushedAndIdentical(sql)
+        assertThat(rows(eager, sql)).anySatisfy { assertThat(it).contains("lnull").contains("rnull") }
+        assertThat(remoteStatements(eager, sql).single()).contains("INNER JOIN", "<=>")
+    }
+
+    @Test
     fun testOuterNonEquiConditionsStayLocal() {
-        // range/inequality operators render natively; NULL keys drop on both engines
-        // (probed); LEFT JOIN keeps the condition in the join (INNER non-equi is planned
-        // as cross+filter by the engine and never reaches applyJoin)
         for (op in listOf("<", "<=", ">", ">=", "<>")) {
             val sql = "SELECT l.lv, r.rv FROM doris.p5_join.l l LEFT JOIN doris.p5_join.r r ON l.k $op r.k"
             assertThat(query(eager, sql)).joinIsNotFullyPushedDown()
-            assertThat(rows(eager, sql)).isEqualTo(rows(session, sql))
+            assertThat(rows(eager, sql)).isEqualTo(rows(fullyLocalSession(eager), sql))
         }
     }
 
@@ -128,7 +124,7 @@ class TestDorisP5JoinPushdown : AbstractTestQueryFramework() {
             val sql = "SELECT l.lv, e.ev FROM doris.p5_join.l l $joinKind doris.p5_join.e e ON l.k = e.k"
             if (joinKind == "JOIN") assertPushedAndIdentical(sql) else {
                 assertThat(query(eager, sql)).joinIsNotFullyPushedDown()
-                assertThat(rows(eager, sql)).isEqualTo(rows(session, sql))
+                assertThat(rows(eager, sql)).isEqualTo(rows(fullyLocalSession(eager), sql))
             }
         }
     }
@@ -148,7 +144,7 @@ class TestDorisP5JoinPushdown : AbstractTestQueryFramework() {
         )
         for (sql in denied) {
             assertThat(query(eager, sql)).describedAs(sql).joinIsNotFullyPushedDown()
-            assertThat(rows(eager, sql)).describedAs(sql).isEqualTo(rows(session, sql))
+            assertThat(rows(eager, sql)).describedAs(sql).isEqualTo(rows(fullyLocalSession(eager), sql))
         }
         // FULL string mode does NOT unlock text join keys (documented future, not v1)
         val fullMode = Session.builder(eager)
@@ -175,13 +171,13 @@ class TestDorisP5JoinPushdown : AbstractTestQueryFramework() {
         // aggregate over a pushed join: still one remote statement
         val agg = "SELECT count(*) FROM doris.p5_join.l l JOIN doris.p5_join.r r ON l.k = r.k"
         assertThat(query(eager, agg)).isFullyPushedDown()
-        assertThat(computeActual(eager, agg).onlyValue).isEqualTo(computeActual(agg).onlyValue)
+        assertThat(computeActual(eager, agg).onlyValue).isEqualTo(computeActual(fullyLocalSession(eager), agg).onlyValue)
         val aggStatement = remoteStatements(eager, agg).single()
         assertThat(aggStatement).contains("count(*)").contains("INNER JOIN")
         // predicates push INSIDE the join sides
         val filtered = "SELECT l.lv, r.rv FROM doris.p5_join.l l JOIN doris.p5_join.r r ON l.k = r.k WHERE l.id > 1"
         assertThat(query(eager, filtered)).isFullyPushedDown()
-        assertThat(rows(eager, filtered)).isEqualTo(rows(session, filtered))
+        assertThat(rows(eager, filtered)).isEqualTo(rows(fullyLocalSession(eager), filtered))
         assertThat(remoteStatements(eager, filtered).single()).contains("`id` > 1")
     }
 
@@ -199,6 +195,7 @@ class TestDorisP5JoinPushdown : AbstractTestQueryFramework() {
         // DorisTableStatisticsReader through getTableStatistics) is what decided
         assertThat(query(eager, statless)).isFullyPushedDown()
         assertThat(rows(automatic, statless)).isEqualTo(rows(eager, statless))
+        assertThat(rows(eager, statless)).isEqualTo(rows(fullyLocalSession(eager), statless))
     }
 
     companion object {
