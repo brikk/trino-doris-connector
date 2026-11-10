@@ -36,7 +36,6 @@ class TestDorisPreparedStatement {
     @Test
     fun testLateResultCloseWaitsForAbort() = assertCleanupWaitsForAbort(lateResult = true)
 
-    @Suppress("LongMethod", "CyclomaticComplexMethod") // Two schedules share the same strict JDBC fakes.
     private fun assertCleanupWaitsForAbort(lateResult: Boolean) {
         val executeEntered = CountDownLatch(1)
         val releaseExecute = CountDownLatch(if (lateResult) 1 else 0)

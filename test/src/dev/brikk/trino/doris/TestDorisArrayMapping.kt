@@ -339,7 +339,6 @@ class TestDorisArrayMapping : DorisPushdownTest("p2_array", { provisionFixture()
     }
 
     companion object {
-        @Suppress("LongMethod")
         private fun provisionFixture() {
             provisionFixture(
                 "p2_array",

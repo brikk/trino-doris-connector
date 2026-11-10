@@ -72,7 +72,6 @@ object DorisFixtures {
      * retired. Do not edit values without re-running such a diff against a cluster that
      * still carries proven-good fixtures.
      */
-    @Suppress("MaxLineLength", "ktlint:standard:max-line-length")
     private val PROVISION_STATEMENTS = arrayOf(
         "DROP DATABASE IF EXISTS p0_probe",
         "CREATE DATABASE p0_probe",

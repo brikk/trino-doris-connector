@@ -105,7 +105,6 @@ class TestDorisTableStatisticsReader {
         assertThat(value.range).isEmpty()
     }
 
-    @Suppress("CyclomaticComplexMethod") // Strict fake JDBC responses for both metadata queries.
     private fun read(tableRows: Long, rows: List<Map<String, String?>>): TableStatistics {
         val tableResult = jdbcProxy(ResultSet::class.java) { method, _ ->
             when (method) {

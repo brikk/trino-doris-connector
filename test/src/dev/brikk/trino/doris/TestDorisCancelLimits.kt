@@ -58,7 +58,7 @@ class TestDorisCancelLimits {
     }
 
     @Test
-    @Suppress("LongMethod", "ThrowsCount") // Saturation and wrapper fallback share strict fakes and one held gate.
+    @Suppress("ThrowsCount") // Saturation and wrapper fallback share strict fakes and one held gate.
     fun testSaturationRejectsWithoutCallerWorkAndStillAbortsScan() {
         val executor = DorisClusterScopedCancel.newExecutor()
         val caller = newWorker("cancel-limit-caller")
@@ -227,7 +227,7 @@ class TestDorisCancelLimits {
     @Test
     fun testWatchdogRemainsArmedDuringConnectionClose() = assertWatchdogReleasesHelper(stallClose = true)
 
-    @Suppress("LongMethod", "CyclomaticComplexMethod", "NestedBlockDepth", "ThrowsCount") // Shared strict JDBC script.
+    @Suppress("NestedBlockDepth", "ThrowsCount") // Shared strict JDBC script.
     private fun assertWatchdogReleasesHelper(stallClose: Boolean) {
         val executor = newWorker()
         val stalled = CountDownLatch(1)

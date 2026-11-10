@@ -135,7 +135,7 @@ class TestDorisClusterScopedCancel {
     }
 
     @Test
-    @Suppress("LongMethod", "CyclomaticComplexMethod", "NestedBlockDepth", "ThrowsCount") // Strict fake-JDBC script with its assertions.
+    @Suppress("NestedBlockDepth", "ThrowsCount") // Strict fake-JDBC script with its assertions.
     fun testProductionHelperRetriesEmptyAndUnassignedRowsUntilReleased() {
         val marker = "trino_statement_id=${UUID.randomUUID()}"
         val queryId = "ce96d055444242d1-a5a580d0c15a4c40"
@@ -205,7 +205,7 @@ class TestDorisClusterScopedCancel {
 
 
     @Test
-    @Suppress("LongMethod", "CyclomaticComplexMethod", "NestedBlockDepth") // One live probe, including failure-path cleanup.
+    @Suppress("NestedBlockDepth") // One live probe, including failure-path cleanup.
     fun testProductionHelperCancelsOnlyItsStatementAndRepeatIsHarmless() {
         val queryMarker = "trino_query_id=${SESSION.queryId}"
         val markers = List(2) { "trino_statement_id=${UUID.randomUUID()}" }

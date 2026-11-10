@@ -118,7 +118,6 @@ class TestDorisCancelVisibility {
         }
     }
 
-    @Suppress("CyclomaticComplexMethod") // Strict JDBC script for both SET failure and successful kill.
     private fun helper(marker: String, killed: MutableList<String>, failedSet: SQLException?, running: AtomicBoolean): Connection {
         val statement = jdbcProxy(Statement::class.java) { method, args ->
             when (method) {
