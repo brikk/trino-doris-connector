@@ -33,33 +33,25 @@ import java.time.format.ResolverStyle
 import java.time.temporal.ChronoField
 
 /**
- * Strict recursive-descent decoder for the PROVEN Doris 4.1.3 ARRAY `getString()` wire grammar
- * (`dev-docs/archive/REPORT-array-wire-decoder-spike.md` §2; the checked-in spike is evidence, this is the
- * production implementation):
+ * Strict decoder for the text Doris returns from `getString()` on an ARRAY column:
  *
  * ```
- * array        = "[" [ element *( ", " element ) ] "]"     ; separator is comma + ONE space
- * element      = "null" | bare-scalar | quoted-scalar | array
- * bare-scalar  = int | largeint | decimal | float | boolean("1"/"0")
- * quoted-scalar= '"' <raw bytes, NO escaping> '"'          ; DATE / DATETIME / IPV4 / IPV6 only
+ * array         = "[" [ element *( ", " element ) ] "]"   ; separator is comma + one space
+ * element       = "null" | bare-scalar | quoted-scalar | array
+ * bare-scalar   = int | largeint | decimal | float | "1" | "0"
+ * quoted-scalar = '"' <raw text, no escaping> '"'        ; DATE, DATETIME, IPV4, IPV6
  * ```
  *
- * Distinctions preserved exactly (spike F1): `[]` = empty array, bare `null` = NULL element,
- * SQL NULL array = JDBC `getString()` null (handled by the caller's isNull check, never here).
+ * `[]` is an empty array and a bare `null` a NULL element; a NULL array arrives as a null string
+ * and is handled by the caller. DATETIME fractions have exactly the declared scale. Quoted content
+ * is not escaped, so a quoted element ends at the first `"` followed by `, `, `]` or the end of
+ * the text; the quoted types never contain `"`. Anything outside the grammar fails with its
+ * offset; there is no lenient fallback.
  *
- * Because quoted content carries NO escaping (spike F4 — the reason string-family elements are
- * DENIED), the closing quote of a quoted element is the first `"` followed by `, ` or `]`;
- * an interior `"` in any allowlisted quoted kind (DATE/DATETIME/IP — alphabets exclude `"`)
- * is an alphabet violation and fails loud. Everything outside the grammar fails loud with the
- * wire offset; there is NO permissive fallback (spike F6: 12/12 malformed samples throw).
- *
- * Output values are Trino native carriers ready for [elementsBlock]:
- * Long (integers / epoch-day / epoch-micros / float bits / short-decimal unscaled),
- * Int128 (LARGEINT and long DECIMAL), Boolean, Double, Slice (IPADDRESS 16 bytes),
- * List (nested arrays), null (NULL element).
+ * Decoded values are Trino native values for [elementsBlock]: Long (integers, dates, timestamps,
+ * REAL bits, short decimals), Int128, Boolean, Double, Slice, List for a nested array, or null.
  */
 internal object DorisArrayWireDecoder {
-    /** Doris DATETIME wire text: `uuuu-MM-dd HH:mm:ss` + optional fraction of the declared scale (1..6 digits). */
     private val DATETIME_FORMATTER: DateTimeFormatter = DateTimeFormatterBuilder()
         .appendPattern("uuuu-MM-dd HH:mm:ss")
         .optionalStart()
@@ -78,7 +70,6 @@ internal object DorisArrayWireDecoder {
         return values
     }
 
-    /** Builds the Trino elements Block for an array value (PostgreSqlClient Block-construction pattern). */
     fun elementsBlock(element: DorisArrayElement, values: List<Any?>): Block {
         val builder: BlockBuilder = element.trinoType.createBlockBuilder(null, values.size)
         for (value in values) {
@@ -132,7 +123,6 @@ internal object DorisArrayWireDecoder {
                         return values
                     }
                     ',' -> {
-                        // separator MUST be exactly comma + one space (byte-verified grammar)
                         if (position + 1 >= length || wire[position + 1] != ' ') {
                             fail("separator ',' not followed by a space", position)
                         }
@@ -145,7 +135,6 @@ internal object DorisArrayWireDecoder {
 
         private fun parseElement(element: DorisArrayElement): Any? {
             if (wire.regionMatches(position, NULL_TOKEN, 0, NULL_TOKEN.length)) {
-                // A bare null must be bounded by the separator or ']' (spike guard).
                 val after = position + NULL_TOKEN.length
                 if (after == length || wire[after] == ',' || wire[after] == ']') {
                     position = after
@@ -166,7 +155,6 @@ internal object DorisArrayWireDecoder {
             }
         }
 
-        /** Bare (unquoted) token: everything up to the next ',' or ']'. */
         private fun parseBare(element: DorisArrayElement): Any {
             val start = position
             while (position < length && wire[position] != ',' && wire[position] != ']') {
@@ -187,7 +175,6 @@ internal object DorisArrayWireDecoder {
                     is DorisArrayElement.SmallintElement -> rangeCheckedLong(token, Short.MIN_VALUE.toLong(), Short.MAX_VALUE.toLong(), "SMALLINT", at)
                     is DorisArrayElement.IntegerElement -> rangeCheckedLong(token, Int.MIN_VALUE.toLong(), Int.MAX_VALUE.toLong(), "INT", at)
                     is DorisArrayElement.BigintElement -> token.toLong()
-                    // exact 128-bit via BigInteger; out-of-DECIMAL(38,0) fails loud, never clamps
                     is DorisArrayElement.LargeintElement -> DorisTypeMapping.parseLargeint(token)
                     is DorisArrayElement.DecimalElement -> decodeDecimal(element, token, at)
                     is DorisArrayElement.RealElement -> floatToRawIntBits(strictFloat(token)).toLong()
@@ -199,7 +186,6 @@ internal object DorisArrayWireDecoder {
             }
         }
 
-        /** The wire renders booleans as 1/0, never true/false (spike §2). */
         private fun decodeBoolean(token: String, at: Int): Boolean = when (token) {
             "1" -> true
             "0" -> false
@@ -214,11 +200,6 @@ internal object DorisArrayWireDecoder {
             return value
         }
 
-        /**
-         * BigDecimal decode — never through double, trailing zeros/scale preserved (spike F2).
-         * Rescale to the declared scale is exact-only; more fractional digits than declared
-         * (impossible per grammar, "fraction width = declared scale") fails loud.
-         */
         private fun decodeDecimal(element: DorisArrayElement.DecimalElement, token: String, at: Int): Any {
             val decimalType = element.decimalType
             val value = try {
@@ -236,11 +217,6 @@ internal object DorisArrayWireDecoder {
             }
         }
 
-        /**
-         * Surfacing Infinity/-Infinity/NaN faithfully is MANDATED for approximate types
-         * (ledger §A F3 caveat): Doris renders DOUBLE max as a 16-sig-digit form that reparses
-         * to Infinity — never a silently-wrong finite value, never a decode error.
-         */
         private fun strictFloat(token: String): Float = when (token) {
             "Infinity" -> Float.POSITIVE_INFINITY
             "-Infinity" -> Float.NEGATIVE_INFINITY
@@ -248,6 +224,10 @@ internal object DorisArrayWireDecoder {
             else -> token.toFloat()
         }
 
+        /**
+         * Doris prints the largest finite DOUBLE with 16 significant digits, which parses as
+         * Infinity. That value reads as Infinity rather than failing the scan.
+         */
         private fun strictDouble(token: String): Double = when (token) {
             "Infinity" -> Double.POSITIVE_INFINITY
             "-Infinity" -> Double.NEGATIVE_INFINITY
@@ -255,12 +235,6 @@ internal object DorisArrayWireDecoder {
             else -> token.toDouble()
         }
 
-        /**
-         * Quoted element. Because the content carries NO escaping, the closing `"` is the
-         * first `"` followed by `, ` / `]` / end-of-text. For the allowlisted quoted kinds
-         * (DATE/DATETIME/IP) whose value alphabets exclude `"`, this rule is EXACT; an
-         * interior `"` is an alphabet violation and fails loud (spike §4).
-         */
         private fun parseQuoted(element: DorisArrayElement): String {
             if (position >= length || wire[position] != '"') {
                 fail("expected '\"' to open a quoted ${element.javaClass.simpleName} element", position)
@@ -314,7 +288,7 @@ internal object DorisArrayWireDecoder {
             try {
                 return toTrinoTimestamp(element.timestampType, localDateTime)
             } catch (e: VerifyException) {
-                // wire fraction finer than the declared precision — outside the grammar
+                // a fraction finer than the declared precision
                 fail("DATETIME element '$raw' does not fit ${element.timestampType}: ${e.message}", at)
             }
         }
