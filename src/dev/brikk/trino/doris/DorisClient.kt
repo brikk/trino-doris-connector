@@ -308,8 +308,8 @@ class DorisClient @Inject constructor(
         val query = prepareQuery(session, connection, table, Optional.empty(), columns, emptyMap(), Optional.of(split))
             .transformQuery { sql -> "/*$marker*/ $sql" }
         val statement = queryBuilder.prepareStatement(this, session, connection, query, Optional.of(columns.size))
-        return DorisPreparedStatement(statement, connection) { executionFinished ->
-            clusterScopedCancel.cancel(session, marker, executionFinished)
+        return DorisPreparedStatement(statement, connection) { answered, executionFinished ->
+            clusterScopedCancel.cancel(session, marker, answered, executionFinished)
         }
     }
 

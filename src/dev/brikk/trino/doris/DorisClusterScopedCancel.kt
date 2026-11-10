@@ -73,10 +73,12 @@ internal class DorisClusterScopedCancel(
     }
 
     /**
-     * [executionFinished] must report that the statement's execute call has returned, not merely
-     * that the scan was cancelled or closed: only then does an empty processlist prove release.
+     * [answered] says Doris had already answered the statement, with a result or an error, when
+     * the cancel began. The frontend has then seen it, so one empty processlist proves it is gone.
+     * A statement cancelled in flight may not have reached the frontend yet: it is gone only once
+     * it has been seen and has disappeared after its execute call returned ([executionFinished]).
      */
-    fun cancel(session: ConnectorSession, marker: String, executionFinished: () -> Boolean) {
+    fun cancel(session: ConnectorSession, marker: String, answered: Boolean = false, executionFinished: () -> Boolean) {
         if (!enabled) {
             return
         }
@@ -87,7 +89,7 @@ internal class DorisClusterScopedCancel(
             return
         }
         val deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMillis)
-        if (Request(session, marker, executionFinished, deadline).dispatch()) {
+        if (Request(session, marker, answered, executionFinished, deadline).dispatch()) {
             stats.killsDispatched.incrementAndGet()
         }
     }
@@ -95,12 +97,12 @@ internal class DorisClusterScopedCancel(
     private inner class Request(
         private val session: ConnectorSession,
         private val marker: String,
+        private val answered: Boolean,
         private val executionFinished: () -> Boolean,
         private val deadline: Long,
     ) : Runnable {
         private val completed = AtomicBoolean()
         private var observed = false
-        private var finishedEmptyProbes = 0
 
         fun dispatch(): Boolean {
             if (completed.get()) {
@@ -133,7 +135,7 @@ internal class DorisClusterScopedCancel(
                     // Read before scanning: a query that finishes during SHOW does not prove absence.
                     val finishedBeforeScan = executionFinished()
                     val queries = scanRunningQueries(statement, marker)
-                    if (isGone(!queries.found, finishedBeforeScan)) {
+                    if (isGone(queries.found, finishedBeforeScan)) {
                         false
                     } else {
                         observed = observed || queries.found
@@ -156,14 +158,8 @@ internal class DorisClusterScopedCancel(
             }
         }
 
-        private fun isGone(emptyScan: Boolean, finishedBeforeScan: Boolean): Boolean {
-            if (!emptyScan || !finishedBeforeScan) {
-                finishedEmptyProbes = 0
-                return false
-            }
-            finishedEmptyProbes++
-            return observed || finishedEmptyProbes >= FINISHED_EMPTY_PROBE_LIMIT
-        }
+        private fun isGone(found: Boolean, finishedBeforeScan: Boolean): Boolean =
+            !found && (answered || (finishedBeforeScan && observed))
 
         private fun scheduleRetry() {
             val remaining = deadline - System.nanoTime()
@@ -305,8 +301,6 @@ internal class DorisClusterScopedCancel(
         /** Dispatch-to-expiry window shared by every probe of a request. */
         private const val KILL_WINDOW_MILLIS = 15_000L
         private const val KILL_RECHECK_MILLIS = 500L
-        // Three empty probes span two retry intervals, allowing delayed FE visibility without a full-window search.
-        private const val FINISHED_EMPTY_PROBE_LIMIT = 3
         private const val WORKER_COUNT = 8
         private const val QUEUE_CAPACITY = 64
 

@@ -95,7 +95,7 @@ class TestDorisCancelLimits {
             aborts.incrementAndGet()
             null
         }
-        val statement = DorisPreparedStatement(delegate, connection) { finished -> cancel.cancel(session, marker, finished) }
+        val statement = DorisPreparedStatement(delegate, connection) { answered, finished -> cancel.cancel(session, marker, answered, finished) }
         try {
             assertThat(executor.corePoolSize).isEqualTo(8)
             assertThat(executor.maximumPoolSize).isEqualTo(8)

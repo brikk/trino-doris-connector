@@ -119,18 +119,63 @@ class TestDorisCancelScheduling {
     }
 
     @Test
-    fun testFinishedNeverObservedStatementStopsAfterThreeEmptyProbes() {
+    fun testAnsweredStatementAbsentFromProcesslistCostsOneProbe() {
         val executor = DorisClusterScopedCancel.newExecutor()
         val scheduler = DorisClusterScopedCancel.newRetryScheduler()
         val slots = Semaphore(1)
         val model = Model()
         try {
-            resources.newCancel(model.factory, true, executor, 5000, scheduler, slots).cancel(session, marker()) { true }
+            val cancel = resources.newCancel(model.factory, true, executor, 5000, scheduler, slots)
+            cancel.cancel(session, marker(), answered = true) { true }
             assertThat(slots.tryAcquire(1, 3, SECONDS)).isTrue()
-            assertThat(model.deadlines).hasSize(3)
+            assertThat(model.deadlines).hasSize(1)
+            assertThat(cancel.stats.killsExpired.get()).isZero()
             assertThat(model.active.get()).isZero()
             assertThat(model.failures).isEmpty()
             assertThat(scheduler.queue).isEmpty()
+        } finally {
+            scheduler.shutdownNow()
+            executor.shutdownNow()
+            assertThat(scheduler.awaitTermination(5, SECONDS)).isTrue()
+            assertThat(executor.awaitTermination(5, SECONDS)).isTrue()
+        }
+    }
+
+    @Test
+    fun testAnsweredStatementStillRunningIsKilledThenConfirmedGone() {
+        val executor = DorisClusterScopedCancel.newExecutor()
+        val scheduler = DorisClusterScopedCancel.newRetryScheduler()
+        val slots = Semaphore(1)
+        val model = Model(liveMarker = marker())
+        try {
+            resources.newCancel(model.factory, true, executor, 5000, scheduler, slots)
+                .cancel(session, requireNotNull(model.liveMarker), answered = true) { true }
+            assertThat(slots.tryAcquire(1, 3, SECONDS)).isTrue()
+            assertThat(model.killed.count).isZero()
+            assertThat(model.deadlines).hasSize(2)
+            assertThat(model.failures).isEmpty()
+        } finally {
+            scheduler.shutdownNow()
+            executor.shutdownNow()
+            assertThat(scheduler.awaitTermination(5, SECONDS)).isTrue()
+            assertThat(executor.awaitTermination(5, SECONDS)).isTrue()
+        }
+    }
+
+    @Test
+    fun testStatementCancelledInFlightAndNeverSeenIsProbedUntilTheDeadline() {
+        val executor = DorisClusterScopedCancel.newExecutor()
+        val scheduler = DorisClusterScopedCancel.newRetryScheduler()
+        val slots = Semaphore(1)
+        val model = Model()
+        try {
+            val cancel = resources.newCancel(model.factory, true, executor, 1600, scheduler, slots)
+            cancel.cancel(session, marker(), answered = false) { true }
+            assertThat(slots.tryAcquire(1, 4, SECONDS)).isTrue()
+            assertThat(model.deadlines.size).isGreaterThanOrEqualTo(3)
+            assertThat(cancel.stats.killsExpired.get()).isEqualTo(1)
+            assertThat(model.active.get()).isZero()
+            assertThat(model.failures).isEmpty()
         } finally {
             scheduler.shutdownNow()
             executor.shutdownNow()

@@ -127,7 +127,7 @@ class TestDorisHaReadCancellation {
             readConnection(url).use { connection ->
                 val raw = connection.prepareStatement("SELECT number FROM numbers('number'='100000')")
                 raw.unwrap(JdbcStatement::class.java).enableStreamingResults()
-                DorisPreparedStatement(raw, connection) {}.use { statement ->
+                DorisPreparedStatement(raw, connection) { _, _ -> }.use { statement ->
                     val result = statement.executeQuery()
                     assertThat(result.next()).isTrue()
                     val started = System.nanoTime()
@@ -201,7 +201,7 @@ class TestDorisHaReadCancellation {
             assertThat(captured).isNotSameAs(current)
             val executor = Executors.newSingleThreadExecutor()
             try {
-                DorisPreparedStatement(raw, connection) {}.use { statement ->
+                DorisPreparedStatement(raw, connection) { _, _ -> }.use { statement ->
                     val execution = executor.submit { runCatching { statement.executeQuery().close() } }
                     awaitVisible(marker)
                     assertThat(connectionId(marker)).isEqualTo(captured.threadId)
@@ -234,7 +234,7 @@ class TestDorisHaReadCancellation {
             readConnection(url).use { connection ->
                 val raw = connection.prepareStatement("/*$marker*/ SELECT sleep(4)")
                 raw.unwrap(JdbcStatement::class.java).enableStreamingResults()
-                val statement = DorisPreparedStatement(raw, connection) { finished -> helper.cancel(session, marker, finished) }
+                val statement = DorisPreparedStatement(raw, connection) { answered, finished -> helper.cancel(session, marker, answered, finished) }
                 val execution = executor.submit<String> {
                     runCatching { statement.executeQuery().use { result -> while (result.next()) { result.getObject(1) } } }
                         .exceptionOrNull()?.javaClass?.simpleName ?: "completed"

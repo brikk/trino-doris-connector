@@ -28,6 +28,7 @@ import java.util.concurrent.TimeUnit.SECONDS
 import java.util.concurrent.TimeoutException
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicReference
 
 class TestDorisPreparedStatement {
     @Test
@@ -72,7 +73,9 @@ class TestDorisPreparedStatement {
             aborted.set(true)
             null
         }
-        val statement = DorisPreparedStatement(delegate, connection) {
+        val answeredBeforeCancel = AtomicReference<Boolean>()
+        val statement = DorisPreparedStatement(delegate, connection) { answered, _ ->
+            answeredBeforeCancel.set(answered)
             cancelEntered.countDown()
             await(releaseCancel)
         }
@@ -85,6 +88,7 @@ class TestDorisPreparedStatement {
             if (!lateResult) execution.get(5, SECONDS)
             val cancellation = executor.submit { statement.cancel() }.also { futures.add(it) }
             await(cancelEntered)
+            assertThat(answeredBeforeCancel.get()).describedAs("Doris answered before the cancel began").isEqualTo(!lateResult)
             val cleanup = if (lateResult) {
                 releaseExecute.countDown()
                 execution
@@ -134,7 +138,7 @@ class TestDorisPreparedStatement {
             aborts.incrementAndGet()
             null
         }
-        val statement = DorisPreparedStatement(delegate, connection) {} // Disabled helper is a no-op.
+        val statement = DorisPreparedStatement(delegate, connection) { _, _ -> } // Disabled helper is a no-op.
         assertThat(statement.unwrap(PreparedStatement::class.java)).isSameAs(statement)
         assertThat(statement.isWrapperFor(PreparedStatement::class.java)).isTrue()
         statement.executeQuery()

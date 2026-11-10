@@ -25,7 +25,7 @@ import java.util.concurrent.CountDownLatch
 internal class DorisPreparedStatement(
     private val delegate: PreparedStatement,
     private val connection: Connection,
-    private val cancelRemote: (() -> Boolean) -> Unit,
+    private val cancelRemote: (answered: Boolean, executionFinished: () -> Boolean) -> Unit,
 ) : PreparedStatement by delegate {
     private val lock = Any()
     private val cancellationComplete = CountDownLatch(1)
@@ -72,8 +72,10 @@ internal class DorisPreparedStatement(
         }
         try {
             if (needsAbort) {
+                // Read before the abort below, which ends execution without an answer from Doris.
+                val answered = executionFinished
                 try {
-                    cancelRemote { executionFinished }
+                    cancelRemote(answered) { executionFinished }
                 } finally {
                     // Also covers close during execution, where Trino never calls abortReadConnection.
                     // Not delegate.cancel(): Connector/J would send a connection-id kill, which a

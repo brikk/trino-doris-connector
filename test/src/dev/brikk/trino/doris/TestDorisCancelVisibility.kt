@@ -75,7 +75,7 @@ class TestDorisCancelVisibility {
                     aborts++
                     null
                 }
-                DorisPreparedStatement(raw, connection) { done -> cancel.cancel(session, marker, done) }.use {
+                DorisPreparedStatement(raw, connection) { answered, done -> cancel.cancel(session, marker, answered, done) }.use {
                     it.executeQuery()
                     it.cancel()
                 }
