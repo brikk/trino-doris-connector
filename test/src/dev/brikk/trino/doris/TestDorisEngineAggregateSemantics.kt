@@ -27,7 +27,7 @@ import org.junit.jupiter.api.TestInstance
  * re-derived — never silently.
  */
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
-class TestDorisP4AggregateProbes {
+class TestDorisEngineAggregateSemantics {
     @BeforeAll
     fun provision() {
         DorisTestCluster.executeAsRoot(
