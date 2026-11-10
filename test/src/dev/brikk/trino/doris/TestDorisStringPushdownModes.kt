@@ -30,7 +30,7 @@ import org.junit.jupiter.api.TestInstance
  * ground truth) and the direct Doris oracle, with plan-shape and audit-log assertions.
  */
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
-class TestDorisP4StringPushdown : DorisPushdownTest("p4_strings", { provisionFixture() }) {
+class TestDorisStringPushdownModes : DorisPushdownTest("p4_strings", { provisionFixture() }) {
 
     private fun modeSession(mode: DorisStringPushdownMode): Session = Session.builder(session)
         .setCatalogSessionProperty(DorisQueryRunner.CATALOG, "string_pushdown_mode", mode.name)
