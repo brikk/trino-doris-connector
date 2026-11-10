@@ -30,11 +30,6 @@ import io.trino.spi.expression.StandardFunctions.NULLIF_FUNCTION_NAME
 
 /** Every rule that can push a predicate, projection or aggregate down to Doris. */
 internal class DorisPushdownRewriters(typeMapping: DorisTypeMapping, quote: (String) -> String) {
-    /**
-     * Batch-1 SCALAR VALUE tier ([DorisScalarPushdownRules]): typed, composable rewrites of
-     * coalesce/nullif/year..second/length over the closed value-type set.
-     * Shared by the predicate bridges below and the projection path.
-     */
     private val scalar = DorisRewriterHolder().also { holder ->
         holder.rewriter = JdbcConnectorExpressionRewriterBuilder.newBuilder()
             .add(RewriteScalarVariable(typeMapping, quote))
@@ -42,35 +37,26 @@ internal class DorisPushdownRewriters(typeMapping: DorisTypeMapping, quote: (Str
             .add(RewriteScalarFunctionByName(COALESCE_FUNCTION_NAME, "coalesce", 2..MAX_SCALAR_ARITY))
             .add(RewriteScalarFunctionByName(NULLIF_FUNCTION_NAME, "nullif", 2..2))
             .apply { listOf("year", "month", "day", "hour", "minute", "second").forEach { add(RewriteTemporalExtract(it)) } }
-            // Doris 4.1.5 full/contextual Unicode folding differs from Trino. Keep
-            // both functions and expressions containing them in the engine in every mode.
+            // No lower/upper in any mode: Doris folds case differently from Trino on stored
+            // columns (for example upper('ß') is 'SS' in Doris and 'ß' in Trino).
             .add(RewriteCharLength())
             .build()
     }
 
     /**
-     * Typed ARRAY predicate rules (PLAN §6.1 layer 2, §6.2; P2b/P3) in two tiers:
+     * Two tiers. Value-safe rules return the same value as Trino for every input, NULL included,
+     * so they may be composed under NOT/AND/OR. The other rules agree with Trino only on which
+     * rows a top-level WHERE conjunct keeps, so they are never composed: the composition rules
+     * rewrite their children through the value-safe rewriter, which does not contain them.
      *
-     * - VALUE-SAFE tier: `array_position` comparisons (value-identical on both engines)
-     *   plus NOT/AND/OR composition over that tier
-     *   only — safe because Doris's three-valued logic is live-proven identical to Trino's
-     *   (see [RewriteValueSafeNot] and the P3 composition pins).
-     * - PREDICATE-LEVEL tier: `contains` / `arrays_overlap`, whose NULL cells differ at
-     *   value level (Trino NULL vs Doris 0/1). They may ONLY surface as top-level WHERE
-     *   conjuncts and are structurally excluded from composition: the composition rules
-     *   rewrite children through the value-safe rewriter, which does not contain them.
-     *
-     * Deliberately NO `addStandardRules`: scalar column-vs-literal comparisons and
-     * IS [NOT] NULL are already covered exactly by domain pushdown (P1a controllers);
-     * column-to-column scalar comparison rules would be new unproven surface (P3 remainder).
+     * No `addStandardRules`: column-to-literal comparisons and IS NULL already push as domains,
+     * and column-to-column comparisons are not pushed.
      */
     val predicate: ConnectorExpressionRewriter<ParameterizedExpression> = run {
         val support = DorisArrayPushdownSupport(typeMapping, quote)
         val valueSafe = DorisRewriterHolder()
         val valueSafeRules = listOf(
             RewriteArrayPositionComparison(support),
-            // cardinality -> array_size: value-identical on every reachable cell (P5 pins),
-            // so composable
             RewriteCardinalityComparison(support),
             RewriteValueSafeNot(valueSafe),
             RewriteValueSafeLogical(valueSafe),
@@ -82,15 +68,8 @@ internal class DorisPushdownRewriters(typeMapping: DorisTypeMapping, quote: (Str
             .apply { valueSafeRules.forEach { add(it) } }
             .add(RewriteContains(support))
             .add(RewriteArraysOverlap(support))
-            // LIKE pushes only in BINARY/FULL string mode (rule.isEnabled gates per session);
-            // stays out of the value-safe tier (no composition) — probe report, LIKE section.
             .add(RewriteStringLike(quote))
-            // JSON equality is PREDICATE-level (divergent cells are both-drop only under a
-            // top-level '='), so it too stays out of the value-safe tier
             .add(RewriteJsonExtractScalarEquality(quote))
-            // Batch-1 scalar bridges: comparisons / IS NULL over scalar-tier function shapes
-            // (plain column shapes stay domain territory) + starts_with -> escaped LIKE-prefix.
-            // Top-level-conjunct tier (not composable under NOT/AND/OR).
             .add(RewriteScalarComparisonBridge(scalar))
             .add(RewriteScalarIsNullBridge(scalar))
             .add(RewriteStartsWith(quote))
@@ -98,15 +77,10 @@ internal class DorisPushdownRewriters(typeMapping: DorisTypeMapping, quote: (Str
     }
 
     /**
-     * P6 typed scalar PROJECTION pushdown ([RewriteCastDatetimeToDate], [RewriteDateTrunc]):
-     * a converted projection becomes a synthetic derived column, which the aggregate
-     * machinery can then GROUP BY remotely — `GROUP BY date(event_at)` collapses into one
-     * Doris statement (proven end-to-end in TestDorisP6DateProjection). The scalar rewriter
-     * resolves source-column assignments and validates their native type mappings.
+     * A pushed projection becomes a synthetic column that aggregate pushdown can group on, so
+     * `GROUP BY date(event_at)` runs in Doris. Any expression the scalar tier accepts qualifies.
      */
     val projection: ProjectFunctionRewriter<JdbcExpression, ParameterizedExpression> = ProjectFunctionRewriter(
-        // the scalar tier doubles as the projection expression rewriter, so every scalar
-        // shape (and composition) it accepts becomes a groupable synthetic column
         scalar.rewriter,
         ImmutableSet.of<ProjectFunctionRule<JdbcExpression, ParameterizedExpression>>(
             RewriteCastDatetimeToDate(),
@@ -116,25 +90,10 @@ internal class DorisPushdownRewriters(typeMapping: DorisTypeMapping, quote: (Str
     )
 
     /**
-     * Verified aggregate pushdown (PLAN §6.5, P4), one live-proven family at a time. The
-     * argument rewriter is DELIBERATELY only [RewriteVariable] (quote a column reference):
-     * aggregate arguments must stay bare columns — no derived-expression surface. Family
-     * verdicts (full proofs in `dev-docs/archive/NOTES-p4-aggregates.md`, pinned by
-     * `TestDorisP4AggregateProbes`):
-     *
-     * - `count(*)` / `count(x)`: pushed (stock rules; bigint result; empty/all-NULL proven).
-     * - `count(DISTINCT x)`, exact key types: pushed ([DorisImplementCountDistinct]).
-     * - `min/max`, exact key types: pushed ([DorisImplementMinMax]); text (collation) and
-     *   REAL/DOUBLE (Doris max = NaN vs Trino 483 max = Infinity — divergent) stay local.
-     * - `sum(DECIMAL(p<=18, s))`: pushed ([DorisImplementSum]); every other sum family stays
-     *   local — Doris sums wrap SILENTLY (bigint at 2^64, decimal/largeint at 2^128) where
-     *   Trino throws.
-     * - `avg`: NEVER pushed. Doris avg(DECIMALV3(p, s)) computes at scale max(s, 4) with
-     *   TRUNCATION (live: avg{0.0001, 0.0000} = 0.0000 vs Trino HALF_UP 0.0001 at s=4) and
-     *   silently corrupts at p=38 (intermediate overflow); Doris avg(BIGINT) computes an
-     *   EXACT wide integer sum (live: avg{2^53, 1, -2^53, 1} = 0.5) while Trino 483
-     *   accumulates in DOUBLE (order-dependent, lossy — BigintAverageAggregations). Kept
-     *   local, Trino semantics preserved.
+     * Aggregate arguments must be bare columns, so the only expression rule is [RewriteVariable].
+     * `avg` is never pushed: on DECIMAL Doris truncates at scale max(s, 4) where Trino rounds half
+     * up, and can overflow at precision 38; on BIGINT Doris sums exactly where Trino averages in
+     * DOUBLE.
      */
     val aggregate: AggregateFunctionRewriter<JdbcExpression, ParameterizedExpression> = AggregateFunctionRewriter(
         JdbcConnectorExpressionRewriterBuilder.newBuilder()
@@ -155,7 +114,6 @@ internal class DorisPushdownRewriters(typeMapping: DorisTypeMapping, quote: (Str
     companion object {
         private const val MAX_SCALAR_ARITY = 10
 
-        /** Synthesized result handle for remote BIGINT aggregate results (count family). */
         private val BIGINT_TYPE_HANDLE: JdbcTypeHandle = DorisTypeMapping.toTypeHandle("bigint")
     }
 }
