@@ -55,6 +55,9 @@ overlay tests skip without an explicit failover request, even if ports are live.
 Never convert an OOM, truncated XML or an isolated rerun into a green full-suite
 claim. Keep results/commands and skip reasons separate by lane.
 
+The targeted replay cases are covered by the normal test source set; use `--tests`
+as described in Development, without a separate probe source set or init script.
+
 Use whole-operation local oracles and selective ordered limits where relevant;
 expression-only opt-out is not the same as disabling every connector pushdown.
 Recheck composition boundaries: rendered text with grouping/TopN, projections

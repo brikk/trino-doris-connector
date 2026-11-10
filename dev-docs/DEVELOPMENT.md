@@ -119,8 +119,10 @@ compilation failure is not accepted as proof.
 
 JUnit XML/HTML live under `build/test-results/` and `build/reports/tests/`.
 FE audit SQL and processlist/QueryIds support the pushdown/cancellation oracles.
-Use the [probe guide](probes/README.md) for targeted replays, not the archived
-commands as an assumed current release gate.
+Targeted regressions are part of the normal test source set: `TestDorisOuterJoinSafety`,
+`TestDorisHaReadCancellation`, `TestDorisStatisticsCachePolicy`, `TestDorisClusterScopedCancel`,
+`TestDorisTimeouts` and `TestDorisJdbcUrlValidation`. Select them with `--tests`;
+no extra init script is needed. Archived commands are not a current release gate.
 
 Stop the owned stacks when finished; retain volumes unless deletion is intended:
 

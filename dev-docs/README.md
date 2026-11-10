@@ -13,7 +13,6 @@ contains the current development reference, not a chronological work log.
 - [Releasing](RELEASING.md): existing version/build/package/publish mechanics.
 - [Backlog](BACKLOG.md): unresolved requirements, risks and deferred decisions;
   not an automatically expanding release-blocker list.
-- [Opt-in probes](probes/README.md): targeted regression replays outside the default build.
 
 [archive/](archive/README.md) retains founding plans, implementation journals,
 probe output, reviews and qualification records. Their dates/versions/statuses

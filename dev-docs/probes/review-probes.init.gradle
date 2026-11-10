@@ -1,7 +1,0 @@
-// Opt-in diagnostic sources; never part of the normal build or release gate.
-gradle.projectsEvaluated {
-    def project = gradle.rootProject
-    project.extensions.getByName('kotlin').sourceSets.getByName('test').kotlin.srcDir(
-        project.file('dev-docs/probes')
-    )
-}
