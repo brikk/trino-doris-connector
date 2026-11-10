@@ -21,6 +21,10 @@ qualification claim.
 - [Doris 4.1.4.1 upgrade](REPORT-doris-4.1.4.1-upgrade.md)
 - [Consolidated review and stable R/E/Q/D/K IDs](REVIEW-2026-09-05.md)
 - [Runtime triage with subsequent scoped resolutions](TRIAGE-trino-484-remaining-review.md)
+- Quality reviews of 2026-11-09, written before the cleanup they led to:
+  [combined, with branch status](QUALITY-REVIEW-2026-11-09-fable.md),
+  [Opus](QUALITY-REVIEW-2026-11-09-opus.md),
+  [Astra](QUALITY-REVIEW-2026-11-09-astra.md)
 
 ## Native observations and design evidence
 
