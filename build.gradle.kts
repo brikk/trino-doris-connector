@@ -1,3 +1,4 @@
+import dev.detekt.gradle.extensions.FailOnSeverity
 import java.nio.file.Files
 import java.util.zip.ZipFile
 
@@ -51,6 +52,8 @@ detekt {
     buildUponDefaultConfig = true
     config.setFrom(rootProject.file("config/detekt/detekt.yml"))
     source.setFrom("src", "test")
+    // Warnings are advisory (config/detekt/detekt.yml); only errors fail the build.
+    failOnSeverity = FailOnSeverity.Error
 }
 
 repositories {

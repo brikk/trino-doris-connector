@@ -20,6 +20,10 @@ mise exec -- ./gradlew classes testClasses detekt --no-daemon
 mise exec -- ./gradlew verifyPluginAssembly --no-daemon
 ```
 
+Detekt fails the build on errors only. Five size and complexity rules (line length, method
+length, cognitive and cyclomatic complexity, return count) are advisory warnings; see
+[AGENTS.md](../AGENTS.md) for how to treat them.
+
 `prepareManualPlugin` additionally writes the exact verified output path to
 `build/manual-plugin-path.txt`. It does not start a server. The assembly is an
 owned, synchronized directory of JARs, not a shaded JAR.

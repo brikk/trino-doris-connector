@@ -1,15 +1,30 @@
 # Overrides on top of detekt's default configuration (buildUponDefaultConfig = true).
+# The build fails on findings of severity error (failOnSeverity in build.gradle.kts).
+# Rules marked `severity: warning` are advisory: reported, never a build failure. See AGENTS.md.
 
 complexity:
   # Connector classes implement wide SPI interfaces, so a function count limit is noise.
   TooManyFunctions:
     active: false
+  LongMethod:
+    severity: warning
+    allowedLines: 60
+  CognitiveComplexMethod:
+    active: true
+    severity: warning
+    allowedComplexity: 15
+  CyclomaticComplexMethod:
+    severity: warning
+    allowedComplexity: 14
 
 style:
   MagicNumber:
     active: false
   MaxLineLength:
-    maxLineLength: 160
-  # Type-dispatch functions return once per `when` branch.
+    severity: warning
+    maxLineLength: 120
   ReturnCount:
-    active: false
+    severity: warning
+    max: 4
+    excludeGuardClauses: true
+    excludeReturnFromLambda: true
